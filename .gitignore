@@ -1,0 +1,17 @@
+AGENTS.md
+CLAUDE.md
+
+.DS_Store
+.env.*
+!.env.*.example
+
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+backend/.gradle/
+backend/.kotlin/
+backend/build/
+
+.idea/
+.vscode/
+*.iml
