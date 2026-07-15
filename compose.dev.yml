@@ -12,6 +12,8 @@ services:
   backend:
     build:
       target: dev
+    environment:
+      LOGGING_FILE_NAME: /var/log/travel-planner/travel-planner.log
     volumes:
       - ./backend:/app
       - backend_gradle:/root/.gradle
