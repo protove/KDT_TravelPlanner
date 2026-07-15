@@ -6,6 +6,8 @@ import ch.qos.logback.classic.spi.ILoggingEvent
 import ch.qos.logback.core.read.ListAppender
 import com.ktcloud.travelplanner.PingController
 import com.ktcloud.travelplanner.WebConfig
+import com.ktcloud.travelplanner.global.security.ApiSecurityErrorHandler
+import com.ktcloud.travelplanner.global.security.SecurityConfig
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNull
@@ -23,7 +25,12 @@ import java.util.UUID
 
 @ActiveProfiles("test")
 @WebMvcTest(PingController::class)
-@Import(WebConfig::class, RequestLoggingFilter::class)
+@Import(
+	WebConfig::class,
+	RequestLoggingFilter::class,
+	ApiSecurityErrorHandler::class,
+	SecurityConfig::class,
+)
 class RequestLoggingIntegrationTest(
 	@Autowired private val mockMvc: MockMvc,
 ) {
