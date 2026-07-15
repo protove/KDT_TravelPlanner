@@ -8,7 +8,7 @@ plugins {
 
 group = "com.ktcloud"
 version = "0.0.1-SNAPSHOT"
-description = "Travel Diary backend"
+description = "Travel Planner backend"
 
 java {
 	toolchain {
