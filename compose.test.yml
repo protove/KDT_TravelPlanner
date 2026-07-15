@@ -4,6 +4,7 @@ services:
       target: dev
     environment:
       GRADLE_USER_HOME: /tmp/gradle-home
+      SPRING_PROFILES_ACTIVE: test
       TESTCONTAINERS_HOST_OVERRIDE: host.docker.internal
     extra_hosts:
       - "host.docker.internal:host-gateway"
