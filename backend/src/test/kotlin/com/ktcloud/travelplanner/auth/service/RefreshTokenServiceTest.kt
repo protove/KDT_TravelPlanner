@@ -10,6 +10,7 @@ import com.ktcloud.travelplanner.user.repository.UserRepository
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
 import org.mockito.Mockito.mock
+import org.mockito.Mockito.never
 import org.mockito.Mockito.verify
 import org.mockito.Mockito.verifyNoInteractions
 import org.mockito.Mockito.`when`
@@ -81,6 +82,16 @@ class RefreshTokenServiceTest {
 		assertEquals(hash, tokenHasher.hash(REFRESH_TOKEN))
 		assertNotEquals(REFRESH_TOKEN, hash)
 		assertNotEquals(hash, tokenHasher.hash("a".repeat(43)))
+	}
+
+	@Test
+	fun `revokes valid token and ignores missing or malformed token idempotently`() {
+		service.revoke(REFRESH_TOKEN)
+		service.revoke(null)
+		service.revoke("too-short")
+
+		verify(tokenStore).delete(REFRESH_TOKEN)
+		verify(tokenStore, never()).delete("too-short")
 	}
 
 	companion object {

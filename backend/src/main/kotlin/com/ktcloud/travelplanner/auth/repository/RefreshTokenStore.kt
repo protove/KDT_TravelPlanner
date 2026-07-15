@@ -13,6 +13,8 @@ interface RefreshTokenStore {
 	fun save(token: String, userId: UUID, ttl: Duration)
 
 	fun findUserId(token: String): String?
+
+	fun delete(token: String)
 }
 
 @Component
@@ -38,6 +40,10 @@ class RedisRefreshTokenStore(
 	}
 
 	override fun findUserId(token: String): String? = redisTemplate.opsForValue().get(key(token))
+
+	override fun delete(token: String) {
+		redisTemplate.delete(key(token))
+	}
 
 	private fun key(token: String): String = "$KEY_PREFIX:${tokenHasher.hash(token)}"
 

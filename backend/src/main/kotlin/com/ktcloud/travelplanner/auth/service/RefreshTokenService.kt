@@ -30,10 +30,10 @@ class RefreshTokenService(
 	}
 
 	fun refresh(refreshToken: String?): IssuedAccessToken {
-		if (refreshToken == null || !REFRESH_TOKEN_PATTERN.matches(refreshToken)) {
+		if (!isValidFormat(refreshToken)) {
 			throw InvalidRefreshTokenException()
 		}
-		val userId = tokenStore.findUserId(refreshToken)
+		val userId = tokenStore.findUserId(requireNotNull(refreshToken))
 			?.let(::parseUserId)
 			?: throw InvalidRefreshTokenException()
 		if (!userRepository.existsById(userId)) {
@@ -41,6 +41,15 @@ class RefreshTokenService(
 		}
 		return jwtTokenService.issueAccessToken(userId)
 	}
+
+	fun revoke(refreshToken: String?) {
+		if (isValidFormat(refreshToken)) {
+			tokenStore.delete(requireNotNull(refreshToken))
+		}
+	}
+
+	private fun isValidFormat(refreshToken: String?): Boolean =
+		refreshToken != null && REFRESH_TOKEN_PATTERN.matches(refreshToken)
 
 	private fun parseUserId(value: String): UUID = try {
 		UUID.fromString(value)
