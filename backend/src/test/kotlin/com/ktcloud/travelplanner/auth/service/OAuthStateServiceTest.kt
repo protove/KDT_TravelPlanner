@@ -103,6 +103,7 @@ class OAuthStateServiceTest {
 		stateTtl = Duration.ofMinutes(5),
 		exchangeCodeTtl = Duration.ofSeconds(60),
 		allowedRedirectOrigins = listOf("http://localhost:3000"),
+		frontendRedirectUrl = REDIRECT_URL,
 	)
 
 	companion object {
