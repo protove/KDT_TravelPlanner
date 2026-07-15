@@ -2,11 +2,14 @@ package com.ktcloud.travelplanner.travel.service
 
 import com.ktcloud.travelplanner.global.exception.DomainException
 import com.ktcloud.travelplanner.global.exception.ErrorCode
+import com.ktcloud.travelplanner.global.response.PageResponse
 import com.ktcloud.travelplanner.travel.dto.TravelCreateRequest
 import com.ktcloud.travelplanner.travel.dto.TravelCreateResponse
+import com.ktcloud.travelplanner.travel.dto.TravelSummaryResponse
 import com.ktcloud.travelplanner.travel.model.Travel
 import com.ktcloud.travelplanner.travel.repository.TravelRepository
 import com.ktcloud.travelplanner.user.repository.UserRepository
+import org.springframework.data.domain.PageRequest
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
 import java.util.UUID
@@ -29,6 +32,22 @@ class TravelService(
 			endDate = request.endDate,
 		)
 		return TravelCreateResponse.from(travelRepository.save(travel))
+	}
+
+	@Transactional(readOnly = true)
+	fun getTravels(
+		userId: UUID,
+		keyword: String?,
+		page: Int,
+		size: Int,
+	): PageResponse<TravelSummaryResponse> {
+		val normalizedKeyword = keyword?.trim()?.takeIf(String::isNotEmpty)
+		val result = travelRepository.findAccessibleTravels(
+			userId = userId,
+			keyword = normalizedKeyword,
+			pageable = PageRequest.of(page, size),
+		)
+		return PageResponse.from(result.map(TravelSummaryResponse::from))
 	}
 }
 
