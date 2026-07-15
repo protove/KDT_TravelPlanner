@@ -79,6 +79,9 @@ class Travel(
 	var deletedAt: Instant? = null
 		protected set
 
+	val isDeleted: Boolean
+		get() = deletedAt != null
+
 	val travelDays: Int
 		get() = Math.toIntExact(ChronoUnit.DAYS.between(startDate, endDate) + 1)
 
@@ -86,6 +89,11 @@ class Travel(
 		require(title.isNotBlank()) { "title must not be blank." }
 		require(title.length <= TITLE_MAX_LENGTH) { "title must not exceed $TITLE_MAX_LENGTH characters." }
 		require(!endDate.isBefore(startDate)) { "endDate must not be before startDate." }
+	}
+
+	fun softDelete(deletedAt: Instant) {
+		require(this.deletedAt == null) { "Travel is already deleted." }
+		this.deletedAt = deletedAt
 	}
 
 	companion object {
