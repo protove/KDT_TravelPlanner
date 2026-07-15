@@ -15,3 +15,6 @@ backend/build/
 .idea/
 .vscode/
 *.iml
+
+reference/
+reference/*
