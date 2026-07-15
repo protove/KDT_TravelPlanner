@@ -1,6 +1,6 @@
 spring:
   application:
-    name: travel-diary-backend
+    name: travel-planner-backend
   datasource:
     url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/travel_diary_dev}
     username: ${SPRING_DATASOURCE_USERNAME:travel_diary}

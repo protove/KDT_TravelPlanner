@@ -38,3 +38,7 @@ out/
 
 ### Kotlin ###
 .kotlin
+
+### Local workflow state ###
+/BACKEND_CHECKLIST.local.md
+/logs/
