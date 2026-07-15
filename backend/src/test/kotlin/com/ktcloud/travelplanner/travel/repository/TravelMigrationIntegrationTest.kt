@@ -59,6 +59,7 @@ class TravelMigrationIntegrationTest : ContainerIntegrationTestSupport() {
 				.dataSource(dataSource)
 				.schemas(schema)
 				.defaultSchema(schema)
+				.target(MigrationVersion.fromVersion("4"))
 				.load()
 				.migrate()
 
