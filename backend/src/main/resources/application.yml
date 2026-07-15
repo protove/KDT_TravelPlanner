@@ -38,6 +38,10 @@ management:
 
 app:
   auth:
+    refresh-token:
+      ttl: ${REFRESH_TOKEN_TTL:30d}
+      cookie-secure: ${REFRESH_TOKEN_COOKIE_SECURE:false}
+      cookie-same-site: ${REFRESH_TOKEN_COOKIE_SAME_SITE:Lax}
     oauth:
       state-ttl: ${OAUTH_STATE_TTL:5m}
       exchange-code-ttl: ${OAUTH_EXCHANGE_CODE_TTL:60s}
