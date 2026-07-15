@@ -13,8 +13,10 @@ import org.springframework.http.HttpHeaders
 import org.springframework.test.web.servlet.MockMvc
 import org.springframework.test.web.servlet.get
 import org.springframework.test.web.servlet.options
+import org.springframework.test.context.ActiveProfiles
 import org.springframework.test.context.bean.override.mockito.MockitoBean
 
+@ActiveProfiles("test")
 @WebMvcTest(PingController::class)
 @Import(WebConfig::class, ApiSecurityErrorHandler::class, SecurityConfig::class)
 class PingControllerIntegrationTest(
