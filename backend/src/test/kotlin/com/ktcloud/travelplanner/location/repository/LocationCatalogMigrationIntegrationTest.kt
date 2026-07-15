@@ -56,6 +56,7 @@ class LocationCatalogMigrationIntegrationTest : ContainerIntegrationTestSupport(
 				.dataSource(dataSource)
 				.schemas(schema)
 				.defaultSchema(schema)
+				.target(MigrationVersion.fromVersion("3"))
 				.load()
 				.migrate()
 
