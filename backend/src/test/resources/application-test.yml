@@ -9,3 +9,8 @@ spring:
 logging:
   level:
     root: WARN
+
+app:
+  security:
+    jwt:
+      secret: test-jwt-secret-with-at-least-32-bytes
