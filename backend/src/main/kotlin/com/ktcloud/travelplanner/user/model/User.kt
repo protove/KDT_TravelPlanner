@@ -97,8 +97,17 @@ class User(
 		gender: Gender?,
 		birthYear: Int?,
 	) {
-		require(nickname.isNotBlank()) { "nickname must not be blank." }
-		require(nickname.length <= NICKNAME_MAX_LENGTH) {
+		updateProfile(nickname, profileImageUrl, gender, birthYear)
+	}
+
+	fun updateProfile(
+		nickname: String?,
+		profileImageUrl: String?,
+		gender: Gender?,
+		birthYear: Int?,
+	) {
+		require(nickname == null || nickname.isNotBlank()) { "nickname must not be blank." }
+		require(nickname == null || nickname.length <= NICKNAME_MAX_LENGTH) {
 			"nickname must not exceed $NICKNAME_MAX_LENGTH characters."
 		}
 		require(birthYear == null || birthYear in MIN_BIRTH_YEAR..MAX_BIRTH_YEAR) {
@@ -106,9 +115,10 @@ class User(
 		}
 
 		this.nickname = nickname
+		this.profileImageUrl = profileImageUrl
 		this.gender = gender
 		this.birthYear = birthYear?.toShort()
-		isProfileCompleted = true
+		isProfileCompleted = nickname != null
 	}
 
 	fun softDelete(deletedAt: Instant) {

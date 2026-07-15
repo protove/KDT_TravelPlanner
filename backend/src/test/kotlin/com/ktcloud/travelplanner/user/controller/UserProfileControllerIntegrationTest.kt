@@ -15,9 +15,11 @@ import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMock
 import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.context.annotation.Import
 import org.springframework.http.HttpHeaders
+import org.springframework.http.MediaType
 import org.springframework.test.context.ActiveProfiles
 import org.springframework.test.web.servlet.MockMvc
 import org.springframework.test.web.servlet.get
+import org.springframework.test.web.servlet.patch
 import org.springframework.transaction.annotation.Transactional
 import java.util.UUID
 
@@ -77,10 +79,127 @@ class UserProfileControllerIntegrationTest(
 			}
 	}
 
-	private fun saveCompletedUser(): User = userRepository.saveAndFlush(
+	@Test
+	fun `authenticated user partially updates own profile`() {
+		val user = saveCompletedUser()
+		val accessToken = jwtTokenService.issueAccessToken(requireNotNull(user.id)).value
+
+		mockMvc.patch("/api/v1/users/me/profile") {
+			header(HttpHeaders.AUTHORIZATION, "Bearer $accessToken")
+			contentType = MediaType.APPLICATION_JSON
+			content = """{"nickname":"updatedTraveler","profileImageUrl":"https://images.example/updated.png"}"""
+		}
+			.andExpect {
+				status { isOk() }
+				jsonPath("$.data.nickname", equalTo("updatedTraveler"))
+				jsonPath("$.data.profileImageUrl", equalTo("https://images.example/updated.png"))
+				jsonPath("$.data.gender", equalTo("OTHER"))
+				jsonPath("$.data.birthYear", equalTo(2001))
+				jsonPath("$.data.isProfileCompleted", equalTo(true))
+			}
+
+		entityManager.flush()
+		entityManager.clear()
+		val updatedUser = userRepository.findById(requireNotNull(user.id)).orElseThrow()
+		kotlin.test.assertEquals("updatedTraveler", updatedUser.nickname)
+		kotlin.test.assertEquals(Gender.OTHER, updatedUser.gender)
+		kotlin.test.assertEquals(2001.toShort(), updatedUser.birthYear)
+	}
+
+	@Test
+	fun `explicit null clears profile fields and omitted fields remain unchanged`() {
+		val user = saveCompletedUser()
+		val accessToken = jwtTokenService.issueAccessToken(requireNotNull(user.id)).value
+
+		mockMvc.patch("/api/v1/users/me/profile") {
+			header(HttpHeaders.AUTHORIZATION, "Bearer $accessToken")
+			contentType = MediaType.APPLICATION_JSON
+			content = """{"profileImageUrl":null,"gender":null,"birthYear":null}"""
+		}
+			.andExpect {
+				status { isOk() }
+				jsonPath("$.data.nickname", equalTo("traveler"))
+				jsonPath("$.data.profileImageUrl") { doesNotExist() }
+				jsonPath("$.data.gender") { doesNotExist() }
+				jsonPath("$.data.birthYear") { doesNotExist() }
+				jsonPath("$.data.isProfileCompleted", equalTo(true))
+			}
+	}
+
+	@Test
+	fun `duplicate nickname returns conflict without changing profile`() {
+		val existingUser = saveCompletedUser("existing-profile")
+		val user = saveCompletedUser("profile-to-update", "anotherTraveler")
+		val accessToken = jwtTokenService.issueAccessToken(requireNotNull(user.id)).value
+
+		mockMvc.patch("/api/v1/users/me/profile") {
+			header(HttpHeaders.AUTHORIZATION, "Bearer $accessToken")
+			contentType = MediaType.APPLICATION_JSON
+			content = """{"nickname":"${existingUser.nickname}"}"""
+		}
+			.andExpect {
+				status { isConflict() }
+				jsonPath("$.code", equalTo("CONFLICT"))
+				jsonPath("$.message", equalTo("이미 사용 중인 닉네임입니다."))
+			}
+
+		entityManager.clear()
+		kotlin.test.assertEquals(
+			"anotherTraveler",
+			userRepository.findById(requireNotNull(user.id)).orElseThrow().nickname,
+		)
+	}
+
+	@Test
+	fun `invalid profile fields return sorted validation errors`() {
+		val user = saveCompletedUser()
+		val accessToken = jwtTokenService.issueAccessToken(requireNotNull(user.id)).value
+
+		mockMvc.patch("/api/v1/users/me/profile") {
+			header(HttpHeaders.AUTHORIZATION, "Bearer $accessToken")
+			contentType = MediaType.APPLICATION_JSON
+			content = """{"nickname":" ","birthYear":1899}"""
+		}
+			.andExpect {
+				status { isBadRequest() }
+				jsonPath("$.code", equalTo("VALIDATION_ERROR"))
+				jsonPath("$.fieldErrors[0].field", equalTo("birthYear"))
+				jsonPath("$.fieldErrors[1].field", equalTo("nickname"))
+			}
+	}
+
+	@Test
+	fun `unsupported gender and missing authentication are rejected`() {
+		val user = saveCompletedUser()
+		val accessToken = jwtTokenService.issueAccessToken(requireNotNull(user.id)).value
+
+		mockMvc.patch("/api/v1/users/me/profile") {
+			header(HttpHeaders.AUTHORIZATION, "Bearer $accessToken")
+			contentType = MediaType.APPLICATION_JSON
+			content = """{"gender":"UNKNOWN"}"""
+		}
+			.andExpect {
+				status { isBadRequest() }
+				jsonPath("$.code", equalTo("MALFORMED_JSON"))
+			}
+
+		mockMvc.patch("/api/v1/users/me/profile") {
+			contentType = MediaType.APPLICATION_JSON
+			content = "{}"
+		}
+			.andExpect {
+				status { isUnauthorized() }
+				jsonPath("$.code", equalTo("UNAUTHORIZED"))
+			}
+	}
+
+	private fun saveCompletedUser(
+		providerUserId: String = "profile-${UUID.randomUUID()}",
+		nickname: String = "traveler",
+	): User = userRepository.saveAndFlush(
 		User(
 			provider = OAuthProvider.NAVER,
-			providerUserId = "profile-${UUID.randomUUID()}",
+			providerUserId = providerUserId,
 			email = "profile@example.com",
 			name = "Profile User",
 		).also {
@@ -90,7 +209,7 @@ class UserProfileControllerIntegrationTest(
 				profileImageUrl = "https://images.example/profile.png",
 			)
 			it.completeProfile(
-				nickname = "traveler",
+				nickname = nickname,
 				gender = Gender.OTHER,
 				birthYear = 2001,
 			)
