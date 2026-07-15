@@ -13,6 +13,7 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
 import org.mockito.ArgumentMatchers.any
 import org.mockito.Mockito.mock
+import org.mockito.Mockito.times
 import org.mockito.Mockito.verify
 import org.mockito.Mockito.verifyNoInteractions
 import org.mockito.Mockito.`when`
@@ -82,15 +83,16 @@ class TravelServiceTest {
 	}
 
 	@Test
-	fun `blank keyword is treated as absent search condition`() {
+	fun `null and blank keywords use non-null empty search condition`() {
 		val userId = UUID.randomUUID()
 		val pageable = PageRequest.of(0, 20)
-		`when`(travelRepository.findAccessibleTravels(userId, null, pageable))
+		`when`(travelRepository.findAccessibleTravels(userId, "", pageable))
 			.thenReturn(PageImpl(emptyList(), pageable, 0))
 
+		service.getTravels(userId, null, 0, 20)
 		service.getTravels(userId, "  ", 0, 20)
 
-		verify(travelRepository).findAccessibleTravels(userId, null, pageable)
+		verify(travelRepository, times(2)).findAccessibleTravels(userId, "", pageable)
 	}
 
 	private fun request(): TravelCreateRequest = TravelCreateRequest(

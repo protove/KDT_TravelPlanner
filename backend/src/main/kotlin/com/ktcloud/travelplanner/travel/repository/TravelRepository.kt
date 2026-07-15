@@ -30,7 +30,7 @@ interface TravelRepository : JpaRepository<Travel, UUID> {
 				AND member.user.id = :userId
 				AND member.status = com.ktcloud.travelplanner.membership.model.InvitationStatus.ACCEPTED
 			WHERE (travel.owner.id = :userId OR member.id IS NOT NULL)
-				AND (:keyword IS NULL OR LOWER(travel.title) LIKE LOWER(CONCAT('%', :keyword, '%')))
+				AND LOWER(travel.title) LIKE LOWER(CONCAT('%', :keyword, '%'))
 			ORDER BY travel.updatedAt DESC, travel.id DESC
 		""",
 		countQuery = """
@@ -41,12 +41,12 @@ interface TravelRepository : JpaRepository<Travel, UUID> {
 				AND member.user.id = :userId
 				AND member.status = com.ktcloud.travelplanner.membership.model.InvitationStatus.ACCEPTED
 			WHERE (travel.owner.id = :userId OR member.id IS NOT NULL)
-				AND (:keyword IS NULL OR LOWER(travel.title) LIKE LOWER(CONCAT('%', :keyword, '%')))
+				AND LOWER(travel.title) LIKE LOWER(CONCAT('%', :keyword, '%'))
 		""",
 	)
 	fun findAccessibleTravels(
 		@Param("userId") userId: UUID,
-		@Param("keyword") keyword: String?,
+		@Param("keyword") keyword: String,
 		pageable: Pageable,
 	): Page<TravelListRow>
 }
