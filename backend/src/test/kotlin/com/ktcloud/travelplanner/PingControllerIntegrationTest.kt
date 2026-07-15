@@ -1,7 +1,9 @@
 package com.ktcloud.travelplanner
 
 import com.ktcloud.travelplanner.global.security.ApiSecurityErrorHandler
+import com.ktcloud.travelplanner.global.security.JwtTokenService
 import com.ktcloud.travelplanner.global.security.SecurityConfig
+import com.ktcloud.travelplanner.user.repository.UserRepository
 import org.hamcrest.Matchers.equalTo
 import org.junit.jupiter.api.Test
 import org.springframework.beans.factory.annotation.Autowired
@@ -11,12 +13,18 @@ import org.springframework.http.HttpHeaders
 import org.springframework.test.web.servlet.MockMvc
 import org.springframework.test.web.servlet.get
 import org.springframework.test.web.servlet.options
+import org.springframework.test.context.bean.override.mockito.MockitoBean
 
 @WebMvcTest(PingController::class)
 @Import(WebConfig::class, ApiSecurityErrorHandler::class, SecurityConfig::class)
 class PingControllerIntegrationTest(
 	@Autowired private val mockMvc: MockMvc,
 ) {
+	@MockitoBean
+	private lateinit var jwtTokenService: JwtTokenService
+
+	@MockitoBean
+	private lateinit var userRepository: UserRepository
 
 	@Test
 	fun `ping keeps its endpoint and returns TravelPlanner application name`() {

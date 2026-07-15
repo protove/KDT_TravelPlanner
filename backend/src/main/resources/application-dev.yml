@@ -10,3 +10,8 @@ logging:
       max-file-size: 20MB
       max-history: 14
       total-size-cap: 1GB
+
+app:
+  security:
+    jwt:
+      secret: ${JWT_SECRET:local-development-jwt-secret-change-me}
