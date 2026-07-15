@@ -1,8 +1,9 @@
 package com.ktcloud.travelplanner.auth.client
 
-import com.ktcloud.travelplanner.auth.config.GoogleOAuthProperties
+import com.ktcloud.travelplanner.auth.config.NaverOAuthProperties
 import com.ktcloud.travelplanner.auth.service.OAuthProviderException
 import com.ktcloud.travelplanner.user.model.OAuthProvider
+import org.hamcrest.Matchers.allOf
 import org.hamcrest.Matchers.containsString
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
@@ -22,84 +23,92 @@ import org.springframework.web.util.UriComponentsBuilder
 import java.net.URI
 import kotlin.test.assertEquals
 
-class GoogleOAuthClientTest {
+class NaverOAuthClientTest {
 	private lateinit var server: MockRestServiceServer
-	private lateinit var client: GoogleOAuthClient
+	private lateinit var client: NaverOAuthClient
 
 	@BeforeEach
 	fun setUp() {
 		val builder = RestClient.builder()
 		server = MockRestServiceServer.bindTo(builder).build()
-		client = GoogleOAuthClient(builder, properties())
+		client = NaverOAuthClient(builder, properties())
 	}
 
 	@Test
-	fun `creates Google authorization URL with required OIDC parameters`() {
+	fun `creates Naver authorization URL with required parameters`() {
 		val authorizationUrl = client.createAuthorizationUrl("opaque-state")
 		val parameters = UriComponentsBuilder.fromUri(authorizationUrl).build().queryParams
 
 		assertEquals("test-client-id", parameters.getFirst("client_id"))
 		assertEquals(CALLBACK_URL, parameters.getFirst("redirect_uri"))
 		assertEquals("code", parameters.getFirst("response_type"))
-		assertEquals("openid%20email%20profile", parameters.getFirst("scope"))
 		assertEquals("opaque-state", parameters.getFirst("state"))
 	}
 
 	@Test
-	fun `maps verified Google userinfo response to OAuth profile`() {
+	fun `maps nested Naver profile and sends verified state to token endpoint`() {
 		server.expect(requestTo(TOKEN_URL))
 			.andExpect(method(HttpMethod.POST))
-			.andExpect(content().string(containsString("code=google-code")))
-			.andRespond(withSuccess("""{"access_token":"google-access"}""", MediaType.APPLICATION_JSON))
+			.andExpect(
+				content().string(
+					allOf(
+						containsString("code=naver-code"),
+						containsString("state=verified-state"),
+					),
+				),
+			)
+			.andRespond(withSuccess("""{"access_token":"naver-access"}""", MediaType.APPLICATION_JSON))
 		server.expect(requestTo(USER_INFO_URL))
 			.andExpect(method(HttpMethod.GET))
-			.andExpect(header(HttpHeaders.AUTHORIZATION, "Bearer google-access"))
+			.andExpect(header(HttpHeaders.AUTHORIZATION, "Bearer naver-access"))
 			.andRespond(
 				withSuccess(
-					"""{"sub":"google-user","email":"user@example.com","email_verified":true,"name":"Google User","picture":"https://images.example/profile.png"}""",
+					"""{"resultcode":"00","message":"success","response":{"id":"naver-user","email":"naver@example.com","name":"Naver User","profile_image":"https://images.example/naver.png"}}""",
 					MediaType.APPLICATION_JSON,
 				),
 			)
 
-		val profile = client.fetchUserProfile(grant("google-code"))
+		val profile = client.fetchUserProfile(grant())
 
-		assertEquals(OAuthProvider.GOOGLE, profile.provider)
-		assertEquals("google-user", profile.providerUserId)
-		assertEquals("user@example.com", profile.email)
-		assertEquals("Google User", profile.name)
-		assertEquals("https://images.example/profile.png", profile.profileImageUrl)
+		assertEquals(OAuthProvider.NAVER, profile.provider)
+		assertEquals("naver-user", profile.providerUserId)
+		assertEquals("naver@example.com", profile.email)
+		assertEquals("Naver User", profile.name)
+		assertEquals("https://images.example/naver.png", profile.profileImageUrl)
 		server.verify()
 	}
 
 	@Test
-	fun `does not trust an unverified Google email`() {
+	fun `maps unsuccessful Naver result to provider error`() {
 		server.expect(requestTo(TOKEN_URL))
-			.andRespond(withSuccess("""{"access_token":"google-access"}""", MediaType.APPLICATION_JSON))
+			.andRespond(withSuccess("""{"access_token":"naver-access"}""", MediaType.APPLICATION_JSON))
 		server.expect(requestTo(USER_INFO_URL))
 			.andRespond(
 				withSuccess(
-					"""{"sub":"google-user","email":"unverified@example.com","email_verified":false}""",
+					"""{"resultcode":"024","message":"authentication failed"}""",
 					MediaType.APPLICATION_JSON,
 				),
 			)
 
-		assertEquals(null, client.fetchUserProfile(grant("google-code")).email)
+		assertThrows<OAuthProviderException> {
+			client.fetchUserProfile(grant())
+		}
 	}
 
 	@Test
-	fun `maps Google HTTP failure without exposing provider response`() {
+	fun `maps Naver HTTP failure without exposing provider response`() {
 		server.expect(requestTo(TOKEN_URL)).andRespond(withServerError())
 
 		val exception = assertThrows<OAuthProviderException> {
-			client.fetchUserProfile(grant("sensitive-google-code"))
+			client.fetchUserProfile(grant("sensitive-naver-code"))
 		}
 
 		assertEquals("OAuth 제공자 통신에 실패했습니다.", exception.message)
 	}
 
 	@Test
-	fun `rejects use when Google credentials are not configured`() {
-		val unconfiguredClient = GoogleOAuthClient(
+	fun `rejects use when Naver credentials are not configured`() {
+		val unconfiguredClient = NaverOAuthClient(
 			RestClient.builder(),
 			properties(clientId = "", clientSecret = ""),
 		)
@@ -109,10 +118,15 @@ class GoogleOAuthClientTest {
 		}
 	}
 
+	private fun grant(authorizationCode: String = "naver-code") = OAuthAuthorizationGrant(
+		authorizationCode = authorizationCode,
+		state = "verified-state",
+	)
+
 	private fun properties(
 		clientId: String = "test-client-id",
 		clientSecret: String = "test-client-secret",
-	): GoogleOAuthProperties = GoogleOAuthProperties(
+	): NaverOAuthProperties = NaverOAuthProperties(
 		clientId = clientId,
 		clientSecret = clientSecret,
 		redirectUri = URI.create(CALLBACK_URL),
@@ -121,15 +135,10 @@ class GoogleOAuthClientTest {
 		userInfoUri = URI.create(USER_INFO_URL),
 	)
 
-	private fun grant(authorizationCode: String) = OAuthAuthorizationGrant(
-		authorizationCode = authorizationCode,
-		state = "verified-state",
-	)
-
 	companion object {
-		private const val AUTHORIZATION_URL = "https://accounts.example/oauth2/auth"
-		private const val TOKEN_URL = "https://oauth.example/token"
-		private const val USER_INFO_URL = "https://openid.example/userinfo"
-		private const val CALLBACK_URL = "http://localhost:8080/api/v1/auth/oauth2/google/callback"
+		private const val AUTHORIZATION_URL = "https://nid.example/oauth2.0/authorize"
+		private const val TOKEN_URL = "https://nid.example/oauth2.0/token"
+		private const val USER_INFO_URL = "https://openapi.example/v1/nid/me"
+		private const val CALLBACK_URL = "http://localhost:8080/api/v1/auth/oauth2/naver/callback"
 	}
 }

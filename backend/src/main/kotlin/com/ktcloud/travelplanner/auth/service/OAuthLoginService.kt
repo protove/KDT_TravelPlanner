@@ -1,5 +1,6 @@
 package com.ktcloud.travelplanner.auth.service
 
+import com.ktcloud.travelplanner.auth.client.OAuthAuthorizationGrant
 import com.ktcloud.travelplanner.auth.client.OAuthProviderClient
 import com.ktcloud.travelplanner.auth.config.OAuthFlowProperties
 import com.ktcloud.travelplanner.global.exception.DomainException
@@ -33,7 +34,12 @@ class OAuthLoginService(
 		val provider = resolveProvider(providerName)
 		val client = resolveClient(provider)
 		val consumedState = stateService.consume(state, provider)
-		val profile = client.fetchUserProfile(authorizationCode)
+		val profile = client.fetchUserProfile(
+			OAuthAuthorizationGrant(
+				authorizationCode = authorizationCode,
+				state = state,
+			),
+		)
 		if (profile.provider != provider) {
 			throw OAuthProviderException()
 		}

@@ -11,10 +11,15 @@ data class OAuthUserProfile(
 	val profileImageUrl: String?,
 )
 
+data class OAuthAuthorizationGrant(
+	val authorizationCode: String,
+	val state: String,
+)
+
 interface OAuthProviderClient {
 	val provider: OAuthProvider
 
 	fun createAuthorizationUrl(state: String): URI
 
-	fun fetchUserProfile(authorizationCode: String): OAuthUserProfile
+	fun fetchUserProfile(grant: OAuthAuthorizationGrant): OAuthUserProfile
 }
