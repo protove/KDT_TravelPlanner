@@ -41,7 +41,7 @@ class TravelService(
 		page: Int,
 		size: Int,
 	): PageResponse<TravelSummaryResponse> {
-		val normalizedKeyword = keyword?.trim()?.takeIf(String::isNotEmpty)
+		val normalizedKeyword = keyword?.trim().orEmpty()
 		val result = travelRepository.findAccessibleTravels(
 			userId = userId,
 			keyword = normalizedKeyword,

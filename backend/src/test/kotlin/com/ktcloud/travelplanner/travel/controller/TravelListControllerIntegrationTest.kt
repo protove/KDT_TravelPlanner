@@ -120,6 +120,21 @@ class TravelListControllerIntegrationTest(
 			}
 	}
 
+	@Test
+	fun `lists owned travel when keyword parameter is omitted`() {
+		val requester = saveUser("no-keyword-requester")
+		val travel = saveTravel(requester, "검색어 없는 목록", UUID.randomUUID())
+
+		mockMvc.get("/api/v1/travels") {
+			header(HttpHeaders.AUTHORIZATION, bearer(requester))
+		}
+			.andExpect {
+				status { isOk() }
+				jsonPath("$.data.content[0].travelId", equalTo(travel.id.toString()))
+				jsonPath("$.data.totalElements", equalTo(1))
+			}
+	}
+
 	private fun acceptMembership(
 		travel: Travel,
 		user: User,
