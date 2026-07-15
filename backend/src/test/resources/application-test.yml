@@ -11,6 +11,9 @@ logging:
     root: WARN
 
 app:
+  storage:
+    profile-image:
+      upload-url-ttl: 10m
   auth:
     refresh-token:
       ttl: 30d

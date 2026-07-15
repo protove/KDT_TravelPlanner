@@ -5,6 +5,7 @@ import com.ktcloud.travelplanner.auth.config.GoogleOAuthProperties
 import com.ktcloud.travelplanner.auth.config.NaverOAuthProperties
 import com.ktcloud.travelplanner.auth.config.RefreshTokenProperties
 import com.ktcloud.travelplanner.global.security.JwtProperties
+import com.ktcloud.travelplanner.user.config.ProfileImageStorageProperties
 import org.springframework.boot.autoconfigure.SpringBootApplication
 import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.boot.runApplication
@@ -16,6 +17,7 @@ import org.springframework.boot.runApplication
 	GoogleOAuthProperties::class,
 	NaverOAuthProperties::class,
 	RefreshTokenProperties::class,
+	ProfileImageStorageProperties::class,
 )
 class TravelPlannerBackendApplication
 

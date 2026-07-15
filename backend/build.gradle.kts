@@ -31,6 +31,8 @@ dependencies {
 	implementation("com.fasterxml.jackson.module:jackson-module-kotlin")
 	implementation("org.flywaydb:flyway-core")
 	implementation("org.jetbrains.kotlin:kotlin-reflect")
+	implementation(platform("software.amazon.awssdk:bom:2.47.3"))
+	implementation("software.amazon.awssdk:s3")
 	developmentOnly("org.springframework.boot:spring-boot-devtools")
 	runtimeOnly("org.postgresql:postgresql")
 	runtimeOnly("org.flywaydb:flyway-database-postgresql")
