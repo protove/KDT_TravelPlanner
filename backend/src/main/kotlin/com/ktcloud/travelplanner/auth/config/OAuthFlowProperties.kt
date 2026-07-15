@@ -9,6 +9,7 @@ data class OAuthFlowProperties(
 	val stateTtl: Duration,
 	val exchangeCodeTtl: Duration,
 	val allowedRedirectOrigins: List<String>,
+	val frontendRedirectUrl: String,
 ) {
 	val parsedAllowedRedirectOrigins: Set<URI> = allowedRedirectOrigins
 		.map(::parseOrigin)
@@ -21,6 +22,9 @@ data class OAuthFlowProperties(
 		}
 		require(allowedRedirectOrigins.isNotEmpty()) {
 			"At least one OAuth redirect origin must be configured."
+		}
+		require(frontendRedirectUrl.isNotBlank()) {
+			"OAuth frontend redirect URL must not be blank."
 		}
 	}
 

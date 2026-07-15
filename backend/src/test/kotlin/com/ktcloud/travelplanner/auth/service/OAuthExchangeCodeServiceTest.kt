@@ -22,6 +22,7 @@ class OAuthExchangeCodeServiceTest {
 		stateTtl = Duration.ofMinutes(5),
 		exchangeCodeTtl = Duration.ofSeconds(60),
 		allowedRedirectOrigins = listOf("http://localhost:3000"),
+		frontendRedirectUrl = "http://localhost:3000/auth/callback",
 	)
 	private val service = OAuthExchangeCodeService(
 		tokenStore = tokenStore,

@@ -31,6 +31,15 @@ class ApiExceptionHandler {
 		message = exception.message ?: exception.errorCode.defaultMessage,
 	)
 
+	@ExceptionHandler(ExternalServiceException::class)
+	fun handleExternalServiceException(
+		exception: ExternalServiceException,
+		response: HttpServletResponse,
+	): ResponseEntity<ApiErrorResponse> = buildResponse(
+		errorCode = exception.errorCode,
+		response = response,
+	)
+
 	@ExceptionHandler(MethodArgumentNotValidException::class)
 	fun handleMethodArgumentNotValidException(
 		exception: MethodArgumentNotValidException,
