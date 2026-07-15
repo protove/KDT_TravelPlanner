@@ -11,6 +11,7 @@ enum class ErrorCode(
 	MALFORMED_JSON(HttpStatus.BAD_REQUEST, "요청 본문을 읽을 수 없습니다."),
 	UNAUTHORIZED(HttpStatus.UNAUTHORIZED, "인증이 필요합니다."),
 	INVALID_AUTHORIZATION_CODE(HttpStatus.UNAUTHORIZED, "인증 코드가 유효하지 않습니다."),
+	INVALID_REFRESH_TOKEN(HttpStatus.UNAUTHORIZED, "Refresh Token이 유효하지 않습니다."),
 	ACCESS_DENIED(HttpStatus.FORBIDDEN, "접근 권한이 없습니다."),
 	INVALID_OAUTH_STATE(HttpStatus.BAD_REQUEST, "OAuth state가 유효하지 않습니다."),
 	RESOURCE_NOT_FOUND(HttpStatus.NOT_FOUND, "요청한 리소스를 찾을 수 없습니다."),

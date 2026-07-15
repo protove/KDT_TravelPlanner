@@ -12,6 +12,10 @@ logging:
 
 app:
   auth:
+    refresh-token:
+      ttl: 30d
+      cookie-secure: false
+      cookie-same-site: Lax
     oauth:
       state-ttl: 5m
       exchange-code-ttl: 60s
