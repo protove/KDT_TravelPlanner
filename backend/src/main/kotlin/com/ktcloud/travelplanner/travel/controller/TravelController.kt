@@ -12,12 +12,15 @@ import jakarta.validation.constraints.Max
 import jakarta.validation.constraints.Min
 import org.springframework.security.core.annotation.AuthenticationPrincipal
 import org.springframework.validation.annotation.Validated
+import org.springframework.web.bind.annotation.DeleteMapping
 import org.springframework.web.bind.annotation.GetMapping
+import org.springframework.web.bind.annotation.PathVariable
 import org.springframework.web.bind.annotation.PostMapping
 import org.springframework.web.bind.annotation.RequestBody
 import org.springframework.web.bind.annotation.RequestMapping
 import org.springframework.web.bind.annotation.RequestParam
 import org.springframework.web.bind.annotation.RestController
+import java.util.UUID
 
 @Validated
 @RestController
@@ -40,4 +43,13 @@ class TravelController(
 		@RequestParam(defaultValue = "20") @Min(1) @Max(100) size: Int,
 	): ApiResponse<PageResponse<TravelSummaryResponse>> =
 		ApiResponse.success(travelService.getTravels(principal.userId, keyword, page, size))
+
+	@DeleteMapping("/{travelId}")
+	fun deleteTravel(
+		@PathVariable travelId: UUID,
+		@AuthenticationPrincipal principal: AuthenticatedUserPrincipal,
+	): ApiResponse<Unit> {
+		travelService.deleteTravel(travelId, principal.userId)
+		return ApiResponse.success(Unit)
+	}
 }

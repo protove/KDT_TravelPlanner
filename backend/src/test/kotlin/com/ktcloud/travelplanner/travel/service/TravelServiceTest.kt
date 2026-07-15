@@ -2,6 +2,7 @@ package com.ktcloud.travelplanner.travel.service
 
 import com.ktcloud.travelplanner.membership.model.TravelPermission
 import com.ktcloud.travelplanner.membership.model.TravelRole
+import com.ktcloud.travelplanner.testsupport.TestFixtures
 import com.ktcloud.travelplanner.travel.dto.TravelCreateRequest
 import com.ktcloud.travelplanner.travel.model.Travel
 import com.ktcloud.travelplanner.travel.repository.TravelListRow
@@ -29,7 +30,7 @@ import kotlin.test.assertSame
 class TravelServiceTest {
 	private val travelRepository = mock(TravelRepository::class.java)
 	private val userRepository = mock(UserRepository::class.java)
-	private val service = TravelService(travelRepository, userRepository)
+	private val service = TravelService(travelRepository, userRepository, TestFixtures.FIXED_CLOCK)
 
 	@Test
 	fun `uses authenticated user as owner and returns generated travel id`() {
@@ -95,6 +96,37 @@ class TravelServiceTest {
 		verify(travelRepository, times(2)).findAccessibleTravels(userId, "", pageable)
 	}
 
+	@Test
+	fun `owner soft deletes travel at UTC clock time`() {
+		val owner = mock(User::class.java)
+		val travel = travel(owner)
+		`when`(owner.id).thenReturn(TestFixtures.USER_ID)
+		`when`(travelRepository.findById(travel.id)).thenReturn(Optional.of(travel))
+		`when`(travelRepository.saveAndFlush(travel)).thenReturn(travel)
+
+		service.deleteTravel(travel.id, TestFixtures.USER_ID)
+
+		assertEquals(TestFixtures.FIXED_INSTANT, travel.deletedAt)
+		verify(travelRepository).saveAndFlush(travel)
+	}
+
+	@Test
+	fun `missing travel and non owner deletion are rejected`() {
+		val travelId = UUID.randomUUID()
+		`when`(travelRepository.findById(travelId)).thenReturn(Optional.empty())
+		assertThrows<TravelNotFoundException> {
+			service.deleteTravel(travelId, TestFixtures.USER_ID)
+		}
+
+		val owner = mock(User::class.java)
+		val travel = travel(owner)
+		`when`(owner.id).thenReturn(UUID.randomUUID())
+		`when`(travelRepository.findById(travel.id)).thenReturn(Optional.of(travel))
+		assertThrows<TravelDeleteAccessDeniedException> {
+			service.deleteTravel(travel.id, TestFixtures.USER_ID)
+		}
+	}
+
 	private fun request(): TravelCreateRequest = TravelCreateRequest(
 		title = "도쿄 여행",
 		startDate = LocalDate.parse("2026-08-01"),
@@ -114,5 +146,12 @@ class TravelServiceTest {
 		participantCount = null,
 		updatedAt = Instant.parse("2026-01-01T00:00:00Z"),
 		memberRole = memberRole,
+	)
+
+	private fun travel(owner: User): Travel = Travel(
+		owner = owner,
+		title = "삭제 여행",
+		startDate = LocalDate.parse("2026-08-01"),
+		endDate = LocalDate.parse("2026-08-04"),
 	)
 }
