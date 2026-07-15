@@ -1,5 +1,7 @@
 package com.ktcloud.travelplanner
 
+import com.ktcloud.travelplanner.global.security.ApiSecurityErrorHandler
+import com.ktcloud.travelplanner.global.security.SecurityConfig
 import org.hamcrest.Matchers.equalTo
 import org.junit.jupiter.api.Test
 import org.springframework.beans.factory.annotation.Autowired
@@ -11,7 +13,7 @@ import org.springframework.test.web.servlet.get
 import org.springframework.test.web.servlet.options
 
 @WebMvcTest(PingController::class)
-@Import(WebConfig::class)
+@Import(WebConfig::class, ApiSecurityErrorHandler::class, SecurityConfig::class)
 class PingControllerIntegrationTest(
 	@Autowired private val mockMvc: MockMvc,
 ) {
