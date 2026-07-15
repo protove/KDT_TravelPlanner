@@ -1,0 +1,11 @@
+spring:
+  main:
+    banner-mode: "off"
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    open-in-view: false
+
+logging:
+  level:
+    root: WARN

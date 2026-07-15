@@ -31,7 +31,10 @@ dependencies {
 	developmentOnly("org.springframework.boot:spring-boot-devtools")
 	runtimeOnly("org.postgresql:postgresql")
 	testImplementation("org.springframework.boot:spring-boot-starter-test")
+	testImplementation("org.springframework.boot:spring-boot-testcontainers")
 	testImplementation("org.jetbrains.kotlin:kotlin-test-junit5")
+	testImplementation("org.testcontainers:junit-jupiter")
+	testImplementation("org.testcontainers:postgresql")
 	testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }
 
@@ -49,6 +52,23 @@ allOpen {
 
 tasks.withType<Test> {
 	useJUnitPlatform()
+}
+
+tasks.named<Test>("test") {
+	exclude("**/*IntegrationTest.class")
+}
+
+val integrationTest by tasks.registering(Test::class) {
+	description = "Runs backend integration tests."
+	group = "verification"
+	testClassesDirs = sourceSets["test"].output.classesDirs
+	classpath = sourceSets["test"].runtimeClasspath
+	include("**/*IntegrationTest.class")
+	shouldRunAfter(tasks.named("test"))
+}
+
+tasks.named("check") {
+	dependsOn(integrationTest)
 }
 
 tasks.bootJar {

@@ -1,0 +1,18 @@
+services:
+  backend:
+    build:
+      target: dev
+    environment:
+      GRADLE_USER_HOME: /tmp/gradle-home
+      TESTCONTAINERS_HOST_OVERRIDE: host.docker.internal
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./backend:/app
+      - backend_test_gradle:/tmp/gradle-home
+      - backend_test_build:/app/build
+      - /var/run/docker.sock:/var/run/docker.sock
+
+volumes:
+  backend_test_gradle:
+  backend_test_build:
