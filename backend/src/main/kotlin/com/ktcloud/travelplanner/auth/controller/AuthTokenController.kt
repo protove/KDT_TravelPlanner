@@ -1,7 +1,5 @@
 package com.ktcloud.travelplanner.auth.controller
 
-import com.ktcloud.travelplanner.auth.config.RefreshTokenProperties
-import com.ktcloud.travelplanner.auth.service.IssuedRefreshToken
 import com.ktcloud.travelplanner.auth.service.OAuthExchangeCodeService
 import com.ktcloud.travelplanner.auth.service.RefreshTokenService
 import com.ktcloud.travelplanner.global.response.ApiResponse
@@ -11,7 +9,6 @@ import jakarta.validation.Valid
 import jakarta.validation.constraints.NotBlank
 import jakarta.validation.constraints.Size
 import org.springframework.http.HttpHeaders
-import org.springframework.http.ResponseCookie
 import org.springframework.web.bind.annotation.CookieValue
 import org.springframework.web.bind.annotation.PostMapping
 import org.springframework.web.bind.annotation.RequestBody
@@ -36,7 +33,7 @@ data class AccessTokenResponse(
 class AuthTokenController(
 	private val exchangeCodeService: OAuthExchangeCodeService,
 	private val refreshTokenService: RefreshTokenService,
-	private val refreshTokenProperties: RefreshTokenProperties,
+	private val refreshTokenCookieFactory: RefreshTokenCookieFactory,
 ) {
 	@PostMapping("/exchange")
 	fun exchange(
@@ -45,13 +42,16 @@ class AuthTokenController(
 	): ApiResponse<AccessTokenResponse> {
 		val accessToken = exchangeCodeService.exchange(request.code)
 		val refreshToken = refreshTokenService.issueForAccessToken(accessToken)
-		response.addHeader(HttpHeaders.SET_COOKIE, createRefreshTokenCookie(refreshToken).toString())
+		response.addHeader(
+			HttpHeaders.SET_COOKIE,
+			refreshTokenCookieFactory.create(refreshToken.value).toString(),
+		)
 		return accessTokenResponse(accessToken)
 	}
 
 	@PostMapping("/refresh")
 	fun refresh(
-		@CookieValue(name = REFRESH_TOKEN_COOKIE_NAME, required = false) refreshToken: String?,
+		@CookieValue(name = RefreshTokenCookieFactory.COOKIE_NAME, required = false) refreshToken: String?,
 	): ApiResponse<AccessTokenResponse> = accessTokenResponse(refreshTokenService.refresh(refreshToken))
 
 	private fun accessTokenResponse(
@@ -65,18 +65,7 @@ class AuthTokenController(
 			),
 		)
 
-	private fun createRefreshTokenCookie(refreshToken: IssuedRefreshToken): ResponseCookie =
-		ResponseCookie.from(REFRESH_TOKEN_COOKIE_NAME, refreshToken.value)
-			.httpOnly(true)
-			.secure(refreshTokenProperties.cookieSecure)
-			.sameSite(refreshTokenProperties.cookieSameSite)
-			.path(REFRESH_TOKEN_COOKIE_PATH)
-			.maxAge(refreshTokenProperties.ttl)
-			.build()
-
 	companion object {
 		private const val BEARER_TOKEN_TYPE = "Bearer"
-		private const val REFRESH_TOKEN_COOKIE_NAME = "refresh_token"
-		private const val REFRESH_TOKEN_COOKIE_PATH = "/api/v1/auth"
 	}
 }
