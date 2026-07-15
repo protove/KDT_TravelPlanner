@@ -49,6 +49,7 @@ class SecurityConfig(
 				it.requestMatchers(
 					"/api/ping",
 					"/api/v1/auth/oauth2/**",
+					"/api/v1/auth/token/exchange",
 					"/api/v1/auth/token/refresh",
 					"/actuator/health/**",
 				).permitAll()
