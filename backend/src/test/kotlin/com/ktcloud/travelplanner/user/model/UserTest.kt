@@ -41,6 +41,40 @@ class UserTest {
 		assertThrows(IllegalArgumentException::class.java) {
 			user.completeProfile("travelUser", Gender.OTHER, 1899)
 		}
+		assertThrows(IllegalArgumentException::class.java) {
+			user.completeProfile("travelUser", Gender.OTHER, 2101)
+		}
+	}
+
+	@Test
+	fun `profile completion rejects blank and oversized nicknames`() {
+		val user = createUser()
+
+		assertThrows(IllegalArgumentException::class.java) {
+			user.completeProfile(" ", Gender.UNSPECIFIED, 2001)
+		}
+		assertThrows(IllegalArgumentException::class.java) {
+			user.completeProfile("a".repeat(31), Gender.UNSPECIFIED, 2001)
+		}
+	}
+
+	@Test
+	fun `profile update supports nullable fields and recalculates completion`() {
+		val user = createUser()
+		user.completeProfile("travelUser", Gender.OTHER, 2001)
+
+		user.updateProfile(
+			nickname = null,
+			profileImageUrl = null,
+			gender = null,
+			birthYear = null,
+		)
+
+		assertNull(user.nickname)
+		assertNull(user.profileImageUrl)
+		assertNull(user.gender)
+		assertNull(user.birthYear)
+		assertFalse(user.isProfileCompleted)
 	}
 
 	@Test
