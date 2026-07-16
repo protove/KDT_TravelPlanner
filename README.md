@@ -53,6 +53,52 @@ docker compose --env-file .env.dev -f compose.yml -f compose.dev.yml up --build 
 
 호스트에서 `3000`, `8080`, `9091` 포트를 이미 사용 중이라면 `.env.dev`의 `FRONTEND_PORT`, `BACKEND_PORT`, `MANAGEMENT_PORT`, `NEXT_PUBLIC_API_BASE_URL`, `CORS_ALLOWED_ORIGINS`를 함께 확인하세요. 컨테이너 간 주소인 `INTERNAL_API_BASE_URL=http://backend:8080`과 관리 포트 `backend:9091`은 그대로 유지합니다.
 
+## Monitoring 수집 스택 실행
+
+Prometheus, Loki, Alloy는 기본 애플리케이션 실행에 포함되지 않는 옵트인 오버레이입니다. Alloy는 Docker 소켓 없이 `backend_logs` 볼륨을 읽기 전용으로 마운트해 현재 백엔드 로그 파일을 Loki로 전달합니다.
+
+```bash
+# dev: 관리·수집 포트를 localhost에 공개
+docker compose --env-file .env.dev \
+  -f compose.yml \
+  -f compose.dev.yml \
+  -f compose.monitoring.yml \
+  -f compose.monitoring.dev.yml \
+  up --build -d --wait
+
+# prod-like: Prometheus, Loki, Alloy는 Compose 내부망에서만 접근
+docker compose --env-file .env.prod \
+  -f compose.yml \
+  -f compose.monitoring.yml \
+  up --build -d --wait
+```
+
+dev에서는 다음 주소로 수집 상태를 확인할 수 있습니다.
+
+- Prometheus: <http://localhost:9090>
+- Loki readiness: <http://localhost:3100/ready>
+- Alloy UI: <http://localhost:12345>
+
+Prometheus와 Loki 데이터는 named volume에 저장됩니다. 기본 보관 기간은 dev 7일, prod-like 30일이며 `down`만 실행하면 데이터가 유지됩니다.
+
+```bash
+./monitoring/validate-configs.sh
+
+# dev 종료
+docker compose --env-file .env.dev \
+  -f compose.yml \
+  -f compose.dev.yml \
+  -f compose.monitoring.yml \
+  -f compose.monitoring.dev.yml \
+  down
+
+# prod-like 종료
+docker compose --env-file .env.prod \
+  -f compose.yml \
+  -f compose.monitoring.yml \
+  down
+```
+
 ## 컨테이너 내부 접속
 
 실행 중인 컨테이너의 셸에 접속할 때는 `<service>`를 `frontend`, `backend`, `postgres`, `redis` 중 하나로 바꿉니다. Alpine 기반 이미지이므로 `bash` 대신 `sh`를 사용합니다.
