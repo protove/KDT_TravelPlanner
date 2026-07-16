@@ -28,6 +28,45 @@ class TravelMemberServiceTest {
 	private val service = TravelMemberService(travelRepository, travelMemberRepository)
 
 	@Test
+	fun `owner removes accepted member`() {
+		val travel = travel()
+		val member = acceptedMember(travel)
+		`when`(travelRepository.findById(TRAVEL_ID)).thenReturn(Optional.of(travel))
+		`when`(travelMemberRepository.findByTravelAndUserForUpdate(TRAVEL_ID, MEMBER_ID))
+			.thenReturn(Optional.of(member))
+
+		service.removeMember(TRAVEL_ID, MEMBER_ID, OWNER_ID)
+
+		verify(travelMemberRepository).delete(member)
+	}
+
+	@Test
+	fun `non owner owner target and pending member cannot be removed`() {
+		val travel = travel()
+		val pendingMember = TravelMember(
+			travel = travel,
+			user = mockUser(MEMBER_ID),
+			role = TravelRole.READ_ONLY,
+			invitedAt = INVITED_AT,
+		)
+		`when`(travelRepository.findById(TRAVEL_ID)).thenReturn(Optional.of(travel))
+		`when`(travelMemberRepository.findByTravelAndUserForUpdate(TRAVEL_ID, MEMBER_ID))
+			.thenReturn(Optional.of(pendingMember))
+
+		assertThrows<TravelMemberAccessDeniedException> {
+			service.removeMember(TRAVEL_ID, MEMBER_ID, MEMBER_ID)
+		}
+		assertThrows<TravelOwnerRemovalException> {
+			service.removeMember(TRAVEL_ID, OWNER_ID, OWNER_ID)
+		}
+		assertThrows<PendingTravelMemberRemovalException> {
+			service.removeMember(TRAVEL_ID, MEMBER_ID, OWNER_ID)
+		}
+
+		verify(travelMemberRepository, never()).delete(pendingMember)
+	}
+
+	@Test
 	fun `owner changes accepted member role`() {
 		val travel = travel()
 		val member = acceptedMember(travel)
