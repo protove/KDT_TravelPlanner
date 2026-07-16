@@ -1,6 +1,7 @@
 package com.ktcloud.travelplanner.membership.repository
 
 import com.ktcloud.travelplanner.membership.model.TravelMember
+import com.ktcloud.travelplanner.membership.model.TravelRole
 import org.springframework.data.jpa.repository.JpaRepository
 import org.springframework.data.jpa.repository.Query
 import org.springframework.data.repository.query.Param
@@ -33,4 +34,18 @@ interface TravelMemberRepository : JpaRepository<TravelMember, UUID> {
 		@Param("travelId") travelId: UUID,
 		@Param("userId") userId: UUID,
 	): Boolean
+
+	@Query(
+		"""
+		SELECT member.role
+		FROM TravelMember member
+		WHERE member.travel.id = :travelId
+			AND member.user.id = :userId
+			AND member.status = com.ktcloud.travelplanner.membership.model.InvitationStatus.ACCEPTED
+		""",
+	)
+	fun findAcceptedRole(
+		@Param("travelId") travelId: UUID,
+		@Param("userId") userId: UUID,
+	): TravelRole?
 }
