@@ -46,4 +46,16 @@ class TravelMember(
 	@Column(name = "responded_at")
 	var respondedAt: Instant? = null
 		protected set
+
+	fun respond(
+		action: TravelInvitationAction,
+		respondedAt: Instant,
+	) {
+		check(status == InvitationStatus.PENDING) { "Only pending invitations can be answered." }
+		status = when (action) {
+			TravelInvitationAction.ACCEPT -> InvitationStatus.ACCEPTED
+			TravelInvitationAction.REJECT -> InvitationStatus.REJECTED
+		}
+		this.respondedAt = respondedAt
+	}
 }

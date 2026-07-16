@@ -3,14 +3,30 @@ package com.ktcloud.travelplanner.membership.repository
 import com.ktcloud.travelplanner.membership.model.InvitationStatus
 import com.ktcloud.travelplanner.membership.model.TravelMember
 import com.ktcloud.travelplanner.membership.model.TravelRole
+import jakarta.persistence.LockModeType
 import org.springframework.data.domain.Page
 import org.springframework.data.domain.Pageable
 import org.springframework.data.jpa.repository.JpaRepository
+import org.springframework.data.jpa.repository.Lock
 import org.springframework.data.jpa.repository.Query
 import org.springframework.data.repository.query.Param
+import java.util.Optional
 import java.util.UUID
 
 interface TravelMemberRepository : JpaRepository<TravelMember, UUID> {
+	@Lock(LockModeType.PESSIMISTIC_WRITE)
+	@Query(
+		"""
+		SELECT member
+		FROM TravelMember member
+		JOIN FETCH member.user invitee
+		JOIN member.travel travel
+		WHERE member.id = :invitationId
+			AND travel.deletedAt IS NULL
+		""",
+	)
+	fun findByIdForUpdate(@Param("invitationId") invitationId: UUID): Optional<TravelMember>
+
 	@Query(
 		value = """
 			SELECT member
