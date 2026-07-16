@@ -2,13 +2,17 @@ package com.ktcloud.travelplanner.membership.service
 
 import com.ktcloud.travelplanner.global.exception.DomainException
 import com.ktcloud.travelplanner.global.exception.ErrorCode
+import com.ktcloud.travelplanner.global.response.PageResponse
+import com.ktcloud.travelplanner.membership.dto.ReceivedTravelInvitationResponse
 import com.ktcloud.travelplanner.membership.dto.TravelInvitationCreateRequest
 import com.ktcloud.travelplanner.membership.dto.TravelInvitationCreateResponse
+import com.ktcloud.travelplanner.membership.model.InvitationStatus
 import com.ktcloud.travelplanner.membership.model.TravelMember
 import com.ktcloud.travelplanner.membership.repository.TravelMemberRepository
 import com.ktcloud.travelplanner.travel.repository.TravelRepository
 import com.ktcloud.travelplanner.user.repository.UserRepository
 import org.springframework.beans.factory.annotation.Qualifier
+import org.springframework.data.domain.PageRequest
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
 import java.time.Clock
@@ -22,6 +26,21 @@ class TravelInvitationService(
 	private val userRepository: UserRepository,
 	@Qualifier("utcClock") private val clock: Clock,
 ) {
+	@Transactional(readOnly = true)
+	fun getReceivedInvitations(
+		userId: UUID,
+		status: InvitationStatus,
+		page: Int,
+		size: Int,
+	): PageResponse<ReceivedTravelInvitationResponse> =
+		PageResponse.from(
+			travelMemberRepository.findReceivedInvitations(
+				userId = userId,
+				status = status,
+				pageable = PageRequest.of(page, size),
+			).map(ReceivedTravelInvitationResponse::from),
+		)
+
 	@Transactional
 	fun createInvitation(
 		travelId: UUID,
