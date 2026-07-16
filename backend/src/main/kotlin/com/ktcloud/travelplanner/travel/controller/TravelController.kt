@@ -5,7 +5,9 @@ import com.ktcloud.travelplanner.global.response.PageResponse
 import com.ktcloud.travelplanner.global.security.AuthenticatedUserPrincipal
 import com.ktcloud.travelplanner.travel.dto.TravelCreateRequest
 import com.ktcloud.travelplanner.travel.dto.TravelCreateResponse
+import com.ktcloud.travelplanner.travel.dto.TravelDetailResponse
 import com.ktcloud.travelplanner.travel.dto.TravelSummaryResponse
+import com.ktcloud.travelplanner.travel.service.TravelDetailService
 import com.ktcloud.travelplanner.travel.service.TravelService
 import jakarta.validation.Valid
 import jakarta.validation.constraints.Max
@@ -27,6 +29,7 @@ import java.util.UUID
 @RequestMapping("/api/v1/travels")
 class TravelController(
 	private val travelService: TravelService,
+	private val travelDetailService: TravelDetailService,
 ) {
 	@PostMapping
 	fun createTravel(
@@ -43,6 +46,13 @@ class TravelController(
 		@RequestParam(defaultValue = "20") @Min(1) @Max(100) size: Int,
 	): ApiResponse<PageResponse<TravelSummaryResponse>> =
 		ApiResponse.success(travelService.getTravels(principal.userId, keyword, page, size))
+
+	@GetMapping("/{travelId}")
+	fun getTravelDetail(
+		@PathVariable travelId: UUID,
+		@AuthenticationPrincipal principal: AuthenticatedUserPrincipal,
+	): ApiResponse<TravelDetailResponse> =
+		ApiResponse.success(travelDetailService.getTravelDetail(travelId, principal.userId))
 
 	@DeleteMapping("/{travelId}")
 	fun deleteTravel(
