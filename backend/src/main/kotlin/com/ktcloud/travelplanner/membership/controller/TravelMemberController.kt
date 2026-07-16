@@ -22,6 +22,15 @@ class TravelMemberController(
 	private val travelMemberQueryService: TravelMemberQueryService,
 	private val travelMemberService: TravelMemberService,
 ) {
+	@DeleteMapping("/me")
+	fun leaveTravel(
+		@PathVariable travelId: UUID,
+		@AuthenticationPrincipal principal: AuthenticatedUserPrincipal,
+	): ApiResponse<Unit> {
+		travelMemberService.leaveTravel(travelId, principal.userId)
+		return ApiResponse.success(Unit)
+	}
+
 	@DeleteMapping("/{memberId}")
 	fun removeMember(
 		@PathVariable travelId: UUID,

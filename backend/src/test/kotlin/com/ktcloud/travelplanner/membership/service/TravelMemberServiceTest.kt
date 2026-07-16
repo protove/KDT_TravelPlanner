@@ -28,6 +28,56 @@ class TravelMemberServiceTest {
 	private val service = TravelMemberService(travelRepository, travelMemberRepository)
 
 	@Test
+	fun `accepted member leaves travel`() {
+		val travel = travel()
+		val member = acceptedMember(travel)
+		`when`(travelRepository.findById(TRAVEL_ID)).thenReturn(Optional.of(travel))
+		`when`(travelMemberRepository.findByTravelAndUserForUpdate(TRAVEL_ID, MEMBER_ID))
+			.thenReturn(Optional.of(member))
+
+		service.leaveTravel(TRAVEL_ID, MEMBER_ID)
+
+		verify(travelMemberRepository).delete(member)
+	}
+
+	@Test
+	fun `owner and non member cannot leave travel`() {
+		val travel = travel()
+		`when`(travelRepository.findById(TRAVEL_ID)).thenReturn(Optional.of(travel))
+		`when`(travelMemberRepository.findByTravelAndUserForUpdate(TRAVEL_ID, MEMBER_ID))
+			.thenReturn(Optional.empty())
+
+		assertThrows<TravelOwnerLeaveException> {
+			service.leaveTravel(TRAVEL_ID, OWNER_ID)
+		}
+		assertThrows<TravelMemberNotFoundException> {
+			service.leaveTravel(TRAVEL_ID, MEMBER_ID)
+		}
+
+		verify(travelMemberRepository, never()).delete(any(TravelMember::class.java))
+	}
+
+	@Test
+	fun `pending member cannot leave travel`() {
+		val travel = travel()
+		val pendingMember = TravelMember(
+			travel = travel,
+			user = mockUser(MEMBER_ID),
+			role = TravelRole.READ_ONLY,
+			invitedAt = INVITED_AT,
+		)
+		`when`(travelRepository.findById(TRAVEL_ID)).thenReturn(Optional.of(travel))
+		`when`(travelMemberRepository.findByTravelAndUserForUpdate(TRAVEL_ID, MEMBER_ID))
+			.thenReturn(Optional.of(pendingMember))
+
+		assertThrows<PendingTravelMemberLeaveException> {
+			service.leaveTravel(TRAVEL_ID, MEMBER_ID)
+		}
+
+		verify(travelMemberRepository, never()).delete(pendingMember)
+	}
+
+	@Test
 	fun `owner removes accepted member`() {
 		val travel = travel()
 		val member = acceptedMember(travel)
