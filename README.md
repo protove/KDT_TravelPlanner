@@ -8,6 +8,7 @@ Next.js 프런트엔드, Spring Boot Kotlin 백엔드, PostgreSQL, Redis를 Dock
 | --- | --- | --- | --- |
 | frontend | Next.js 16.2, React 19, TypeScript, Tailwind CSS 4 | `localhost:3000` | `frontend:3000` |
 | backend | Spring Boot 3.5, Kotlin, JDK 21 | `localhost:8080` | `backend:8080` |
+| backend management | Spring Boot Actuator, Prometheus | dev `localhost:9091`, prod-like 비공개 | `backend:9091` |
 | postgres | PostgreSQL 17 | 공개하지 않음 | `postgres:5432` |
 | redis | Redis 7.4 | 공개하지 않음 | `redis:6379` |
 
@@ -41,7 +42,8 @@ docker compose --env-file .env.dev -f compose.yml -f compose.dev.yml up --build
 
 - 프런트엔드: <http://localhost:3000>
 - 백엔드 ping: <http://localhost:8080/api/ping>
-- 백엔드 health: <http://localhost:8080/actuator/health>
+- 백엔드 health: <http://localhost:9091/actuator/health>
+- 백엔드 Prometheus metrics: <http://localhost:9091/actuator/prometheus>
 
 `frontend/` 변경은 Next.js Fast Refresh로 반영됩니다. `backend/src/` 변경은 Gradle 연속 컴파일 후 Spring Boot DevTools가 애플리케이션 컨텍스트를 재시작합니다. `build.gradle.kts`나 `settings.gradle.kts`를 변경한 경우에는 이미지를 다시 빌드하세요.
 
@@ -49,7 +51,7 @@ docker compose --env-file .env.dev -f compose.yml -f compose.dev.yml up --build
 docker compose --env-file .env.dev -f compose.yml -f compose.dev.yml up --build backend
 ```
 
-호스트에서 `3000` 또는 `8080` 포트를 이미 사용 중이라면 `.env.dev`의 `FRONTEND_PORT`, `BACKEND_PORT`, `NEXT_PUBLIC_API_BASE_URL`, `CORS_ALLOWED_ORIGINS`를 함께 변경하세요. 컨테이너 간 주소인 `INTERNAL_API_BASE_URL=http://backend:8080`은 그대로 유지합니다.
+호스트에서 `3000`, `8080`, `9091` 포트를 이미 사용 중이라면 `.env.dev`의 `FRONTEND_PORT`, `BACKEND_PORT`, `MANAGEMENT_PORT`, `NEXT_PUBLIC_API_BASE_URL`, `CORS_ALLOWED_ORIGINS`를 함께 확인하세요. 컨테이너 간 주소인 `INTERNAL_API_BASE_URL=http://backend:8080`과 관리 포트 `backend:9091`은 그대로 유지합니다.
 
 ## 컨테이너 내부 접속
 
@@ -91,8 +93,9 @@ docker compose --env-file .env.prod build
 ```bash
 docker compose --env-file .env.prod up -d --wait
 curl --fail http://localhost:8080/api/ping
-curl --fail http://localhost:8080/actuator/health
 curl --fail http://localhost:3000/
+docker compose --env-file .env.prod \
+  exec -T backend wget -q -O /dev/null http://127.0.0.1:9091/actuator/health
 docker compose --env-file .env.prod down
 ```
 
