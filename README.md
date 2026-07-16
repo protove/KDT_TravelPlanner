@@ -55,7 +55,9 @@ docker compose --env-file .env.dev -f compose.yml -f compose.dev.yml up --build 
 
 ## Monitoring 수집 스택 실행
 
-Prometheus, Loki, Alloy는 기본 애플리케이션 실행에 포함되지 않는 옵트인 오버레이입니다. Alloy는 Docker 소켓 없이 `backend_logs` 볼륨을 읽기 전용으로 마운트해 현재 백엔드 로그 파일을 Loki로 전달합니다.
+Prometheus, Loki, Alloy, Grafana는 기본 애플리케이션 실행에 포함되지 않는 옵트인 오버레이입니다. Alloy는 Docker 소켓 없이 `backend_logs` 볼륨을 읽기 전용으로 마운트해 현재 백엔드 로그 파일을 Loki로 전달합니다.
+
+실행 전 `.env.dev`와 `.env.prod`에 `GRAFANA_ADMIN_USER`, `GRAFANA_ADMIN_PASSWORD`를 설정해야 합니다. 비밀번호가 없으면 모니터링 오버레이는 시작되지 않으며 익명 접근과 사용자 임의 가입은 비활성화됩니다.
 
 ```bash
 # dev: 관리·수집 포트를 localhost에 공개
@@ -78,8 +80,9 @@ dev에서는 다음 주소로 수집 상태를 확인할 수 있습니다.
 - Prometheus: <http://localhost:9090>
 - Loki readiness: <http://localhost:3100/ready>
 - Alloy UI: <http://localhost:12345>
+- Grafana: <http://localhost:3001>
 
-Prometheus와 Loki 데이터는 named volume에 저장됩니다. 기본 보관 기간은 dev 7일, prod-like 30일이며 `down`만 실행하면 데이터가 유지됩니다.
+Grafana에는 UID가 고정된 Prometheus·Loki 데이터소스와 `TravelPlanner/Backend Overview` 대시보드가 자동 프로비저닝됩니다. Prometheus, Loki, Grafana 데이터와 Alloy 수집 위치는 named volume에 저장됩니다. 기본 보관 기간은 dev 7일, prod-like 30일이며 `down`만 실행하면 데이터가 유지됩니다.
 
 ```bash
 ./monitoring/validate-configs.sh
