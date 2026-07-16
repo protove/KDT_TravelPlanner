@@ -88,6 +88,72 @@ class TimelineItem(
 		protected set
 
 	init {
+		validateDetails(
+			dayNumber,
+			visitDate,
+			category,
+			foodSubcategory,
+			name,
+			googlePlaceId,
+			latitude,
+			longitude,
+			rating,
+			visitOrder,
+		)
+	}
+
+	fun updateDetails(
+		dayNumber: Short,
+		visitDate: LocalDate,
+		city: City?,
+		category: TimelineCategory,
+		foodSubcategory: String?,
+		name: String,
+		googlePlaceId: String?,
+		latitude: BigDecimal?,
+		longitude: BigDecimal?,
+		rating: BigDecimal?,
+		visitOrder: Short,
+		memo: String?,
+	) {
+		validateDetails(
+			dayNumber,
+			visitDate,
+			category,
+			foodSubcategory,
+			name,
+			googlePlaceId,
+			latitude,
+			longitude,
+			rating,
+			visitOrder,
+		)
+		this.dayNumber = dayNumber
+		this.visitDate = visitDate
+		this.city = city
+		this.categoryValue = category.toApiValue()
+		this.foodSubcategory = foodSubcategory
+		this.name = name
+		this.googlePlaceId = googlePlaceId
+		this.latitude = latitude
+		this.longitude = longitude
+		this.rating = rating
+		this.visitOrder = visitOrder
+		this.memo = memo
+	}
+
+	private fun validateDetails(
+		dayNumber: Short,
+		visitDate: LocalDate,
+		category: TimelineCategory,
+		foodSubcategory: String?,
+		name: String,
+		googlePlaceId: String?,
+		latitude: BigDecimal?,
+		longitude: BigDecimal?,
+		rating: BigDecimal?,
+		visitOrder: Short,
+	) {
 		require(dayNumber > 0) { "dayNumber must be positive." }
 		require(visitOrder > 0) { "visitOrder must be positive." }
 		require(name.isNotBlank()) { "name must not be blank." }
