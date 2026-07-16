@@ -1,13 +1,43 @@
 package com.ktcloud.travelplanner.membership.repository
 
+import com.ktcloud.travelplanner.membership.model.InvitationStatus
 import com.ktcloud.travelplanner.membership.model.TravelMember
 import com.ktcloud.travelplanner.membership.model.TravelRole
+import org.springframework.data.domain.Page
+import org.springframework.data.domain.Pageable
 import org.springframework.data.jpa.repository.JpaRepository
 import org.springframework.data.jpa.repository.Query
 import org.springframework.data.repository.query.Param
 import java.util.UUID
 
 interface TravelMemberRepository : JpaRepository<TravelMember, UUID> {
+	@Query(
+		value = """
+			SELECT member
+			FROM TravelMember member
+			JOIN FETCH member.travel travel
+			JOIN FETCH travel.owner inviter
+			JOIN FETCH member.user invitee
+			WHERE invitee.id = :userId
+				AND member.status = :status
+				AND travel.deletedAt IS NULL
+			ORDER BY member.invitedAt DESC, member.id DESC
+		""",
+		countQuery = """
+			SELECT COUNT(member)
+			FROM TravelMember member
+			JOIN member.travel travel
+			WHERE member.user.id = :userId
+				AND member.status = :status
+				AND travel.deletedAt IS NULL
+		""",
+	)
+	fun findReceivedInvitations(
+		@Param("userId") userId: UUID,
+		@Param("status") status: InvitationStatus,
+		pageable: Pageable,
+	): Page<TravelMember>
+
 	@Query(
 		"""
 		SELECT CASE WHEN COUNT(member) > 0 THEN TRUE ELSE FALSE END
