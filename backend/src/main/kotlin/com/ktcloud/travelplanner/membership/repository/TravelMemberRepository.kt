@@ -14,6 +14,18 @@ import java.util.Optional
 import java.util.UUID
 
 interface TravelMemberRepository : JpaRepository<TravelMember, UUID> {
+	@Query(
+		"""
+		SELECT member
+		FROM TravelMember member
+		JOIN FETCH member.user user
+		WHERE member.travel.id = :travelId
+			AND member.status = com.ktcloud.travelplanner.membership.model.InvitationStatus.ACCEPTED
+		ORDER BY user.id ASC
+		""",
+	)
+	fun findAcceptedMembers(@Param("travelId") travelId: UUID): List<TravelMember>
+
 	@Lock(LockModeType.PESSIMISTIC_WRITE)
 	@Query(
 		"""
