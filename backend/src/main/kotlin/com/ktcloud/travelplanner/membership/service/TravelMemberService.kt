@@ -17,6 +17,28 @@ class TravelMemberService(
 	private val travelMemberRepository: TravelMemberRepository,
 ) {
 	@Transactional
+	fun removeMember(
+		travelId: UUID,
+		memberId: UUID,
+		requesterId: UUID,
+	) {
+		val travel = travelRepository.findById(travelId).orElseThrow(::MemberTravelNotFoundException)
+		if (travel.owner.id != requesterId) {
+			throw TravelMemberAccessDeniedException()
+		}
+		if (travel.owner.id == memberId) {
+			throw TravelOwnerRemovalException()
+		}
+
+		val member = travelMemberRepository.findByTravelAndUserForUpdate(travelId, memberId)
+			.orElseThrow(::TravelMemberNotFoundException)
+		if (member.status != InvitationStatus.ACCEPTED) {
+			throw PendingTravelMemberRemovalException()
+		}
+		travelMemberRepository.delete(member)
+	}
+
+	@Transactional
 	fun updateMemberRole(
 		travelId: UUID,
 		memberId: UUID,
@@ -46,3 +68,7 @@ class TravelMemberNotFoundException : DomainException(ErrorCode.RESOURCE_NOT_FOU
 class TravelOwnerRoleUpdateException : DomainException(ErrorCode.INVALID_REQUEST, "플랜 소유자의 권한은 변경할 수 없습니다.")
 
 class PendingTravelMemberRoleUpdateException : DomainException(ErrorCode.INVALID_REQUEST, "수락된 참여자의 권한만 변경할 수 있습니다.")
+
+class TravelOwnerRemovalException : DomainException(ErrorCode.INVALID_REQUEST, "플랜 소유자는 방출할 수 없습니다.")
+
+class PendingTravelMemberRemovalException : DomainException(ErrorCode.INVALID_REQUEST, "수락된 참여자만 방출할 수 있습니다.")

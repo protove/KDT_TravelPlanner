@@ -7,6 +7,7 @@ import com.ktcloud.travelplanner.membership.dto.TravelMemberRoleUpdateRequest
 import com.ktcloud.travelplanner.membership.service.TravelMemberQueryService
 import com.ktcloud.travelplanner.membership.service.TravelMemberService
 import org.springframework.security.core.annotation.AuthenticationPrincipal
+import org.springframework.web.bind.annotation.DeleteMapping
 import org.springframework.web.bind.annotation.GetMapping
 import org.springframework.web.bind.annotation.PatchMapping
 import org.springframework.web.bind.annotation.PathVariable
@@ -21,6 +22,16 @@ class TravelMemberController(
 	private val travelMemberQueryService: TravelMemberQueryService,
 	private val travelMemberService: TravelMemberService,
 ) {
+	@DeleteMapping("/{memberId}")
+	fun removeMember(
+		@PathVariable travelId: UUID,
+		@PathVariable memberId: UUID,
+		@AuthenticationPrincipal principal: AuthenticatedUserPrincipal,
+	): ApiResponse<Unit> {
+		travelMemberService.removeMember(travelId, memberId, principal.userId)
+		return ApiResponse.success(Unit)
+	}
+
 	@PatchMapping("/{memberId}")
 	fun updateMemberRole(
 		@PathVariable travelId: UUID,
