@@ -37,6 +37,13 @@ management:
       show-details: never
 
 app:
+  external:
+    google:
+      places:
+        api-key: ${GOOGLE_PLACES_API_KEY:}
+        base-url: ${GOOGLE_PLACES_BASE_URL:https://places.googleapis.com}
+        connect-timeout: ${GOOGLE_PLACES_CONNECT_TIMEOUT:2s}
+        read-timeout: ${GOOGLE_PLACES_READ_TIMEOUT:3s}
   storage:
     profile-image:
       enabled: ${PROFILE_IMAGE_STORAGE_ENABLED:false}
