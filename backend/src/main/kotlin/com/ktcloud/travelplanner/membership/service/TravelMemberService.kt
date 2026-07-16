@@ -17,6 +17,24 @@ class TravelMemberService(
 	private val travelMemberRepository: TravelMemberRepository,
 ) {
 	@Transactional
+	fun leaveTravel(
+		travelId: UUID,
+		requesterId: UUID,
+	) {
+		val travel = travelRepository.findById(travelId).orElseThrow(::MemberTravelNotFoundException)
+		if (travel.owner.id == requesterId) {
+			throw TravelOwnerLeaveException()
+		}
+
+		val member = travelMemberRepository.findByTravelAndUserForUpdate(travelId, requesterId)
+			.orElseThrow(::TravelMemberNotFoundException)
+		if (member.status != InvitationStatus.ACCEPTED) {
+			throw PendingTravelMemberLeaveException()
+		}
+		travelMemberRepository.delete(member)
+	}
+
+	@Transactional
 	fun removeMember(
 		travelId: UUID,
 		memberId: UUID,
@@ -72,3 +90,7 @@ class PendingTravelMemberRoleUpdateException : DomainException(ErrorCode.INVALID
 class TravelOwnerRemovalException : DomainException(ErrorCode.INVALID_REQUEST, "플랜 소유자는 방출할 수 없습니다.")
 
 class PendingTravelMemberRemovalException : DomainException(ErrorCode.INVALID_REQUEST, "수락된 참여자만 방출할 수 있습니다.")
+
+class TravelOwnerLeaveException : DomainException(ErrorCode.INVALID_REQUEST, "플랜 소유자는 플랜에서 나갈 수 없습니다.")
+
+class PendingTravelMemberLeaveException : DomainException(ErrorCode.INVALID_REQUEST, "수락된 참여자만 플랜에서 나갈 수 있습니다.")
