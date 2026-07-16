@@ -21,3 +21,7 @@ for profile in dev prod; do
     grafana/alloy:v1.16.1 \
     validate "/etc/alloy/config.$profile.alloy"
 done
+
+python3 -m json.tool \
+  "$SCRIPT_DIR/grafana/dashboards/backend-overview.json" \
+  >/dev/null
