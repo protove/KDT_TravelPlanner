@@ -1,8 +1,10 @@
 package com.ktcloud.travelplanner.membership.service
 
 import com.ktcloud.travelplanner.membership.dto.TravelInvitationCreateRequest
+import com.ktcloud.travelplanner.membership.dto.TravelInvitationRespondRequest
 import com.ktcloud.travelplanner.membership.model.InvitationStatus
 import com.ktcloud.travelplanner.membership.model.TravelMember
+import com.ktcloud.travelplanner.membership.model.TravelInvitationAction
 import com.ktcloud.travelplanner.membership.model.TravelRole
 import com.ktcloud.travelplanner.membership.repository.TravelMemberRepository
 import com.ktcloud.travelplanner.testsupport.TestFixtures
@@ -37,6 +39,57 @@ class TravelInvitationServiceTest {
 		userRepository,
 		TestFixtures.FIXED_CLOCK,
 	)
+
+	@Test
+	fun `invitee accepts pending invitation and response time is recorded`() {
+		val member = invitation()
+		`when`(travelMemberRepository.findByIdForUpdate(INVITATION_ID)).thenReturn(Optional.of(member))
+		`when`(travelMemberRepository.save(member)).thenReturn(member)
+
+		val response = service.respondToInvitation(
+			INVITATION_ID,
+			INVITEE_ID,
+			TravelInvitationRespondRequest(TravelInvitationAction.ACCEPT),
+		)
+
+		assertEquals(INVITATION_ID, response.invitationId)
+		assertEquals(InvitationStatus.ACCEPTED, response.status)
+		assertEquals(TestFixtures.FIXED_INSTANT, response.respondedAt)
+	}
+
+	@Test
+	fun `user other than invitee cannot respond to invitation`() {
+		val member = invitation()
+		`when`(travelMemberRepository.findByIdForUpdate(INVITATION_ID)).thenReturn(Optional.of(member))
+
+		assertThrows<InvitationAccessDeniedException> {
+			service.respondToInvitation(
+				INVITATION_ID,
+				OWNER_ID,
+				TravelInvitationRespondRequest(TravelInvitationAction.REJECT),
+			)
+		}
+
+		verify(travelMemberRepository, never()).save(member)
+	}
+
+	@Test
+	fun `already answered invitation cannot transition again`() {
+		val member = invitation().also {
+			it.respond(TravelInvitationAction.REJECT, INVITED_AT.plusSeconds(1))
+		}
+		`when`(travelMemberRepository.findByIdForUpdate(INVITATION_ID)).thenReturn(Optional.of(member))
+
+		assertThrows<InvitationAlreadyRespondedException> {
+			service.respondToInvitation(
+				INVITATION_ID,
+				INVITEE_ID,
+				TravelInvitationRespondRequest(TravelInvitationAction.ACCEPT),
+			)
+		}
+
+		verify(travelMemberRepository, never()).save(member)
+	}
 
 	@Test
 	fun `received invitations are queried by user and status and mapped with summaries`() {
@@ -161,6 +214,14 @@ class TravelInvitationServiceTest {
 	}
 
 	private fun request() = TravelInvitationCreateRequest("invitee", TravelRole.READ_WRITE)
+
+	private fun invitation(): TravelMember = TravelMember(
+		id = INVITATION_ID,
+		travel = travel(mockUser(OWNER_ID)),
+		user = mockUser(INVITEE_ID),
+		role = TravelRole.READ_WRITE,
+		invitedAt = INVITED_AT,
+	)
 
 	private fun mockUser(
 		id: UUID,

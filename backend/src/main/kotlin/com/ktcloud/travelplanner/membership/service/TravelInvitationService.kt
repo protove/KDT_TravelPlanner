@@ -6,6 +6,8 @@ import com.ktcloud.travelplanner.global.response.PageResponse
 import com.ktcloud.travelplanner.membership.dto.ReceivedTravelInvitationResponse
 import com.ktcloud.travelplanner.membership.dto.TravelInvitationCreateRequest
 import com.ktcloud.travelplanner.membership.dto.TravelInvitationCreateResponse
+import com.ktcloud.travelplanner.membership.dto.TravelInvitationRespondRequest
+import com.ktcloud.travelplanner.membership.dto.TravelInvitationStatusResponse
 import com.ktcloud.travelplanner.membership.model.InvitationStatus
 import com.ktcloud.travelplanner.membership.model.TravelMember
 import com.ktcloud.travelplanner.membership.repository.TravelMemberRepository
@@ -26,6 +28,24 @@ class TravelInvitationService(
 	private val userRepository: UserRepository,
 	@Qualifier("utcClock") private val clock: Clock,
 ) {
+	@Transactional
+	fun respondToInvitation(
+		invitationId: UUID,
+		userId: UUID,
+		request: TravelInvitationRespondRequest,
+	): TravelInvitationStatusResponse {
+		val invitation = travelMemberRepository.findByIdForUpdate(invitationId)
+			.orElseThrow(::TravelInvitationNotFoundException)
+		if (invitation.user.id != userId) {
+			throw InvitationAccessDeniedException()
+		}
+		if (invitation.status != InvitationStatus.PENDING) {
+			throw InvitationAlreadyRespondedException()
+		}
+		invitation.respond(request.action, Instant.now(clock))
+		return TravelInvitationStatusResponse.from(travelMemberRepository.save(invitation))
+	}
+
 	@Transactional(readOnly = true)
 	fun getReceivedInvitations(
 		userId: UUID,
@@ -81,3 +101,7 @@ class InvitationTargetNotFoundException : DomainException(ErrorCode.RESOURCE_NOT
 class SelfInvitationException : DomainException(ErrorCode.INVALID_REQUEST, "자기 자신을 초대할 수 없습니다.")
 
 class DuplicateInvitationException : DomainException(ErrorCode.CONFLICT, "이미 초대되었거나 참여 중인 사용자입니다.")
+
+class TravelInvitationNotFoundException : DomainException(ErrorCode.RESOURCE_NOT_FOUND)
+
+class InvitationAlreadyRespondedException : DomainException(ErrorCode.CONFLICT, "이미 처리된 초대입니다.")
