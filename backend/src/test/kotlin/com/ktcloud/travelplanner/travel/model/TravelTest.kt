@@ -1,6 +1,8 @@
 package com.ktcloud.travelplanner.travel.model
 
 import com.ktcloud.travelplanner.testsupport.TestFixtures
+import com.ktcloud.travelplanner.location.model.City
+import com.ktcloud.travelplanner.location.model.Country
 import com.ktcloud.travelplanner.user.model.OAuthProvider
 import com.ktcloud.travelplanner.user.model.User
 import org.junit.jupiter.api.Test
@@ -60,5 +62,46 @@ class TravelTest {
 		assertTrue(travel.isDeleted)
 		assertEquals(TestFixtures.FIXED_INSTANT, travel.deletedAt)
 		assertThrows<IllegalArgumentException> { travel.softDelete(TestFixtures.FIXED_INSTANT) }
+	}
+
+	@Test
+	fun `updates basic info only when dates participant count and location are valid`() {
+		val travel = Travel(
+			owner = owner,
+			title = "수정 전 여행",
+			startDate = LocalDate.parse("2026-08-01"),
+			endDate = LocalDate.parse("2026-08-04"),
+		)
+		val country = Country(1, "JP", "일본", "Japan")
+		val city = City(10, country, "도쿄", "Tokyo")
+
+		travel.updateBasicInfo(
+			title = "수정 후 여행",
+			startDate = LocalDate.parse("2026-08-02"),
+			endDate = LocalDate.parse("2026-08-05"),
+			country = country,
+			city = city,
+			companionType = CompanionType.FRIEND,
+			participantCount = 3,
+			comment = "맛집 중심",
+		)
+
+		assertEquals("수정 후 여행", travel.title)
+		assertSame(city, travel.city)
+		assertEquals(3, travel.participantCount?.toInt())
+
+		val otherCountry = Country(2, "KR", "대한민국", "South Korea")
+		assertThrows<IllegalArgumentException> {
+			travel.updateBasicInfo(
+				travel.title,
+				travel.startDate,
+				travel.endDate,
+				otherCountry,
+				city,
+				travel.companionType,
+				travel.participantCount,
+				travel.comment,
+			)
+		}
 	}
 }

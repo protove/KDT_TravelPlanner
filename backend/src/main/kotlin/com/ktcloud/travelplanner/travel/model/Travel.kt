@@ -96,6 +96,34 @@ class Travel(
 		this.deletedAt = deletedAt
 	}
 
+	fun updateBasicInfo(
+		title: String,
+		startDate: LocalDate,
+		endDate: LocalDate,
+		country: Country?,
+		city: City?,
+		companionType: CompanionType?,
+		participantCount: Short?,
+		comment: String?,
+	) {
+		require(title.isNotBlank()) { "title must not be blank." }
+		require(title.length <= TITLE_MAX_LENGTH) { "title must not exceed $TITLE_MAX_LENGTH characters." }
+		require(!endDate.isBefore(startDate)) { "endDate must not be before startDate." }
+		require(participantCount == null || participantCount > 0) { "participantCount must be positive." }
+		require(city == null || country != null && city.country.id == country.id) {
+			"city must belong to country."
+		}
+
+		this.title = title
+		this.startDate = startDate
+		this.endDate = endDate
+		this.country = country
+		this.city = city
+		this.companionType = companionType
+		this.participantCount = participantCount
+		this.comment = comment
+	}
+
 	companion object {
 		private const val TITLE_MAX_LENGTH = 100
 	}

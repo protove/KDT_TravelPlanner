@@ -4,6 +4,7 @@ import com.ktcloud.travelplanner.location.model.City
 import org.springframework.data.jpa.repository.JpaRepository
 import org.springframework.data.jpa.repository.Query
 import org.springframework.data.repository.query.Param
+import java.util.Optional
 
 interface CityRepository : JpaRepository<City, Long> {
 	@Query(
@@ -16,4 +17,6 @@ interface CityRepository : JpaRepository<City, Long> {
 		""",
 	)
 	fun findActiveByCountryId(@Param("countryId") countryId: Short): List<City>
+
+	fun findByIdAndIsActiveTrue(cityId: Long): Optional<City>
 }
