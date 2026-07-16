@@ -68,6 +68,46 @@ class TimelineItemTest {
 		}
 	}
 
+	@Test
+	fun `partial update target values are revalidated`() {
+		val item = timelineItem(category = TimelineCategory.FOOD, foodSubcategory = "일식")
+
+		item.updateDetails(
+			dayNumber = 2,
+			visitDate = LocalDate.parse("2026-08-02"),
+			city = null,
+			category = TimelineCategory.OTHER,
+			foodSubcategory = null,
+			name = "수정 일정",
+			googlePlaceId = null,
+			latitude = null,
+			longitude = null,
+			rating = null,
+			visitOrder = 2,
+			memo = null,
+		)
+
+		assertEquals(2, item.dayNumber.toInt())
+		assertEquals(TimelineCategory.OTHER, item.category)
+		assertEquals("수정 일정", item.name)
+		assertThrows<IllegalArgumentException> {
+			item.updateDetails(
+				item.dayNumber,
+				item.visitDate,
+				null,
+				TimelineCategory.ATTRACTION,
+				"일식",
+				item.name,
+				null,
+				null,
+				null,
+				null,
+				item.visitOrder,
+				null,
+			)
+		}
+	}
+
 	private fun timelineItem(
 		dayNumber: Short = 1,
 		visitDate: LocalDate = LocalDate.parse("2026-08-01"),

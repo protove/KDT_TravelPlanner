@@ -12,4 +12,16 @@ interface TimelineItemRepository : JpaRepository<TimelineItem, UUID> {
 	): Boolean
 
 	fun findAllByTravelIdOrderByDayNumberAscVisitOrderAsc(travelId: UUID): List<TimelineItem>
+
+	fun findByIdAndTravelId(
+		itemId: UUID,
+		travelId: UUID,
+	): TimelineItem?
+
+	fun existsByTravelIdAndDayNumberAndVisitOrderAndIdNot(
+		travelId: UUID,
+		dayNumber: Short,
+		visitOrder: Short,
+		itemId: UUID,
+	): Boolean
 }
