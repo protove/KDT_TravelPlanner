@@ -147,6 +147,11 @@ class TimelineItem(
 		visitOrder--
 	}
 
+	fun changeVisitOrder(newVisitOrder: Short) {
+		require(newVisitOrder > 0) { "visitOrder must be positive." }
+		visitOrder = newVisitOrder
+	}
+
 	private fun validateDetails(
 		dayNumber: Short,
 		visitDate: LocalDate,

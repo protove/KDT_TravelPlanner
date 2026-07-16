@@ -15,6 +15,11 @@ interface TimelineItemRepository : JpaRepository<TimelineItem, UUID> {
 
 	fun findAllByTravelIdOrderByDayNumberAscVisitOrderAsc(travelId: UUID): List<TimelineItem>
 
+	fun findAllByTravelIdAndDayNumberOrderByVisitOrderAsc(
+		travelId: UUID,
+		dayNumber: Short,
+	): List<TimelineItem>
+
 	fun findByIdAndTravelId(
 		itemId: UUID,
 		travelId: UUID,
