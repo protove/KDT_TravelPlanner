@@ -29,6 +29,26 @@ class TravelInvitationService(
 	@Qualifier("utcClock") private val clock: Clock,
 ) {
 	@Transactional
+	fun cancelInvitation(
+		travelId: UUID,
+		invitationId: UUID,
+		requesterId: UUID,
+	) {
+		val invitation = travelMemberRepository.findByIdForUpdate(invitationId)
+			.orElseThrow(::TravelInvitationNotFoundException)
+		if (invitation.travel.id != travelId) {
+			throw TravelInvitationNotFoundException()
+		}
+		if (invitation.travel.owner.id != requesterId) {
+			throw InvitationAccessDeniedException()
+		}
+		if (invitation.status != InvitationStatus.PENDING) {
+			throw InvitationAlreadyRespondedException()
+		}
+		travelMemberRepository.delete(invitation)
+	}
+
+	@Transactional
 	fun respondToInvitation(
 		invitationId: UUID,
 		userId: UUID,
