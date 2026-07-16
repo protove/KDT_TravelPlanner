@@ -4,9 +4,11 @@ import com.ktcloud.travelplanner.global.response.ApiResponse
 import com.ktcloud.travelplanner.global.security.AuthenticatedUserPrincipal
 import com.ktcloud.travelplanner.timeline.dto.TimelineItemCreateRequest
 import com.ktcloud.travelplanner.timeline.dto.TimelineItemCreateResponse
+import com.ktcloud.travelplanner.timeline.dto.TimelineItemOrderUpdateRequest
 import com.ktcloud.travelplanner.timeline.dto.TimelineItemResponse
 import com.ktcloud.travelplanner.timeline.dto.TimelineItemUpdateRequest
 import com.ktcloud.travelplanner.timeline.service.TimelineItemDeleteService
+import com.ktcloud.travelplanner.timeline.service.TimelineItemOrderUpdateService
 import com.ktcloud.travelplanner.timeline.service.TimelineItemService
 import com.ktcloud.travelplanner.timeline.service.TimelineItemUpdateService
 import jakarta.validation.Valid
@@ -26,6 +28,7 @@ class TimelineItemController(
 	private val timelineItemService: TimelineItemService,
 	private val timelineItemUpdateService: TimelineItemUpdateService,
 	private val timelineItemDeleteService: TimelineItemDeleteService,
+	private val timelineItemOrderUpdateService: TimelineItemOrderUpdateService,
 ) {
 	@PostMapping
 	fun createTimelineItem(
@@ -52,6 +55,16 @@ class TimelineItemController(
 		@AuthenticationPrincipal principal: AuthenticatedUserPrincipal,
 	): ApiResponse<Unit> {
 		timelineItemDeleteService.deleteTimelineItem(travelId, itemId, principal.userId)
+		return ApiResponse.success(Unit)
+	}
+
+	@PatchMapping("/order")
+	fun updateTimelineItemOrder(
+		@PathVariable travelId: UUID,
+		@AuthenticationPrincipal principal: AuthenticatedUserPrincipal,
+		@Valid @RequestBody request: TimelineItemOrderUpdateRequest,
+	): ApiResponse<Unit> {
+		timelineItemOrderUpdateService.updateTimelineItemOrder(travelId, principal.userId, request)
 		return ApiResponse.success(Unit)
 	}
 }
