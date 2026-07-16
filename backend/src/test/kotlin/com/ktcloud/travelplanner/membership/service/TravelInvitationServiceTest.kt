@@ -41,6 +41,45 @@ class TravelInvitationServiceTest {
 	)
 
 	@Test
+	fun `owner cancels pending invitation belonging to travel`() {
+		val invitation = invitation()
+		`when`(travelMemberRepository.findByIdForUpdate(INVITATION_ID)).thenReturn(Optional.of(invitation))
+
+		service.cancelInvitation(TRAVEL_ID, INVITATION_ID, OWNER_ID)
+
+		verify(travelMemberRepository).delete(invitation)
+	}
+
+	@Test
+	fun `non owner or mismatched travel cannot cancel invitation`() {
+		val invitation = invitation()
+		`when`(travelMemberRepository.findByIdForUpdate(INVITATION_ID)).thenReturn(Optional.of(invitation))
+
+		assertThrows<InvitationAccessDeniedException> {
+			service.cancelInvitation(TRAVEL_ID, INVITATION_ID, INVITEE_ID)
+		}
+		assertThrows<TravelInvitationNotFoundException> {
+			service.cancelInvitation(OTHER_TRAVEL_ID, INVITATION_ID, OWNER_ID)
+		}
+
+		verify(travelMemberRepository, never()).delete(invitation)
+	}
+
+	@Test
+	fun `owner cannot cancel already answered invitation`() {
+		val invitation = invitation().also {
+			it.respond(TravelInvitationAction.ACCEPT, INVITED_AT.plusSeconds(1))
+		}
+		`when`(travelMemberRepository.findByIdForUpdate(INVITATION_ID)).thenReturn(Optional.of(invitation))
+
+		assertThrows<InvitationAlreadyRespondedException> {
+			service.cancelInvitation(TRAVEL_ID, INVITATION_ID, OWNER_ID)
+		}
+
+		verify(travelMemberRepository, never()).delete(invitation)
+	}
+
+	@Test
 	fun `invitee accepts pending invitation and response time is recorded`() {
 		val member = invitation()
 		`when`(travelMemberRepository.findByIdForUpdate(INVITATION_ID)).thenReturn(Optional.of(member))
@@ -243,6 +282,7 @@ class TravelInvitationServiceTest {
 
 	companion object {
 		private val TRAVEL_ID = UUID.fromString("00000000-0000-0000-0000-000000000028")
+		private val OTHER_TRAVEL_ID = UUID.fromString("00000000-0000-0000-0000-000000000030")
 		private val INVITATION_ID = UUID.fromString("00000000-0000-0000-0000-000000000029")
 		private val OWNER_ID = TestFixtures.USER_ID
 		private val INVITEE_ID = UUID.fromString("00000000-0000-0000-0000-000000000002")

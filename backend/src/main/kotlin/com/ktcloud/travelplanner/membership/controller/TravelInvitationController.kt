@@ -7,6 +7,7 @@ import com.ktcloud.travelplanner.membership.dto.TravelInvitationCreateResponse
 import com.ktcloud.travelplanner.membership.service.TravelInvitationService
 import jakarta.validation.Valid
 import org.springframework.security.core.annotation.AuthenticationPrincipal
+import org.springframework.web.bind.annotation.DeleteMapping
 import org.springframework.web.bind.annotation.PathVariable
 import org.springframework.web.bind.annotation.PostMapping
 import org.springframework.web.bind.annotation.RequestBody
@@ -19,6 +20,16 @@ import java.util.UUID
 class TravelInvitationController(
 	private val travelInvitationService: TravelInvitationService,
 ) {
+	@DeleteMapping("/{invitationId}")
+	fun cancelInvitation(
+		@PathVariable travelId: UUID,
+		@PathVariable invitationId: UUID,
+		@AuthenticationPrincipal principal: AuthenticatedUserPrincipal,
+	): ApiResponse<Unit> {
+		travelInvitationService.cancelInvitation(travelId, invitationId, principal.userId)
+		return ApiResponse.success(Unit)
+	}
+
 	@PostMapping
 	fun createInvitation(
 		@PathVariable travelId: UUID,
