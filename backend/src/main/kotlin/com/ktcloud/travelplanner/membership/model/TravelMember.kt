@@ -58,4 +58,9 @@ class TravelMember(
 		}
 		this.respondedAt = respondedAt
 	}
+
+	fun updateRole(role: TravelRole) {
+		check(status == InvitationStatus.ACCEPTED) { "Only accepted member roles can be changed." }
+		this.role = role
+	}
 }

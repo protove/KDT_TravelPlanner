@@ -14,6 +14,23 @@ import java.util.Optional
 import java.util.UUID
 
 interface TravelMemberRepository : JpaRepository<TravelMember, UUID> {
+	@Lock(LockModeType.PESSIMISTIC_WRITE)
+	@Query(
+		"""
+		SELECT member
+		FROM TravelMember member
+		JOIN member.travel travel
+		JOIN FETCH member.user user
+		WHERE travel.id = :travelId
+			AND user.id = :userId
+			AND travel.deletedAt IS NULL
+		""",
+	)
+	fun findByTravelAndUserForUpdate(
+		@Param("travelId") travelId: UUID,
+		@Param("userId") userId: UUID,
+	): Optional<TravelMember>
+
 	@Query(
 		"""
 		SELECT member
