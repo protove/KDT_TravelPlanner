@@ -7,8 +7,10 @@ import com.ktcloud.travelplanner.travel.dto.TravelCreateRequest
 import com.ktcloud.travelplanner.travel.dto.TravelCreateResponse
 import com.ktcloud.travelplanner.travel.dto.TravelDetailResponse
 import com.ktcloud.travelplanner.travel.dto.TravelSummaryResponse
+import com.ktcloud.travelplanner.travel.dto.TravelUpdateRequest
 import com.ktcloud.travelplanner.travel.service.TravelDetailService
 import com.ktcloud.travelplanner.travel.service.TravelService
+import com.ktcloud.travelplanner.travel.service.TravelUpdateService
 import jakarta.validation.Valid
 import jakarta.validation.constraints.Max
 import jakarta.validation.constraints.Min
@@ -17,6 +19,7 @@ import org.springframework.validation.annotation.Validated
 import org.springframework.web.bind.annotation.DeleteMapping
 import org.springframework.web.bind.annotation.GetMapping
 import org.springframework.web.bind.annotation.PathVariable
+import org.springframework.web.bind.annotation.PatchMapping
 import org.springframework.web.bind.annotation.PostMapping
 import org.springframework.web.bind.annotation.RequestBody
 import org.springframework.web.bind.annotation.RequestMapping
@@ -30,6 +33,7 @@ import java.util.UUID
 class TravelController(
 	private val travelService: TravelService,
 	private val travelDetailService: TravelDetailService,
+	private val travelUpdateService: TravelUpdateService,
 ) {
 	@PostMapping
 	fun createTravel(
@@ -53,6 +57,14 @@ class TravelController(
 		@AuthenticationPrincipal principal: AuthenticatedUserPrincipal,
 	): ApiResponse<TravelDetailResponse> =
 		ApiResponse.success(travelDetailService.getTravelDetail(travelId, principal.userId))
+
+	@PatchMapping("/{travelId}")
+	fun updateTravel(
+		@PathVariable travelId: UUID,
+		@AuthenticationPrincipal principal: AuthenticatedUserPrincipal,
+		@Valid @RequestBody request: TravelUpdateRequest,
+	): ApiResponse<TravelDetailResponse> =
+		ApiResponse.success(travelUpdateService.updateTravel(travelId, principal.userId, request))
 
 	@DeleteMapping("/{travelId}")
 	fun deleteTravel(
