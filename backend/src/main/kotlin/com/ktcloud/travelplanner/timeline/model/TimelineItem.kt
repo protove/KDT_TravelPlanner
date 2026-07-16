@@ -142,6 +142,11 @@ class TimelineItem(
 		this.memo = memo
 	}
 
+	fun moveVisitOrderEarlier() {
+		require(visitOrder > 1) { "visitOrder must remain positive." }
+		visitOrder--
+	}
+
 	private fun validateDetails(
 		dayNumber: Short,
 		visitDate: LocalDate,
