@@ -6,10 +6,12 @@ import com.ktcloud.travelplanner.timeline.dto.TimelineItemCreateRequest
 import com.ktcloud.travelplanner.timeline.dto.TimelineItemCreateResponse
 import com.ktcloud.travelplanner.timeline.dto.TimelineItemResponse
 import com.ktcloud.travelplanner.timeline.dto.TimelineItemUpdateRequest
+import com.ktcloud.travelplanner.timeline.service.TimelineItemDeleteService
 import com.ktcloud.travelplanner.timeline.service.TimelineItemService
 import com.ktcloud.travelplanner.timeline.service.TimelineItemUpdateService
 import jakarta.validation.Valid
 import org.springframework.security.core.annotation.AuthenticationPrincipal
+import org.springframework.web.bind.annotation.DeleteMapping
 import org.springframework.web.bind.annotation.PathVariable
 import org.springframework.web.bind.annotation.PatchMapping
 import org.springframework.web.bind.annotation.PostMapping
@@ -23,6 +25,7 @@ import java.util.UUID
 class TimelineItemController(
 	private val timelineItemService: TimelineItemService,
 	private val timelineItemUpdateService: TimelineItemUpdateService,
+	private val timelineItemDeleteService: TimelineItemDeleteService,
 ) {
 	@PostMapping
 	fun createTimelineItem(
@@ -41,4 +44,14 @@ class TimelineItemController(
 	): ApiResponse<TimelineItemResponse> = ApiResponse.success(
 		timelineItemUpdateService.updateTimelineItem(travelId, itemId, principal.userId, request),
 	)
+
+	@DeleteMapping("/{itemId}")
+	fun deleteTimelineItem(
+		@PathVariable travelId: UUID,
+		@PathVariable itemId: UUID,
+		@AuthenticationPrincipal principal: AuthenticatedUserPrincipal,
+	): ApiResponse<Unit> {
+		timelineItemDeleteService.deleteTimelineItem(travelId, itemId, principal.userId)
+		return ApiResponse.success(Unit)
+	}
 }

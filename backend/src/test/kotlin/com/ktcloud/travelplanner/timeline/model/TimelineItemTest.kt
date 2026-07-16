@@ -108,6 +108,16 @@ class TimelineItemTest {
 		}
 	}
 
+	@Test
+	fun `moves visit order one position earlier without becoming non positive`() {
+		val item = timelineItem(visitOrder = 2)
+
+		item.moveVisitOrderEarlier()
+
+		assertEquals(1, item.visitOrder.toInt())
+		assertThrows<IllegalArgumentException> { item.moveVisitOrderEarlier() }
+	}
+
 	private fun timelineItem(
 		dayNumber: Short = 1,
 		visitDate: LocalDate = LocalDate.parse("2026-08-01"),
