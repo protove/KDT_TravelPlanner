@@ -53,6 +53,8 @@ docker compose --env-file .env.dev -f compose.yml -f compose.dev.yml up --build 
 
 호스트에서 `3000`, `8080`, `9091` 포트를 이미 사용 중이라면 `.env.dev`의 `FRONTEND_PORT`, `BACKEND_PORT`, `MANAGEMENT_PORT`, `NEXT_PUBLIC_API_BASE_URL`, `CORS_ALLOWED_ORIGINS`를 함께 확인하세요. 컨테이너 간 주소인 `INTERNAL_API_BASE_URL=http://backend:8080`과 관리 포트 `backend:9091`은 그대로 유지합니다.
 
+백엔드는 소셜 로그인 후 발급하는 서비스 Access Token을 서명하기 위해 `JWT_SECRET`을 사용합니다. `.env.dev`와 `.env.prod`에는 32바이트 이상의 임의 값을 설정해야 하며, Grafana 관리자 비밀번호와는 별도의 값을 사용하세요.
+
 ## Monitoring 수집 스택 실행
 
 Prometheus, Loki, Alloy, Grafana는 기본 애플리케이션 실행에 포함되지 않는 옵트인 오버레이입니다. Alloy는 Docker 소켓 없이 `backend_logs` 볼륨을 읽기 전용으로 마운트해 현재 백엔드 로그 파일을 Loki로 전달합니다.
