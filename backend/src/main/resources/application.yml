@@ -26,15 +26,23 @@ server:
   shutdown: graceful
 
 management:
+  server:
+    port: ${MANAGEMENT_SERVER_PORT:9091}
   endpoints:
     web:
       exposure:
-        include: health,info
+        include: health,info,prometheus
   endpoint:
     health:
       probes:
         enabled: true
       show-details: never
+  metrics:
+    distribution:
+      percentiles-histogram:
+        http.server.requests: true
+    tags:
+      application: ${spring.application.name}
 
 app:
   external:

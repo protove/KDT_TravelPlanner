@@ -34,6 +34,7 @@ dependencies {
 	implementation(platform("software.amazon.awssdk:bom:2.47.3"))
 	implementation("software.amazon.awssdk:s3")
 	developmentOnly("org.springframework.boot:spring-boot-devtools")
+	runtimeOnly("io.micrometer:micrometer-registry-prometheus")
 	runtimeOnly("org.postgresql:postgresql")
 	runtimeOnly("org.flywaydb:flyway-database-postgresql")
 	testImplementation("org.springframework.boot:spring-boot-starter-test")
