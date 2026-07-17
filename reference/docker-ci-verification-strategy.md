@@ -212,7 +212,7 @@ docker compose --env-file .env.prod.example \
 
 | 이벤트 | 경로 | 필수 검증 |
 |---|---|---|
-| `develop-backend` 대상 PR | `backend/**`, backend workflow | builder 테스트 + backend 최종 이미지 |
+| `develop-backend` 대상 PR | `backend/**`, `compose.yml`, backend workflow | builder 테스트 + backend 최종 이미지 |
 | `develop-backend` 대상 PR | dev 인프라 경로 | dev/test Compose 구문 + backend dev 이미지 |
 | `develop`·`main` 대상 PR | `backend/**`, `frontend/**`, `compose.yml`, `.env.prod.example` | 기본 Compose 전체 build |
 | `push` | 없음 | 실행하지 않음 |
