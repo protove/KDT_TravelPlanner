@@ -2,6 +2,8 @@
 
 이 디렉터리의 설정은 Prometheus, Loki, Alloy, Grafana 수집 경로를 구성한다. 관련 파일이 변경된 PR에서는 `Monitoring Verification` workflow가 정적 검사와 통합 스모크를 실행한다.
 
+이 문장의 변경은 최초 도입된 workflow가 GitHub 러너에서 실행되는지 확인하기 위한 일회성 검증 표본이다.
+
 ## 로컬 실행
 
 정적 설정 검증:
