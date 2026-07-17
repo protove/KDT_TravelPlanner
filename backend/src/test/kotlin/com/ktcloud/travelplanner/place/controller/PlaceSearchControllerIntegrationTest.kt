@@ -94,7 +94,7 @@ class PlaceSearchControllerIntegrationTest(
 			registry.add("app.external.google.places.base-url") {
 				"http://127.0.0.1:${googleServer.address.port}"
 			}
-			registry.add("app.external.google.places.read-timeout") { "100ms" }
+			registry.add("app.external.google.places.read-timeout") { "1s" }
 		}
 
 		@JvmStatic
@@ -107,7 +107,7 @@ class PlaceSearchControllerIntegrationTest(
 			val body = exchange.requestBody.readAllBytes().toString(StandardCharsets.UTF_8)
 			when {
 				body.contains("timeout") -> {
-					Thread.sleep(250)
+					Thread.sleep(1500)
 					respond(exchange, 200, "{}")
 				}
 				body.contains("quota") -> respond(exchange, 429, """{"error":"quota-detail"}""")

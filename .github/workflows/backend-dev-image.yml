@@ -1,0 +1,46 @@
+name: Backend Development Image
+
+on:
+  pull_request:
+    branches:
+      - develop-backend
+    paths:
+      - "backend/Dockerfile"
+      - "backend/docker/**"
+      - "compose.yml"
+      - "compose.dev.yml"
+      - "compose.test.yml"
+      - ".env.dev.example"
+      - ".github/workflows/backend-dev-image.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: backend-development-image-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Development Compose and Image Build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v6
+
+      - name: Validate development Compose configuration
+        run: |
+          docker compose --env-file .env.dev.example \
+            -f compose.yml -f compose.dev.yml config --quiet
+
+      - name: Validate test Compose configuration
+        run: |
+          docker compose --env-file .env.dev.example \
+            -f compose.yml -f compose.test.yml config --quiet
+
+      - name: Build backend development image
+        run: |
+          docker compose --env-file .env.dev.example \
+            -f compose.yml -f compose.dev.yml build backend
