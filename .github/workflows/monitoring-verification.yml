@@ -39,8 +39,6 @@ jobs:
     name: Configuration and Runtime Smoke
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    env:
-      MONITORING_SMOKE_ARTIFACT_DIR: ${{ runner.temp }}/monitoring-smoke
 
     steps:
       - name: Checkout sources
