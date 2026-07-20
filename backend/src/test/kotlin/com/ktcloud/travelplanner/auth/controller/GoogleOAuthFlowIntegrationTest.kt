@@ -6,6 +6,7 @@ import com.ktcloud.travelplanner.user.model.OAuthProvider
 import com.ktcloud.travelplanner.user.repository.UserRepository
 import com.sun.net.httpserver.HttpExchange
 import com.sun.net.httpserver.HttpServer
+import jakarta.servlet.http.Cookie
 import org.hamcrest.Matchers.equalTo
 import org.junit.jupiter.api.AfterAll
 import org.junit.jupiter.api.Test
@@ -13,6 +14,7 @@ import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc
 import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.context.annotation.Import
+import org.springframework.http.HttpHeaders
 import org.springframework.http.MediaType
 import org.springframework.test.context.ActiveProfiles
 import org.springframework.test.context.DynamicPropertyRegistry
@@ -67,11 +69,12 @@ class GoogleOAuthFlowIntegrationTest(
 
 	@Test
 	fun `Google provider failure returns common 502 and consumed state cannot be reused`() {
-		val state = startGoogleLogin()
+		val (state, stateCookie) = startGoogleLogin()
 
 		mockMvc.get("/api/v1/auth/oauth2/google/callback") {
 			param("code", "provider-error")
 			param("state", state)
+			cookie(stateCookie)
 		}
 			.andExpect {
 				status { isBadGateway() }
@@ -82,10 +85,35 @@ class GoogleOAuthFlowIntegrationTest(
 		mockMvc.get("/api/v1/auth/oauth2/google/callback") {
 			param("code", "provider-error")
 			param("state", state)
+			cookie(stateCookie)
 		}
 			.andExpect {
 				status { isBadRequest() }
 				jsonPath("$.code", equalTo("INVALID_OAUTH_STATE"))
+			}
+	}
+
+	@Test
+	fun `Google callback without browser state is rejected before provider call and state remains usable`() {
+		val (state, stateCookie) = startGoogleLogin()
+
+		mockMvc.get("/api/v1/auth/oauth2/google/callback") {
+			param("code", "provider-error")
+			param("state", state)
+		}
+			.andExpect {
+				status { isBadRequest() }
+				jsonPath("$.code", equalTo("INVALID_OAUTH_STATE"))
+			}
+
+		mockMvc.get("/api/v1/auth/oauth2/google/callback") {
+			param("code", "provider-error")
+			param("state", state)
+			cookie(stateCookie)
+		}
+			.andExpect {
+				status { isBadGateway() }
+				jsonPath("$.code", equalTo("OAUTH_PROVIDER_ERROR"))
 			}
 	}
 
@@ -102,14 +130,21 @@ class GoogleOAuthFlowIntegrationTest(
 	}
 
 	private fun completeGoogleLogin(authorizationCode: String): String {
-		val state = startGoogleLogin()
+		val (state, stateCookie) = startGoogleLogin()
 		val callbackResponse = mockMvc.get("/api/v1/auth/oauth2/google/callback") {
 			param("code", authorizationCode)
 			param("state", state)
+			cookie(stateCookie)
 		}
 			.andExpect {
 				status { isFound() }
 				header { string("Location", org.hamcrest.Matchers.startsWith(FRONTEND_REDIRECT_URL)) }
+				header {
+					string(
+						HttpHeaders.SET_COOKIE,
+						org.hamcrest.Matchers.containsString("${OAuthStateCookieFactory.COOKIE_NAME}=;"),
+					)
+				}
 			}
 			.andReturn()
 			.response
@@ -121,7 +156,7 @@ class GoogleOAuthFlowIntegrationTest(
 		)
 	}
 
-	private fun startGoogleLogin(): String {
+	private fun startGoogleLogin(): Pair<String, Cookie> {
 		val response = mockMvc.get("/api/v1/auth/oauth2/google")
 			.andExpect {
 				status { isFound() }
@@ -129,12 +164,13 @@ class GoogleOAuthFlowIntegrationTest(
 			}
 			.andReturn()
 			.response
-		return requireNotNull(
+		val state = requireNotNull(
 			UriComponentsBuilder.fromUriString(requireNotNull(response.redirectedUrl))
 				.build()
 				.queryParams
 				.getFirst("state"),
 		)
+		return state to requireNotNull(response.getCookie(OAuthStateCookieFactory.COOKIE_NAME))
 	}
 
 	private fun exchange(code: String) = mockMvc.post("/api/v1/auth/token/exchange") {

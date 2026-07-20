@@ -20,6 +20,7 @@ class OAuthExchangeCodeServiceTest {
 	private val jwtTokenService = mock(JwtTokenService::class.java)
 	private val properties = OAuthFlowProperties(
 		stateTtl = Duration.ofMinutes(5),
+		stateCookieSecure = false,
 		exchangeCodeTtl = Duration.ofSeconds(60),
 		allowedRedirectOrigins = listOf("http://localhost:3000"),
 		frontendRedirectUrl = "http://localhost:3000/auth/callback",
