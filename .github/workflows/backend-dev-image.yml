@@ -40,6 +40,19 @@ jobs:
           docker compose --env-file .env.dev.example \
             -f compose.yml -f compose.test.yml config --quiet
 
+      - name: Verify backend OAuth environment keys
+        run: |
+          required_keys='["OAUTH_ALLOWED_REDIRECT_ORIGINS","OAUTH_FRONTEND_REDIRECT_URL","OAUTH_HTTP_CONNECT_TIMEOUT","OAUTH_HTTP_READ_TIMEOUT","GOOGLE_OAUTH_CLIENT_ID","GOOGLE_OAUTH_CLIENT_SECRET","GOOGLE_OAUTH_REDIRECT_URI","NAVER_OAUTH_CLIENT_ID","NAVER_OAUTH_CLIENT_SECRET","NAVER_OAUTH_REDIRECT_URI"]'
+          docker compose --env-file .env.dev.example \
+            -f compose.yml -f compose.dev.yml config --format json \
+            | jq --exit-status --argjson required_keys "${required_keys}" '
+                .services.backend.environment as $environment
+                | [$required_keys[] as $key | select(($environment | has($key)) | not) | $key] as $missing
+                | if ($missing | length) == 0 then true
+                  else error("Missing backend OAuth environment keys: " + ($missing | join(", ")))
+                  end
+              ' >/dev/null
+
       - name: Build backend development image
         run: |
           docker compose --env-file .env.dev.example \
