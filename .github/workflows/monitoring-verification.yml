@@ -4,7 +4,6 @@ on:
   pull_request:
     branches:
       - develop-backend
-      - develop
       - main
     paths:
       - ".env.dev.example"
