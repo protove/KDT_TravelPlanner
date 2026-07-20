@@ -1,0 +1,92 @@
+name: Monitoring Verification
+
+on:
+  pull_request:
+    branches:
+      - develop-backend
+      - develop
+      - main
+    paths:
+      - ".env.dev.example"
+      - ".env.prod.example"
+      - "backend/Dockerfile"
+      - "backend/build.gradle.kts"
+      - "backend/settings.gradle.kts"
+      - "backend/docker/**"
+      - "backend/src/main/kotlin/**/logging/**"
+      - "backend/src/main/kotlin/**/monitoring/**"
+      - "backend/src/main/kotlin/**/SecurityConfig.kt"
+      - "backend/src/main/resources/application.yml"
+      - "backend/src/main/resources/application-dev.yml"
+      - "backend/src/main/resources/application-prod.yml"
+      - "backend/src/main/resources/logback-spring.xml"
+      - "compose.yml"
+      - "compose.dev.yml"
+      - "compose.monitoring.yml"
+      - "compose.monitoring.dev.yml"
+      - "monitoring/**"
+      - ".github/workflows/monitoring-verification.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: monitoring-verification-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Configuration and Runtime Smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Detect development-specific changes
+        id: changes
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          if git diff --name-only "${BASE_SHA}" "${HEAD_SHA}" | grep -Eq \
+            '^(\.env\.dev\.example|\.github/workflows/monitoring-verification\.yml|backend/Dockerfile|backend/docker/|backend/src/main/resources/application-dev\.yml|compose\.dev\.yml|compose\.monitoring\.dev\.yml|monitoring/smoke-test\.sh|monitoring/.+\.dev\.(alloy|ya?ml))$'; then
+            echo "run_dev=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "run_dev=false" >> "${GITHUB_OUTPUT}"
+          fi
+
+      - name: Validate production-like Compose configuration
+        run: |
+          docker compose --env-file .env.prod.example \
+            -f compose.yml -f compose.monitoring.yml config --quiet
+
+      - name: Validate development Compose configuration
+        run: |
+          docker compose --env-file .env.dev.example \
+            -f compose.yml -f compose.dev.yml \
+            -f compose.monitoring.yml -f compose.monitoring.dev.yml \
+            config --quiet
+
+      - name: Validate monitoring component configuration
+        run: ./monitoring/validate-configs.sh
+
+      - name: Run production-like monitoring smoke
+        run: ./monitoring/smoke-test.sh prod
+
+      - name: Run development monitoring smoke
+        if: steps.changes.outputs.run_dev == 'true'
+        run: ./monitoring/smoke-test.sh dev
+
+      - name: Upload monitoring smoke evidence
+        if: failure() || cancelled()
+        uses: actions/upload-artifact@v4
+        with:
+          name: monitoring-smoke-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/monitoring-smoke
+          if-no-files-found: ignore
+          retention-days: 7

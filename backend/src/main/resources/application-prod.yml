@@ -14,3 +14,11 @@ logging:
       max-file-size: 20MB
       max-history: 14
       total-size-cap: 1GB
+
+app:
+  auth:
+    refresh-token:
+      cookie-secure: ${REFRESH_TOKEN_COOKIE_SECURE:true}
+  security:
+    jwt:
+      secret: ${JWT_SECRET}
