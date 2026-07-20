@@ -59,6 +59,32 @@ class LogoutControllerIntegrationTest(
 	}
 
 	@Test
+	fun `logout with rotated token ancestor revokes current family token`() {
+		val authentication = login()
+		val refreshResponse = mockMvc.post("/api/v1/auth/token/refresh") {
+			cookie(authentication.refreshCookie)
+		}
+			.andExpect {
+				status { isOk() }
+				header { exists(HttpHeaders.SET_COOKIE) }
+			}
+			.andReturn()
+		val rotatedCookie = MockCookie.parse(
+			requireNotNull(refreshResponse.response.getHeader(HttpHeaders.SET_COOKIE)),
+		)
+
+		logout(authentication)
+
+		mockMvc.post("/api/v1/auth/token/refresh") {
+			cookie(rotatedCookie)
+		}
+			.andExpect {
+				status { isUnauthorized() }
+				jsonPath("$.code", equalTo("INVALID_REFRESH_TOKEN"))
+			}
+	}
+
+	@Test
 	fun `logout requires valid access token`() {
 		mockMvc.post("/api/v1/auth/logout")
 			.andExpect {

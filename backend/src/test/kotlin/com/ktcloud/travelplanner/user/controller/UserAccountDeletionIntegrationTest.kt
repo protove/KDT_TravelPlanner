@@ -50,7 +50,7 @@ class UserAccountDeletionIntegrationTest(
 	@Test
 	fun `account deletion soft deletes user revokes refresh token and blocks existing tokens`() {
 		val authentication = login()
-		val refreshTokenKey = "${RedisRefreshTokenStore.KEY_PREFIX}:${refreshTokenHasher.hash(authentication.refreshCookie.value)}"
+		val refreshTokenKey = "${RedisRefreshTokenStore.TOKEN_KEY_PREFIX}:${refreshTokenHasher.hash(authentication.refreshCookie.value)}"
 		assertTrue(redisTemplate.hasKey(refreshTokenKey))
 
 		val deleteResponse = mockMvc.delete("/api/v1/users/me") {

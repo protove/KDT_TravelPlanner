@@ -1,6 +1,7 @@
 package com.ktcloud.travelplanner.auth.controller
 
 import com.ktcloud.travelplanner.auth.service.OAuthExchangeCodeService
+import com.ktcloud.travelplanner.auth.service.InvalidRefreshTokenException
 import com.ktcloud.travelplanner.auth.service.RefreshTokenService
 import com.ktcloud.travelplanner.global.response.ApiResponse
 import com.ktcloud.travelplanner.global.security.IssuedAccessToken
@@ -52,7 +53,23 @@ class AuthTokenController(
 	@PostMapping("/refresh")
 	fun refresh(
 		@CookieValue(name = RefreshTokenCookieFactory.COOKIE_NAME, required = false) refreshToken: String?,
-	): ApiResponse<AccessTokenResponse> = accessTokenResponse(refreshTokenService.refresh(refreshToken))
+		response: HttpServletResponse,
+	): ApiResponse<AccessTokenResponse> {
+		val refreshedTokens = try {
+			refreshTokenService.refresh(refreshToken)
+		} catch (exception: InvalidRefreshTokenException) {
+			response.addHeader(
+				HttpHeaders.SET_COOKIE,
+				refreshTokenCookieFactory.expire().toString(),
+			)
+			throw exception
+		}
+		response.addHeader(
+			HttpHeaders.SET_COOKIE,
+			refreshTokenCookieFactory.create(refreshedTokens.refreshToken.value).toString(),
+		)
+		return accessTokenResponse(refreshedTokens.accessToken)
+	}
 
 	private fun accessTokenResponse(
 		accessToken: IssuedAccessToken,

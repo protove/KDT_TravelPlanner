@@ -1,6 +1,7 @@
 package com.ktcloud.travelplanner.auth.service
 
 import com.ktcloud.travelplanner.auth.config.RefreshTokenProperties
+import com.ktcloud.travelplanner.auth.repository.RefreshTokenRotationResult
 import com.ktcloud.travelplanner.auth.repository.RefreshTokenStore
 import com.ktcloud.travelplanner.global.exception.DomainException
 import com.ktcloud.travelplanner.global.exception.ErrorCode
@@ -14,6 +15,11 @@ data class IssuedRefreshToken(
 	val value: String,
 )
 
+data class RefreshedTokens(
+	val accessToken: IssuedAccessToken,
+	val refreshToken: IssuedRefreshToken,
+)
+
 @Service
 class RefreshTokenService(
 	private val tokenStore: RefreshTokenStore,
@@ -24,27 +30,47 @@ class RefreshTokenService(
 ) {
 	fun issueForAccessToken(accessToken: IssuedAccessToken): IssuedRefreshToken {
 		val userId = jwtTokenService.parseUserId(accessToken.value)
+		val familyId = tokenGenerator.generate()
 		val refreshToken = tokenGenerator.generate()
-		tokenStore.save(refreshToken, userId, properties.ttl)
+		tokenStore.save(refreshToken, userId, familyId, properties.ttl)
 		return IssuedRefreshToken(refreshToken)
 	}
 
-	fun refresh(refreshToken: String?): IssuedAccessToken {
+	fun refresh(refreshToken: String?): RefreshedTokens {
 		if (!isValidFormat(refreshToken)) {
 			throw InvalidRefreshTokenException()
 		}
-		val userId = tokenStore.findUserId(requireNotNull(refreshToken))
-			?.let(::parseUserId)
-			?: throw InvalidRefreshTokenException()
+		val rotatedToken = tokenGenerator.generate()
+		val userId = when (val result = tokenStore.rotate(requireNotNull(refreshToken), rotatedToken)) {
+			is RefreshTokenRotationResult.Rotated -> try {
+				parseUserId(result.userId)
+			} catch (exception: InvalidRefreshTokenException) {
+				tokenStore.revokeFamily(rotatedToken)
+				throw exception
+			}
+			RefreshTokenRotationResult.Reused,
+			RefreshTokenRotationResult.Invalid,
+			-> throw InvalidRefreshTokenException()
+		}
 		if (!userRepository.existsById(userId)) {
+			tokenStore.revokeFamily(rotatedToken)
 			throw InvalidRefreshTokenException()
 		}
-		return jwtTokenService.issueAccessToken(userId)
+		val accessToken = try {
+			jwtTokenService.issueAccessToken(userId)
+		} catch (exception: Exception) {
+			tokenStore.revokeFamily(rotatedToken)
+			throw exception
+		}
+		return RefreshedTokens(
+			accessToken = accessToken,
+			refreshToken = IssuedRefreshToken(rotatedToken),
+		)
 	}
 
 	fun revoke(refreshToken: String?) {
 		if (isValidFormat(refreshToken)) {
-			tokenStore.delete(requireNotNull(refreshToken))
+			tokenStore.revokeFamily(requireNotNull(refreshToken))
 		}
 	}
 
