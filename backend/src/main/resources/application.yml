@@ -69,6 +69,7 @@ app:
       cookie-same-site: ${REFRESH_TOKEN_COOKIE_SAME_SITE:Lax}
     oauth:
       state-ttl: ${OAUTH_STATE_TTL:5m}
+      state-cookie-secure: false
       exchange-code-ttl: ${OAUTH_EXCHANGE_CODE_TTL:60s}
       allowed-redirect-origins: ${OAUTH_ALLOWED_REDIRECT_ORIGINS:http://localhost:3000}
       frontend-redirect-url: ${OAUTH_FRONTEND_REDIRECT_URL:http://localhost:3000/auth/callback}

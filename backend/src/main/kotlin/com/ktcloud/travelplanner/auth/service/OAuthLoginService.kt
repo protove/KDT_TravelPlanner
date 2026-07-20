@@ -11,6 +11,11 @@ import org.springframework.stereotype.Service
 import org.springframework.web.util.UriComponentsBuilder
 import java.net.URI
 
+data class OAuthAuthorizationRedirect(
+	val location: URI,
+	val state: String,
+)
+
 @Service
 class OAuthLoginService(
 	providerClients: List<OAuthProviderClient>,
@@ -22,18 +27,26 @@ class OAuthLoginService(
 ) {
 	private val providerClients = providerClients.associateBy(OAuthProviderClient::provider)
 
-	fun createAuthorizationUrl(providerName: String): URI {
+	fun createAuthorizationRedirect(providerName: String): OAuthAuthorizationRedirect {
 		val provider = resolveProvider(providerName)
 		val client = resolveClient(provider)
 		val frontendRedirectUrl = redirectValidator.validate(flowProperties.frontendRedirectUrl)
 		val state = stateService.issue(provider, frontendRedirectUrl.toASCIIString())
-		return client.createAuthorizationUrl(state)
+		return OAuthAuthorizationRedirect(
+			location = client.createAuthorizationUrl(state),
+			state = state,
+		)
 	}
 
-	fun completeLogin(providerName: String, authorizationCode: String, state: String): URI {
+	fun completeLogin(
+		providerName: String,
+		authorizationCode: String,
+		state: String,
+		stateCookie: String?,
+	): URI {
 		val provider = resolveProvider(providerName)
 		val client = resolveClient(provider)
-		val consumedState = stateService.consume(state, provider)
+		val consumedState = stateService.consume(state, stateCookie, provider)
 		val profile = client.fetchUserProfile(
 			OAuthAuthorizationGrant(
 				authorizationCode = authorizationCode,

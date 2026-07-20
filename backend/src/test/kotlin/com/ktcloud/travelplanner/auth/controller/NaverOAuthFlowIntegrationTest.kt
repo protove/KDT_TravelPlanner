@@ -6,6 +6,7 @@ import com.ktcloud.travelplanner.user.model.OAuthProvider
 import com.ktcloud.travelplanner.user.repository.UserRepository
 import com.sun.net.httpserver.HttpExchange
 import com.sun.net.httpserver.HttpServer
+import jakarta.servlet.http.Cookie
 import org.hamcrest.Matchers.equalTo
 import org.junit.jupiter.api.AfterAll
 import org.junit.jupiter.api.Test
@@ -13,6 +14,7 @@ import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc
 import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.context.annotation.Import
+import org.springframework.http.HttpHeaders
 import org.springframework.http.MediaType
 import org.springframework.test.context.ActiveProfiles
 import org.springframework.test.context.DynamicPropertyRegistry
@@ -69,11 +71,12 @@ class NaverOAuthFlowIntegrationTest(
 
 	@Test
 	fun `Naver provider failure returns common 502 and consumed state cannot be reused`() {
-		val state = startNaverLogin()
+		val (state, stateCookie) = startNaverLogin()
 
 		mockMvc.get("/api/v1/auth/oauth2/naver/callback") {
 			param("code", "provider-error")
 			param("state", state)
+			cookie(stateCookie)
 		}
 			.andExpect {
 				status { isBadGateway() }
@@ -84,6 +87,7 @@ class NaverOAuthFlowIntegrationTest(
 		mockMvc.get("/api/v1/auth/oauth2/naver/callback") {
 			param("code", "provider-error")
 			param("state", state)
+			cookie(stateCookie)
 		}
 			.andExpect {
 				status { isBadRequest() }
@@ -91,15 +95,47 @@ class NaverOAuthFlowIntegrationTest(
 			}
 	}
 
+	@Test
+	fun `Naver callback with mismatched browser state is rejected before provider call`() {
+		val (state, stateCookie) = startNaverLogin()
+
+		mockMvc.get("/api/v1/auth/oauth2/naver/callback") {
+			param("code", "provider-error")
+			param("state", state)
+			cookie(Cookie(OAuthStateCookieFactory.COOKIE_NAME, "different-state"))
+		}
+			.andExpect {
+				status { isBadRequest() }
+				jsonPath("$.code", equalTo("INVALID_OAUTH_STATE"))
+			}
+
+		mockMvc.get("/api/v1/auth/oauth2/naver/callback") {
+			param("code", "provider-error")
+			param("state", state)
+			cookie(stateCookie)
+		}
+			.andExpect {
+				status { isBadGateway() }
+				jsonPath("$.code", equalTo("OAUTH_PROVIDER_ERROR"))
+			}
+	}
+
 	private fun completeNaverLogin(authorizationCode: String): String {
-		val state = startNaverLogin()
+		val (state, stateCookie) = startNaverLogin()
 		val callbackResponse = mockMvc.get("/api/v1/auth/oauth2/naver/callback") {
 			param("code", authorizationCode)
 			param("state", state)
+			cookie(stateCookie)
 		}
 			.andExpect {
 				status { isFound() }
 				header { string("Location", org.hamcrest.Matchers.startsWith(FRONTEND_REDIRECT_URL)) }
+				header {
+					string(
+						HttpHeaders.SET_COOKIE,
+						org.hamcrest.Matchers.containsString("${OAuthStateCookieFactory.COOKIE_NAME}=;"),
+					)
+				}
 			}
 			.andReturn()
 			.response
@@ -114,7 +150,7 @@ class NaverOAuthFlowIntegrationTest(
 		)
 	}
 
-	private fun startNaverLogin(): String {
+	private fun startNaverLogin(): Pair<String, Cookie> {
 		val response = mockMvc.get("/api/v1/auth/oauth2/naver")
 			.andExpect {
 				status { isFound() }
@@ -122,12 +158,13 @@ class NaverOAuthFlowIntegrationTest(
 			}
 			.andReturn()
 			.response
-		return requireNotNull(
+		val state = requireNotNull(
 			UriComponentsBuilder.fromUriString(requireNotNull(response.redirectedUrl))
 				.build()
 				.queryParams
 				.getFirst("state"),
 		)
+		return state to requireNotNull(response.getCookie(OAuthStateCookieFactory.COOKIE_NAME))
 	}
 
 	private fun exchange(code: String) = mockMvc.post("/api/v1/auth/token/exchange") {

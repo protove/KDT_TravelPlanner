@@ -7,6 +7,7 @@ import java.time.Duration
 @ConfigurationProperties("app.auth.oauth")
 data class OAuthFlowProperties(
 	val stateTtl: Duration,
+	val stateCookieSecure: Boolean,
 	val exchangeCodeTtl: Duration,
 	val allowedRedirectOrigins: List<String>,
 	val frontendRedirectUrl: String,

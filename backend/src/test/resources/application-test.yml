@@ -21,6 +21,7 @@ app:
       cookie-same-site: Lax
     oauth:
       state-ttl: 5m
+      state-cookie-secure: false
       exchange-code-ttl: 60s
       allowed-redirect-origins:
         - http://localhost:3000
