@@ -30,6 +30,8 @@ services:
       target: dev
     environment:
       LOGGING_FILE_NAME: /var/log/travel-planner/travel-planner.log
+    ports:
+      - "127.0.0.1:${MANAGEMENT_PORT:-9091}:9091"
     volumes:
       - ./backend:/app
       - backend_gradle:/root/.gradle
@@ -38,5 +40,6 @@ services:
 volumes:
   frontend_node_modules:
   frontend_next:
+  frontend_storybook_cache:
   backend_gradle:
   backend_build:

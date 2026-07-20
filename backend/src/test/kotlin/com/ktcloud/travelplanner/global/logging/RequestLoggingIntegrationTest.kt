@@ -6,6 +6,10 @@ import ch.qos.logback.classic.spi.ILoggingEvent
 import ch.qos.logback.core.read.ListAppender
 import com.ktcloud.travelplanner.PingController
 import com.ktcloud.travelplanner.WebConfig
+import com.ktcloud.travelplanner.global.security.ApiSecurityErrorHandler
+import com.ktcloud.travelplanner.global.security.JwtTokenService
+import com.ktcloud.travelplanner.global.security.SecurityConfig
+import com.ktcloud.travelplanner.user.repository.UserRepository
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNull
@@ -17,16 +21,27 @@ import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest
 import org.springframework.context.annotation.Import
 import org.springframework.test.context.ActiveProfiles
+import org.springframework.test.context.bean.override.mockito.MockitoBean
 import org.springframework.test.web.servlet.MockMvc
 import org.springframework.test.web.servlet.get
 import java.util.UUID
 
 @ActiveProfiles("test")
 @WebMvcTest(PingController::class)
-@Import(WebConfig::class, RequestLoggingFilter::class)
+@Import(
+	WebConfig::class,
+	RequestLoggingFilter::class,
+	ApiSecurityErrorHandler::class,
+	SecurityConfig::class,
+)
 class RequestLoggingIntegrationTest(
 	@Autowired private val mockMvc: MockMvc,
 ) {
+	@MockitoBean
+	private lateinit var jwtTokenService: JwtTokenService
+
+	@MockitoBean
+	private lateinit var userRepository: UserRepository
 
 	private val requestLogger = LoggerFactory.getLogger(RequestLoggingFilter::class.java) as Logger
 	private val logAppender = ListAppender<ILoggingEvent>()
