@@ -24,12 +24,15 @@ import org.springframework.http.MediaType
 import org.springframework.mock.web.MockCookie
 import org.springframework.test.context.ActiveProfiles
 import org.springframework.test.web.servlet.MockMvc
+import org.springframework.test.web.servlet.MvcResult
 import org.springframework.test.web.servlet.post
 import org.springframework.transaction.annotation.Transactional
 import java.time.Duration
 import java.util.UUID
+import java.util.concurrent.TimeUnit
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
 
 @ActiveProfiles("test")
@@ -55,79 +58,123 @@ class RefreshTokenControllerIntegrationTest(
 	}
 
 	@Test
-	fun `exchange stores hashed refresh token and HttpOnly Cookie refreshes access token`() {
+	fun `exchange stores hashed family and refresh rotates token without extending absolute TTL`() {
 		val user = saveUser()
-		val refreshCookie = exchangeForRefreshCookie(user)
+		val originalCookie = exchangeForRefreshCookie(user)
 
-		assertTrue(refreshCookie.isHttpOnly)
-		assertFalse(refreshCookie.secure)
-		assertEquals("Lax", refreshCookie.sameSite)
-		assertEquals("/api/v1/auth", refreshCookie.path)
-		assertEquals(Duration.ofDays(30).seconds.toInt(), refreshCookie.maxAge)
+		assertTrue(originalCookie.isHttpOnly)
+		assertFalse(originalCookie.secure)
+		assertEquals("Lax", originalCookie.sameSite)
+		assertEquals(RefreshTokenCookieFactory.COOKIE_PATH, originalCookie.path)
+		assertEquals(Duration.ofDays(30).seconds.toInt(), originalCookie.maxAge)
 
-		val redisKey = "${RedisRefreshTokenStore.KEY_PREFIX}:${refreshTokenHasher.hash(refreshCookie.value)}"
-		assertEquals(setOf(redisKey), redisTemplate.keys("${RedisRefreshTokenStore.KEY_PREFIX}:*"))
-		assertFalse(redisKey.contains(refreshCookie.value))
-		assertEquals(requireNotNull(user.id).toString(), redisTemplate.opsForValue().get(redisKey))
-		assertTrue(redisTemplate.getExpire(redisKey) in 1..Duration.ofDays(30).seconds)
+		val originalTokenKey = tokenKey(originalCookie.value)
+		val familyKey = redisTemplate.keys("${RedisRefreshTokenStore.FAMILY_KEY_PREFIX}:*").single()
+		assertEquals(setOf(originalTokenKey), redisTemplate.keys("${RedisRefreshTokenStore.TOKEN_KEY_PREFIX}:*"))
+		assertTrue(redisTemplate.keys("${RedisRefreshTokenStore.USED_KEY_PREFIX}:*").isEmpty())
+		assertFalse(originalTokenKey.contains(originalCookie.value))
+		assertFalse(requireNotNull(redisTemplate.opsForValue().get(originalTokenKey)).contains(originalCookie.value))
+		val ttlBeforeRotation = redisTemplate.getExpire(familyKey, TimeUnit.MILLISECONDS)
 
-		val response = refresh(refreshCookie)
+		Thread.sleep(25)
+		val refreshResponse = refresh(originalCookie)
 			.andExpect {
 				status { isOk() }
 				jsonPath("$.data.tokenType", equalTo("Bearer"))
 				jsonPath("$.data.accessToken") { isNotEmpty() }
 				jsonPath("$.data.expiresAt") { isNotEmpty() }
+				header { exists(HttpHeaders.SET_COOKIE) }
 			}
 			.andReturn()
-			.response
-		val accessToken = objectMapper.readTree(response.contentAsByteArray)
+		val rotatedCookie = refreshCookie(refreshResponse)
+		assertNotEquals(originalCookie.value, rotatedCookie.value)
+		assertTrue(rotatedCookie.isHttpOnly)
+
+		val rotatedTokenKey = tokenKey(rotatedCookie.value)
+		assertFalse(redisTemplate.hasKey(originalTokenKey))
+		assertEquals(setOf(rotatedTokenKey), redisTemplate.keys("${RedisRefreshTokenStore.TOKEN_KEY_PREFIX}:*"))
+		assertTrue(redisTemplate.hasKey(usedKey(originalCookie.value)))
+		assertEquals(setOf(familyKey), redisTemplate.keys("${RedisRefreshTokenStore.FAMILY_KEY_PREFIX}:*"))
+		val ttlAfterRotation = redisTemplate.getExpire(familyKey, TimeUnit.MILLISECONDS)
+		assertTrue(ttlAfterRotation in 1..ttlBeforeRotation)
+
+		val accessToken = objectMapper.readTree(refreshResponse.response.contentAsByteArray)
 			.at("/data/accessToken")
 			.asText()
 		assertEquals(user.id, jwtTokenService.parseUserId(accessToken))
 	}
 
 	@Test
-	fun `missing expired revoked and deleted user refresh tokens return common 401`() {
-		refresh(null)
-			.andExpect {
-				status { isUnauthorized() }
-				jsonPath("$.code", equalTo("INVALID_REFRESH_TOKEN"))
-			}
+	fun `reusing rotated token revokes current family token`() {
+		val originalCookie = exchangeForRefreshCookie(saveUser())
+		val rotatedCookie = refreshCookie(
+			refresh(originalCookie)
+				.andExpect { status { isOk() } }
+				.andReturn(),
+		)
 
-		refresh(MockCookie("refresh_token", UNKNOWN_REFRESH_TOKEN))
+		val reusedResponse = refresh(originalCookie)
+			.andExpect {
+				status { isUnauthorized() }
+				jsonPath("$.code", equalTo("INVALID_REFRESH_TOKEN"))
+				header { exists(HttpHeaders.SET_COOKIE) }
+			}
+			.andReturn()
+		assertExpiredCookie(refreshCookie(reusedResponse))
+
+		refresh(rotatedCookie)
 			.andExpect {
 				status { isUnauthorized() }
 				jsonPath("$.code", equalTo("INVALID_REFRESH_TOKEN"))
 			}
+		assertTrue(redisTemplate.keys("${RedisRefreshTokenStore.TOKEN_KEY_PREFIX}:*").isEmpty())
+		assertTrue(redisTemplate.keys("${RedisRefreshTokenStore.FAMILY_KEY_PREFIX}:*").isEmpty())
+	}
+
+	@Test
+	fun `missing expired unknown and deleted user refresh tokens return common 401 and expire cookie`() {
+		assertInvalidRefresh(null)
+		assertInvalidRefresh(MockCookie(RefreshTokenCookieFactory.COOKIE_NAME, UNKNOWN_REFRESH_TOKEN))
 
 		val activeUser = saveUser()
 		refreshTokenStore.save(
 			EXPIRED_REFRESH_TOKEN,
 			requireNotNull(activeUser.id),
+			EXPIRED_FAMILY_ID,
 			Duration.ofMillis(50),
 		)
 		Thread.sleep(150)
-		refresh(MockCookie("refresh_token", EXPIRED_REFRESH_TOKEN))
-			.andExpect {
-				status { isUnauthorized() }
-				jsonPath("$.code", equalTo("INVALID_REFRESH_TOKEN"))
-			}
+		assertInvalidRefresh(MockCookie(RefreshTokenCookieFactory.COOKIE_NAME, EXPIRED_REFRESH_TOKEN))
 
 		val deletedUser = saveUser()
 		val deletedUserCookie = exchangeForRefreshCookie(deletedUser)
 		deletedUser.softDelete(TestFixtures.FIXED_INSTANT)
 		userRepository.saveAndFlush(deletedUser)
+		assertInvalidRefresh(deletedUserCookie)
+		assertTrue(redisTemplate.keys("${RedisRefreshTokenStore.TOKEN_KEY_PREFIX}:*").isEmpty())
+		assertTrue(redisTemplate.keys("${RedisRefreshTokenStore.FAMILY_KEY_PREFIX}:*").isEmpty())
+	}
 
-		refresh(deletedUserCookie)
+	private fun assertInvalidRefresh(cookie: MockCookie?) {
+		val response = refresh(cookie)
 			.andExpect {
 				status { isUnauthorized() }
 				jsonPath("$.code", equalTo("INVALID_REFRESH_TOKEN"))
+				header { exists(HttpHeaders.SET_COOKIE) }
 			}
+			.andReturn()
+		assertExpiredCookie(refreshCookie(response))
+	}
+
+	private fun assertExpiredCookie(cookie: MockCookie) {
+		assertEquals("", cookie.value)
+		assertEquals(Duration.ZERO.seconds.toInt(), cookie.maxAge)
+		assertEquals(RefreshTokenCookieFactory.COOKIE_PATH, cookie.path)
 	}
 
 	private fun exchangeForRefreshCookie(user: User): MockCookie {
 		val code = exchangeCodeService.issue(requireNotNull(user.id))
-		val setCookie = mockMvc.post("/api/v1/auth/token/exchange") {
+		val response = mockMvc.post("/api/v1/auth/token/exchange") {
 			contentType = MediaType.APPLICATION_JSON
 			content = objectMapper.writeValueAsString(mapOf("code" to code))
 		}
@@ -136,9 +183,7 @@ class RefreshTokenControllerIntegrationTest(
 				header { exists(HttpHeaders.SET_COOKIE) }
 			}
 			.andReturn()
-			.response
-			.getHeader(HttpHeaders.SET_COOKIE)
-		return MockCookie.parse(requireNotNull(setCookie))
+		return refreshCookie(response)
 	}
 
 	private fun refresh(cookie: MockCookie?) = mockMvc.post("/api/v1/auth/token/refresh") {
@@ -146,6 +191,16 @@ class RefreshTokenControllerIntegrationTest(
 			cookie(cookie)
 		}
 	}
+
+	private fun refreshCookie(result: MvcResult): MockCookie = MockCookie.parse(
+		requireNotNull(result.response.getHeader(HttpHeaders.SET_COOKIE)),
+	)
+
+	private fun tokenKey(token: String): String =
+		"${RedisRefreshTokenStore.TOKEN_KEY_PREFIX}:${refreshTokenHasher.hash(token)}"
+
+	private fun usedKey(token: String): String =
+		"${RedisRefreshTokenStore.USED_KEY_PREFIX}:${refreshTokenHasher.hash(token)}"
 
 	private fun saveUser(): User = userRepository.saveAndFlush(
 		User(
@@ -157,6 +212,7 @@ class RefreshTokenControllerIntegrationTest(
 	)
 
 	companion object {
+		private const val EXPIRED_FAMILY_ID = "expired-family"
 		private val UNKNOWN_REFRESH_TOKEN = "u".repeat(43)
 		private val EXPIRED_REFRESH_TOKEN = "e".repeat(43)
 	}

@@ -1,8 +1,11 @@
 package com.ktcloud.travelplanner.auth.client
 
 import com.ktcloud.travelplanner.auth.config.GoogleOAuthProperties
+import com.ktcloud.travelplanner.auth.config.OAuthHttpClientConfiguration
+import com.ktcloud.travelplanner.auth.config.OAuthHttpClientProperties
 import com.ktcloud.travelplanner.auth.service.OAuthProviderException
 import com.ktcloud.travelplanner.user.model.OAuthProvider
+import com.sun.net.httpserver.HttpServer
 import org.hamcrest.Matchers.containsString
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
@@ -19,8 +22,11 @@ import org.springframework.test.web.client.response.MockRestResponseCreators.wit
 import org.springframework.test.web.client.response.MockRestResponseCreators.withSuccess
 import org.springframework.web.client.RestClient
 import org.springframework.web.util.UriComponentsBuilder
+import java.net.InetSocketAddress
 import java.net.URI
+import java.time.Duration
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 
 class GoogleOAuthClientTest {
 	private lateinit var server: MockRestServiceServer
@@ -30,7 +36,7 @@ class GoogleOAuthClientTest {
 	fun setUp() {
 		val builder = RestClient.builder()
 		server = MockRestServiceServer.bindTo(builder).build()
-		client = GoogleOAuthClient(builder, properties())
+		client = GoogleOAuthClient(builder.build(), properties())
 	}
 
 	@Test
@@ -98,9 +104,42 @@ class GoogleOAuthClientTest {
 	}
 
 	@Test
+	fun `times out a delayed Google token response without exposing credentials`() {
+		val delayedServer = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0).apply {
+			createContext("/token") { exchange ->
+				Thread.sleep(300)
+				exchange.close()
+			}
+			start()
+		}
+		try {
+			val timeoutClient = GoogleOAuthClient(
+				OAuthHttpClientConfiguration().oauthRestClient(
+					RestClient.builder(),
+					OAuthHttpClientProperties(
+						connectTimeout = Duration.ofSeconds(1),
+						readTimeout = Duration.ofMillis(50),
+					),
+				),
+				properties(tokenUri = "http://127.0.0.1:${delayedServer.address.port}/token"),
+			)
+
+			val exception = assertThrows<OAuthProviderException> {
+				timeoutClient.fetchUserProfile(grant("sensitive-google-code"))
+			}
+
+			assertEquals("OAuth 제공자 통신에 실패했습니다.", exception.message)
+			assertFalse(exception.message.orEmpty().contains("sensitive-google-code"))
+			assertFalse(exception.message.orEmpty().contains("test-client-secret"))
+		} finally {
+			delayedServer.stop(0)
+		}
+	}
+
+	@Test
 	fun `rejects use when Google credentials are not configured`() {
 		val unconfiguredClient = GoogleOAuthClient(
-			RestClient.builder(),
+			RestClient.builder().build(),
 			properties(clientId = "", clientSecret = ""),
 		)
 
@@ -112,12 +151,13 @@ class GoogleOAuthClientTest {
 	private fun properties(
 		clientId: String = "test-client-id",
 		clientSecret: String = "test-client-secret",
+		tokenUri: String = TOKEN_URL,
 	): GoogleOAuthProperties = GoogleOAuthProperties(
 		clientId = clientId,
 		clientSecret = clientSecret,
 		redirectUri = URI.create(CALLBACK_URL),
 		authorizationUri = URI.create(AUTHORIZATION_URL),
-		tokenUri = URI.create(TOKEN_URL),
+		tokenUri = URI.create(tokenUri),
 		userInfoUri = URI.create(USER_INFO_URL),
 	)
 

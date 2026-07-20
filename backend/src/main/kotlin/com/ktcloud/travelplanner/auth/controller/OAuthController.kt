@@ -1,10 +1,13 @@
 package com.ktcloud.travelplanner.auth.controller
 
 import com.ktcloud.travelplanner.auth.service.OAuthLoginService
+import jakarta.servlet.http.HttpServletResponse
 import jakarta.validation.constraints.NotBlank
+import org.springframework.http.HttpHeaders
 import org.springframework.http.HttpStatus
 import org.springframework.http.ResponseEntity
 import org.springframework.validation.annotation.Validated
+import org.springframework.web.bind.annotation.CookieValue
 import org.springframework.web.bind.annotation.GetMapping
 import org.springframework.web.bind.annotation.PathVariable
 import org.springframework.web.bind.annotation.RequestMapping
@@ -16,22 +19,35 @@ import org.springframework.web.bind.annotation.RestController
 @Validated
 class OAuthController(
 	private val loginService: OAuthLoginService,
+	private val stateCookieFactory: OAuthStateCookieFactory,
 ) {
 	@GetMapping("/{provider}")
 	fun start(
 		@PathVariable provider: String,
-	): ResponseEntity<Void> = ResponseEntity
-		.status(HttpStatus.FOUND)
-		.location(loginService.createAuthorizationUrl(provider))
-		.build()
+	): ResponseEntity<Void> {
+		val authorizationRedirect = loginService.createAuthorizationRedirect(provider)
+		return ResponseEntity
+			.status(HttpStatus.FOUND)
+			.header(
+				HttpHeaders.SET_COOKIE,
+				stateCookieFactory.create(authorizationRedirect.state).toString(),
+			)
+			.location(authorizationRedirect.location)
+			.build()
+	}
 
 	@GetMapping("/{provider}/callback")
 	fun callback(
 		@PathVariable provider: String,
 		@RequestParam @NotBlank code: String,
 		@RequestParam @NotBlank state: String,
-	): ResponseEntity<Void> = ResponseEntity
-		.status(HttpStatus.FOUND)
-		.location(loginService.completeLogin(provider, code, state))
-		.build()
+		@CookieValue(name = OAuthStateCookieFactory.COOKIE_NAME, required = false) stateCookie: String?,
+		response: HttpServletResponse,
+	): ResponseEntity<Void> {
+		response.addHeader(HttpHeaders.SET_COOKIE, stateCookieFactory.expire().toString())
+		return ResponseEntity
+			.status(HttpStatus.FOUND)
+			.location(loginService.completeLogin(provider, code, state, stateCookie))
+			.build()
+	}
 }

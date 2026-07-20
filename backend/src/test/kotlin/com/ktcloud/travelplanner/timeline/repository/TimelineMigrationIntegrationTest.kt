@@ -40,6 +40,7 @@ class TimelineMigrationIntegrationTest : ContainerIntegrationTestSupport() {
 				.dataSource(dataSource)
 				.schemas(schema)
 				.defaultSchema(schema)
+				.target(MigrationVersion.fromVersion("6"))
 				.load()
 				.migrate()
 

@@ -69,9 +69,13 @@ app:
       cookie-same-site: ${REFRESH_TOKEN_COOKIE_SAME_SITE:Lax}
     oauth:
       state-ttl: ${OAUTH_STATE_TTL:5m}
+      state-cookie-secure: false
       exchange-code-ttl: ${OAUTH_EXCHANGE_CODE_TTL:60s}
       allowed-redirect-origins: ${OAUTH_ALLOWED_REDIRECT_ORIGINS:http://localhost:3000}
       frontend-redirect-url: ${OAUTH_FRONTEND_REDIRECT_URL:http://localhost:3000/auth/callback}
+      http-client:
+        connect-timeout: ${OAUTH_HTTP_CONNECT_TIMEOUT:3s}
+        read-timeout: ${OAUTH_HTTP_READ_TIMEOUT:5s}
       google:
         client-id: ${GOOGLE_OAUTH_CLIENT_ID:}
         client-secret: ${GOOGLE_OAUTH_CLIENT_SECRET:}

@@ -42,19 +42,40 @@ class OAuthStateServiceTest {
 			payload(OAuthProvider.NAVER, REDIRECT_URL),
 		)
 
-		val consumed = service.consume(STATE, OAuthProvider.NAVER)
+		val consumed = service.consume(STATE, STATE, OAuthProvider.NAVER)
 
 		assertEquals(REDIRECT_URL, consumed.frontendRedirectUrl)
 		assertThrows<InvalidOAuthStateException> {
-			service.consume(STATE, OAuthProvider.NAVER)
+			service.consume(STATE, STATE, OAuthProvider.NAVER)
 		}
 	}
 
 	@Test
 	fun `rejects expired or unknown state`() {
 		assertThrows<InvalidOAuthStateException> {
-			service.consume(STATE, OAuthProvider.GOOGLE)
+			service.consume(STATE, STATE, OAuthProvider.GOOGLE)
 		}
+	}
+
+	@Test
+	fun `rejects missing or mismatched browser state without consuming Redis state`() {
+		tokenStore.seed(
+			OAuthStateService.STATE_NAMESPACE,
+			STATE,
+			payload(OAuthProvider.GOOGLE, REDIRECT_URL),
+		)
+
+		assertThrows<InvalidOAuthStateException> {
+			service.consume(STATE, null, OAuthProvider.GOOGLE)
+		}
+		assertThrows<InvalidOAuthStateException> {
+			service.consume(STATE, "different-state", OAuthProvider.GOOGLE)
+		}
+
+		assertEquals(
+			REDIRECT_URL,
+			service.consume(STATE, STATE, OAuthProvider.GOOGLE).frontendRedirectUrl,
+		)
 	}
 
 	@Test
@@ -66,10 +87,10 @@ class OAuthStateServiceTest {
 		)
 
 		assertThrows<InvalidOAuthStateException> {
-			service.consume(STATE, OAuthProvider.NAVER)
+			service.consume(STATE, STATE, OAuthProvider.NAVER)
 		}
 		assertThrows<InvalidOAuthStateException> {
-			service.consume(STATE, OAuthProvider.GOOGLE)
+			service.consume(STATE, STATE, OAuthProvider.GOOGLE)
 		}
 	}
 
@@ -101,6 +122,7 @@ class OAuthStateServiceTest {
 
 	private fun properties(): OAuthFlowProperties = OAuthFlowProperties(
 		stateTtl = Duration.ofMinutes(5),
+		stateCookieSecure = false,
 		exchangeCodeTtl = Duration.ofSeconds(60),
 		allowedRedirectOrigins = listOf("http://localhost:3000"),
 		frontendRedirectUrl = REDIRECT_URL,
