@@ -34,11 +34,9 @@ private data class NaverUserProfileResponse(
 
 @Component
 class NaverOAuthClient(
-	restClientBuilder: RestClient.Builder,
+	private val restClient: RestClient,
 	private val properties: NaverOAuthProperties,
 ) : OAuthProviderClient {
-	private val restClient = restClientBuilder.build()
-
 	override val provider: OAuthProvider = OAuthProvider.NAVER
 
 	override fun createAuthorizationUrl(state: String): URI {

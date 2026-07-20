@@ -29,11 +29,9 @@ private data class GoogleUserInfoResponse(
 
 @Component
 class GoogleOAuthClient(
-	restClientBuilder: RestClient.Builder,
+	private val restClient: RestClient,
 	private val properties: GoogleOAuthProperties,
 ) : OAuthProviderClient {
-	private val restClient = restClientBuilder.build()
-
 	override val provider: OAuthProvider = OAuthProvider.GOOGLE
 
 	override fun createAuthorizationUrl(state: String): URI {
