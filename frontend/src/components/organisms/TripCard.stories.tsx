@@ -23,3 +23,4 @@ type Story = StoryObj<typeof meta>;
 export const Upcoming: Story = { args: { dday: 12 } };
 export const Past: Story = { args: { isPast: true } };
 export const NoDday: Story = { args: { dday: null } };
+export const SharedWithRole: Story = { args: { role: "읽기쓰기" } };

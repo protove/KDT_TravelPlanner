@@ -1,5 +1,6 @@
 "use client";
 
+import * as React from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/atoms/Button";
 import { AppHeader } from "@/components/organisms/AppHeader";
@@ -10,6 +11,13 @@ export default function LandingPage() {
   const router = useRouter();
   const isLoggedIn = useAuthStore((s) => s.isLoggedIn);
   const user = useAuthStore((s) => s.user);
+
+  // 비로그인 랜딩은 로그인 상태에서는 의미가 없어 /trips로 보낸다 (IA: 로그인여부 X 전용 화면).
+  React.useEffect(() => {
+    if (isLoggedIn) router.replace("/trips");
+  }, [isLoggedIn, router]);
+
+  if (isLoggedIn) return null;
 
   return (
     <LandingLayout

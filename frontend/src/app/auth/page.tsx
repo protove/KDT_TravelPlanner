@@ -11,7 +11,7 @@ export default function AuthPage() {
 
   function handleLogin(provider: AuthProvider) {
     login(provider);
-    router.push("/landing");
+    router.push("/trips");
   }
 
   return (
