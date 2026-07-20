@@ -13,14 +13,26 @@ export interface TripCardProps {
   dates: string;
   days: number;
   dday?: number | null;
+  /** 제공되면 D-day 배지 대신 표시 — 공유받은 일정 탭처럼 권한을 보여줘야 할 때 사용 */
+  role?: string;
   members?: TripCardMember[];
   isPast?: boolean;
   onClick?: () => void;
   className?: string;
 }
 
-function TripCard({ title, dates, days, dday, members = [], isPast = false, onClick, className }: TripCardProps) {
-  const showDday = !isPast && dday != null;
+function TripCard({
+  title,
+  dates,
+  days,
+  dday,
+  role,
+  members = [],
+  isPast = false,
+  onClick,
+  className,
+}: TripCardProps) {
+  const showDday = !isPast && !role && dday != null;
 
   return (
     <div
@@ -50,10 +62,16 @@ function TripCard({ title, dates, days, dday, members = [], isPast = false, onCl
             <div className="text-base font-bold text-foreground">{title}</div>
             <div className="mt-0.5 text-sm text-muted-foreground">{dates}</div>
           </div>
-          {showDday && (
-            <Badge variant="accent" className="whitespace-nowrap">
-              D-{dday}
+          {role ? (
+            <Badge variant="secondary" className="whitespace-nowrap">
+              {role}
             </Badge>
+          ) : (
+            showDday && (
+              <Badge variant="accent" className="whitespace-nowrap">
+                D-{dday}
+              </Badge>
+            )
           )}
         </div>
         <div className="mt-3.5 flex items-center justify-between">
