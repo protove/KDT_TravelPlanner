@@ -66,6 +66,7 @@ src/
 │   │   ├── page.tsx        /trips           여행 목록
 │   │   └── [id]/page.tsx   /trips/1         여행 상세
 │   ├── mypage/             /mypage
+│   ├── community/          /community       공개된 여행 일정
 │   ├── notifications/      /notifications
 │   └── 403/                /403             접근 불가 안내
 ├── components/             화면 조각 (atoms · molecules · organisms · templates)
@@ -154,7 +155,7 @@ flowchart TD
 ```ts
 import { NextResponse, type NextRequest } from "next/server";
 
-const PROTECTED = ["/trips", "/mypage", "/notifications"];
+const PROTECTED = ["/trips", "/mypage", "/notifications", "/community"];
 const GUEST_ONLY = ["/auth", "/landing"];
 
 export function middleware(request: NextRequest) {
@@ -188,6 +189,7 @@ export const config = {
     "/trips/:path*",
     "/mypage/:path*",
     "/notifications/:path*",
+    "/community/:path*",
   ],
 };
 ```
@@ -389,6 +391,7 @@ docker compose --env-file .env.dev -f compose.yml -f compose.dev.yml up -d
 | 위 상태에서 로그인 | `/trips/1`로 복귀 |
 | 로그인 후 새로고침 | 로그인 상태 유지 |
 | `/trips/abc` | 403 안내 화면 |
+| 로그아웃 상태로 `/community` | `/auth?redirect=/community`로 이동 |
 | `/asdfasdf` | 없는 주소 안내 화면 |
 
 ## 13. 문제가 생겼을 때
