@@ -62,7 +62,7 @@ src/
     ├── mypage/             /mypage
     ├── notifications/      /notifications
     └── 403/                /403             접근 불가 안내
-````
+```
 
 도메인 단위로 나눠서 어떤 기능을 어느 폴더에서 구현할지 바로 알 수 있게 했습니다.
 
