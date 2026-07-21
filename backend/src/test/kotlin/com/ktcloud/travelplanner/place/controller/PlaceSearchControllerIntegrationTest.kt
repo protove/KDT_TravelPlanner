@@ -46,6 +46,7 @@ class PlaceSearchControllerIntegrationTest(
 			param("countryCode", "jp")
 		}.andExpect {
 			status { isOk() }
+			header { string(HttpHeaders.CACHE_CONTROL, "no-store") }
 			jsonPath("$.data[0].placeId", equalTo("place-success"))
 			jsonPath("$.data[0].name", equalTo("도쿄 타워"))
 			jsonPath("$.data[0].rating", equalTo(4.5))
