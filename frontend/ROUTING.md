@@ -199,7 +199,7 @@ export default async function Page({
 }
 ```
 
-## 9. 자주 하는 실수
+## 9. 주의
 
 | 증상 | 원인 |
 | --- | --- |
