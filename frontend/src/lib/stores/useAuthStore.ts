@@ -2,9 +2,9 @@
 
 import { create } from "zustand";
 import type { Gender } from "@/components/organisms/ProfileSection";
+import type { AuthProvider } from "@/lib/types/auth";
 
-export type AuthProvider = "google" | "naver";
-export type { Gender };
+export type { Gender, AuthProvider };
 
 export interface AuthUser {
   nickname: string;
