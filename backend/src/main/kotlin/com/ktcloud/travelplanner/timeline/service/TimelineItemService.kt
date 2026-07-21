@@ -17,73 +17,79 @@ import java.util.UUID
 
 @Service
 class TimelineItemService(
-	private val travelRepository: TravelRepository,
-	private val travelMemberRepository: TravelMemberRepository,
-	private val cityRepository: CityRepository,
-	private val timelineItemRepository: TimelineItemRepository,
+        private val travelRepository: TravelRepository,
+        private val travelMemberRepository: TravelMemberRepository,
+        private val cityRepository: CityRepository,
+        private val timelineItemRepository: TimelineItemRepository,
 ) {
-	@Transactional
-	fun createTimelineItem(
-		travelId: UUID,
-		requesterId: UUID,
-		request: TimelineItemCreateRequest,
-	): TimelineItemCreateResponse {
-		val travel = travelRepository.findById(travelId).orElseThrow(::TimelineTravelNotFoundException)
-		validateWritePermission(travel, requesterId)
-		val dayNumber = request.dayNumber.toShort()
-		val visitOrder = request.visitOrder.toShort()
-		val city = request.cityId?.let { cityId ->
-			cityRepository.findById(cityId).orElseThrow(::TimelineCityNotFoundException)
-		}
-		val timelineItem = try {
-			TimelineItem(
-				travel = travel,
-				dayNumber = dayNumber,
-				visitDate = request.visitDate,
-				city = city,
-				category = request.category,
-				foodSubcategory = normalizeOptional(request.foodSubcategory),
-				name = request.name.trim(),
-				googlePlaceId = normalizeOptional(request.googlePlaceId),
-				latitude = request.latitude,
-				longitude = request.longitude,
-				rating = request.rating,
-				visitOrder = visitOrder,
-				memo = normalizeOptional(request.memo),
-			)
-		} catch (_: IllegalArgumentException) {
-			throw InvalidTimelineItemException()
-		}
-		if (timelineItemRepository.existsByTravelIdAndDayNumberAndVisitOrder(
-				travelId,
-				dayNumber,
-				visitOrder,
-			)
-		) {
-			throw DuplicateTimelineOrderException()
-		}
+        @Transactional
+        fun createTimelineItem(
+                travelId: UUID,
+                requesterId: UUID,
+                request: TimelineItemCreateRequest,
+        ): TimelineItemCreateResponse {
+                val travel = travelRepository.findById(travelId).orElseThrow(::TimelineTravelNotFoundException)
+                validateWritePermission(travel, requesterId)
+                // dayNumber와 visitDate는 둘 다 있거나 둘 다 없어야 함 (미배정 상태 표현)
+                if ((request.dayNumber == null) != (request.visitDate == null)) {
+                        throw InvalidTimelineItemException()
+                }
+                val dayNumber = request.dayNumber?.toShort()
+                val visitOrder = request.visitOrder.toShort()
+                val city = request.cityId?.let { cityId ->
+                        cityRepository.findById(cityId).orElseThrow(::TimelineCityNotFoundException)
+                }
+                val timelineItem = try {
+                        TimelineItem(
+                                travel = travel,
+                                dayNumber = dayNumber,
+                                visitDate = request.visitDate,
+                                city = city,
+                                category = request.category,
+                                foodSubcategory = normalizeOptional(request.foodSubcategory),
+                                name = request.name.trim(),
+                                googlePlaceId = normalizeOptional(request.googlePlaceId),
+                                latitude = request.latitude,
+                                longitude = request.longitude,
+                                rating = request.rating,
+                                visitOrder = visitOrder,
+                                memo = normalizeOptional(request.memo),
+                        )
+                } catch (_: IllegalArgumentException) {
+                        throw InvalidTimelineItemException()
+                }
+                // 미배정(dayNumber == null) 상태에서는 "같은 일차 내 순서 중복" 개념이 없으므로 검사하지 않음
+                if (dayNumber != null &&
+                        timelineItemRepository.existsByTravelIdAndDayNumberAndVisitOrder(
+                                travelId,
+                                dayNumber,
+                                visitOrder,
+                        )
+                ) {
+                        throw DuplicateTimelineOrderException()
+                }
 
-		val savedItem = try {
-			timelineItemRepository.saveAndFlush(timelineItem)
-		} catch (_: DataIntegrityViolationException) {
-			throw DuplicateTimelineOrderException()
-		}
-		return TimelineItemCreateResponse.from(savedItem)
-	}
+                val savedItem = try {
+                        timelineItemRepository.saveAndFlush(timelineItem)
+                } catch (_: DataIntegrityViolationException) {
+                        throw DuplicateTimelineOrderException()
+                }
+                return TimelineItemCreateResponse.from(savedItem)
+        }
 
-	private fun validateWritePermission(
-		travel: Travel,
-		requesterId: UUID,
-	) {
-		if (travel.owner.id == requesterId) {
-			return
-		}
-		if (!travelMemberRepository.existsAcceptedReadWriteMember(travel.id, requesterId)) {
-			throw TimelineWriteAccessDeniedException()
-		}
-	}
+        private fun validateWritePermission(
+                travel: Travel,
+                requesterId: UUID,
+        ) {
+                if (travel.owner.id == requesterId) {
+                        return
+                }
+                if (!travelMemberRepository.existsAcceptedReadWriteMember(travel.id, requesterId)) {
+                        throw TimelineWriteAccessDeniedException()
+                }
+        }
 
-	private fun normalizeOptional(value: String?): String? = value?.trim()?.takeIf(String::isNotEmpty)
+        private fun normalizeOptional(value: String?): String? = value?.trim()?.takeIf(String::isNotEmpty)
 }
 
 class TimelineTravelNotFoundException : DomainException(ErrorCode.RESOURCE_NOT_FOUND)
