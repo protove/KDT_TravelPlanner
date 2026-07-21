@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 
 const PROTECTED = ["/trips", "/mypage", "/notifications"];
+const GUEST_ONLY = ["/auth", "/landing"];
 
 export function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
@@ -18,12 +19,18 @@ export function middleware(request: NextRequest) {
     return NextResponse.redirect(url);
   }
 
+  if (loggedIn && GUEST_ONLY.some((p) => pathname.startsWith(p))) {
+    return NextResponse.redirect(new URL("/trips", request.url));
+  }
+
   return NextResponse.next();
 }
 
 export const config = {
   matcher: [
     "/",
+    "/auth",
+    "/landing",
     "/trips/:path*",
     "/mypage/:path*",
     "/notifications/:path*",

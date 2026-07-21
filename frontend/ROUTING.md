@@ -105,17 +105,27 @@ export default function TripEditPage() {
 
 ### 5.2 로그인이 필요한 화면이라면
 
-`src/middleware.ts`의 보호 목록과 `matcher`에 경로를 추가합니다. 두 곳 모두 수정해야 합니다.
+이미 보호 중인 도메인 아래에 만드는 화면이라면 추가 작업이 없습니다. `/trips/:path*`는 `/trips` 아래 모든 주소를 뜻하므로 `/trips/1/edit`은 자동으로 포함됩니다.
+
+새 도메인을 만들 때는 `src/middleware.ts` 두 곳을 모두 수정해야 합니다. 한 곳만 고치면 동작하지 않습니다.
 
 ```ts
-const PROTECTED = ["/trips", "/mypage", "/notifications"];
+const PROTECTED = ["/trips", "/mypage", "/notifications", "/community"];
 
 export const config = {
-  matcher: ["/", "/trips/:path*", "/mypage/:path*", "/notifications/:path*"],
+  matcher: [
+    "/",
+    "/auth",
+    "/landing",
+    "/trips/:path*",
+    "/mypage/:path*",
+    "/notifications/:path*",
+    "/community/:path*",
+  ],
 };
 ```
 
-`/trips/:path*`는 `/trips` 아래 모든 주소를 뜻하므로 `/trips/1/edit`은 이미 포함됩니다.
+`matcher`는 미들웨어를 실행할 대상을 정하고, `PROTECTED`는 그중 로그인이 필요한 경로를 정합니다. `matcher`에 없으면 미들웨어 자체가 실행되지 않습니다.
 
 ### 5.3 확인 사항
 
@@ -145,6 +155,7 @@ flowchart TD
 import { NextResponse, type NextRequest } from "next/server";
 
 const PROTECTED = ["/trips", "/mypage", "/notifications"];
+const GUEST_ONLY = ["/auth", "/landing"];
 
 export function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
@@ -162,15 +173,28 @@ export function middleware(request: NextRequest) {
     return NextResponse.redirect(url);
   }
 
+  if (loggedIn && GUEST_ONLY.some((p) => pathname.startsWith(p))) {
+    return NextResponse.redirect(new URL("/trips", request.url));
+  }
+
   return NextResponse.next();
 }
 
 export const config = {
-  matcher: ["/", "/trips/:path*", "/mypage/:path*", "/notifications/:path*"],
+  matcher: [
+    "/",
+    "/auth",
+    "/landing",
+    "/trips/:path*",
+    "/mypage/:path*",
+    "/notifications/:path*",
+  ],
 };
 ```
 
 `matcher`에 적힌 경로에서만 미들웨어가 실행됩니다. 모든 요청에서 실행하면 이미지나 정적 파일 요청까지 검사하게 되어 불필요합니다.
+
+이미 로그인한 사용자가 `/auth`나 `/landing`으로 들어오면 `/trips`로 보냅니다. 로그인한 상태에서 로그인 화면이 다시 보이지 않도록 하기 위한 처리입니다.
 
 ### 6.2 원래 가려던 주소로 돌아가기
 
@@ -333,14 +357,21 @@ const { id, dayId } = useParams<{ id: string; dayId: string }>();
 
 ## 11. 컴포넌트를 어디에 둘 것인가
 
-| 사용 범위 | 위치 |
-| --- | --- |
-| 한 화면에서만 | `src/app/{도메인}/_components/` |
-| 두 개 이상 화면에서 | `src/components/` |
+현재 모든 컴포넌트는 `src/components` 아래 Atomic 기준으로 관리합니다.
 
-밑줄로 시작하는 폴더는 라우팅에서 제외되므로 `_components` 안의 파일은 주소가 생기지 않습니다. 밑줄을 빼면 `/trips/components` 같은 주소가 만들어집니다.
+```
+src/components/
+├── atoms/        Button, Input, Avatar 등 최소 단위
+├── molecules/    SearchBar, FormField 등 atoms 조합
+├── organisms/    AppHeader, TripList 등 화면 단위 블록
+└── templates/    ListLayout, DetailLayout 등 화면 골격
+```
 
-처음에는 도메인 폴더에 두고, 다른 화면에서도 쓰게 될 때 `src/components`로 옮깁니다. 미리 공용으로 만들지 않습니다.
+`src/app` 아래에는 `page.tsx`만 두고 화면을 그리는 조각은 위 폴더에서 가져다 씁니다. 컴포넌트 작성 규칙은 `docs/front.md`를 따릅니다.
+
+한 화면에서만 쓰이고 다른 곳에서 재사용할 일이 없는 컴포넌트가 생기면 그 화면 폴더 안에 `_components/`를 만들어 둘 수 있습니다. 밑줄로 시작하는 폴더는 라우팅에서 제외되어 주소가 생기지 않습니다. 밑줄을 빼면 `/trips/components` 같은 주소가 만들어집니다.
+
+현재는 해당하는 사례가 없어 사용하지 않고 있습니다.
 
 ## 12. 확인 방법
 
