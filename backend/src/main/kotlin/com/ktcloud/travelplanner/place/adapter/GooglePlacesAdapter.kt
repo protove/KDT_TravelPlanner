@@ -6,15 +6,12 @@ import com.ktcloud.travelplanner.place.config.GooglePlacesProperties
 import com.ktcloud.travelplanner.place.port.PlaceSearchPort
 import com.ktcloud.travelplanner.place.port.PlaceSearchResult
 import org.springframework.http.MediaType
-import org.springframework.http.client.JdkClientHttpRequestFactory
 import org.springframework.stereotype.Component
 import org.springframework.web.client.ResourceAccessException
 import org.springframework.web.client.RestClient
 import org.springframework.web.client.RestClientException
 import org.springframework.web.client.RestClientResponseException
 import java.math.BigDecimal
-import java.net.http.HttpClient
-import java.util.concurrent.TimeoutException
 
 private data class GooglePlaceSearchRequest(
 	val textQuery: String,
@@ -48,7 +45,7 @@ class GooglePlacesAdapter(
 ) : PlaceSearchPort {
 	private val restClient: RestClient = restClientBuilder.clone()
 		.baseUrl(properties.baseUrl.toASCIIString())
-		.requestFactory(requestFactory())
+		.requestFactory(googlePlacesRequestFactory(properties))
 		.build()
 
 	override fun searchPlaces(
@@ -70,8 +67,7 @@ class GooglePlacesAdapter(
 		} catch (exception: GooglePlacesException) {
 			throw exception
 		} catch (exception: ResourceAccessException) {
-			if (exception.hasTimeoutCause()) throw GooglePlacesTimeoutException(exception)
-			throw GooglePlacesProviderException(exception)
+			throw exception.toGooglePlacesException()
 		} catch (exception: RestClientResponseException) {
 			if (exception.statusCode.value() == 429) throw GooglePlacesQuotaExceededException(exception)
 			throw GooglePlacesProviderException(exception)
@@ -87,18 +83,6 @@ class GooglePlacesAdapter(
 		val longitude = place.location.longitude ?: throw GooglePlacesProviderException()
 		return PlaceSearchResult(placeId, name, latitude, longitude, place.rating)
 	}
-
-	private fun requestFactory(): JdkClientHttpRequestFactory {
-		val httpClient = HttpClient.newBuilder()
-			.connectTimeout(properties.connectTimeout)
-			.build()
-		return JdkClientHttpRequestFactory(httpClient).apply {
-			setReadTimeout(properties.readTimeout)
-		}
-	}
-
-	private fun Throwable.hasTimeoutCause(): Boolean =
-		generateSequence(this) { it.cause }.any { it is TimeoutException || it is java.net.http.HttpTimeoutException }
 
 	companion object {
 		private const val GOOGLE_API_KEY_HEADER = "X-Goog-Api-Key"
