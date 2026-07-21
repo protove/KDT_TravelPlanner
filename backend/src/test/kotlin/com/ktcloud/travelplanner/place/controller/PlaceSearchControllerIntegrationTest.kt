@@ -91,7 +91,7 @@ class PlaceSearchControllerIntegrationTest(
 		@JvmStatic
 		@DynamicPropertySource
 		fun googlePlacesProperties(registry: DynamicPropertyRegistry) {
-			registry.add("app.external.google.places.api-key") { "integration-places-key" }
+			registry.add("GOOGLE_MAPS_API_KEY") { "integration-google-maps-key" }
 			registry.add("app.external.google.places.base-url") {
 				"http://127.0.0.1:${googleServer.address.port}"
 			}
