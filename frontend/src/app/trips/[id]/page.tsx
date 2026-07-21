@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useParams } from "next/navigation";
 import { Pencil, Trash2 } from "lucide-react";
 import { Button } from "@/components/atoms/Button";
 import { Input } from "@/components/atoms/Input";
@@ -49,6 +49,7 @@ function getDateTabs(start: Date, end: Date) {
 
 export default function TripDetailPage() {
   const router = useRouter();
+  const { id } = useParams<{ id: string }>();
   const isLoggedIn = useAuthStore((s) => s.isLoggedIn);
   const user = useAuthStore((s) => s.user);
 
@@ -100,6 +101,10 @@ export default function TripDetailPage() {
   React.useEffect(() => {
     if (!isLoggedIn) router.replace("/landing");
   }, [isLoggedIn, router]);
+
+  React.useEffect(() => {
+    if (id && !/^\d+$/.test(id)) router.replace("/403");
+  }, [id, router]);
 
   if (!isLoggedIn || !user) return null;
 
