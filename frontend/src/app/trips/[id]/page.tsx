@@ -155,7 +155,7 @@ export default function TripDetailPage() {
   return (
     <>
       <DetailLayout
-      header={<AppHeader loggedIn userInitial={user.initial} avatarColor={user.avatarColor} onLogoClick={() => router.push("/trips")} />}
+      header={<AppHeader loggedIn userInitial={user.initial} avatarColor={user.avatarColor} onLogoClick={() => router.push("/trips")} onProfileClick={() => router.push("/mypage")} onNotificationClick={() => router.push("/notifications")} />}
       detailHeader={
         <div className="flex flex-col gap-5">
           <button type="button" onClick={() => router.push("/trips")} className="text-sm font-bold text-primary">
