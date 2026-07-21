@@ -311,12 +311,15 @@ import 경로는 `next/router`가 아니라 `next/navigation`입니다.
 
 | 클릭 대상 | 이동 위치 | 연결된 곳 |
 | --- | --- | --- |
-| 헤더 로고 | `/trips` | `AppHeader` `onLogoClick` |
+| 헤더 로고 (로그인 화면) | `/trips` | `AppHeader` `onLogoClick` |
+| 헤더 로고 (랜딩) | `/landing` | `AppHeader` `onLogoClick` |
 | 헤더 프로필 아이콘 | `/mypage` | `AppHeader` `onProfileClick` |
 | 헤더 종 아이콘 | `/notifications` | `AppHeader` `onNotificationClick` |
 | 여행 카드 | `/trips/[id]` | `trips/page.tsx` |
 | 랜딩 로그인 버튼 | `/auth` | `AppHeader` `onLoginClick` |
 | 상세 화면 목록 버튼 | `/trips` | `trips/[id]/page.tsx` |
+
+랜딩 화면의 로고만 `/landing`을 가리킵니다. 비로그인 화면이라 `/trips`로 보내면 미들웨어가 다시 `/auth`로 되돌려보내기 때문입니다.
 
 `AppHeader`는 이동 함수를 직접 갖지 않고 props로 받습니다. 같은 헤더를 여러 화면에서 쓰면서 목적지만 다르게 지정하기 위해서입니다.
 
@@ -392,6 +395,8 @@ docker compose --env-file .env.dev -f compose.yml -f compose.dev.yml up -d
 | 로그인 후 새로고침 | 로그인 상태 유지 |
 | `/trips/abc` | 403 안내 화면 |
 | 로그아웃 상태로 `/community` | `/auth?redirect=/community`로 이동 |
+| 로그인 상태로 `/auth` | `/trips`로 이동 |
+| 로그인 상태로 `/landing` | `/trips`로 이동 |
 | `/asdfasdf` | 없는 주소 안내 화면 |
 
 ## 13. 문제가 생겼을 때
