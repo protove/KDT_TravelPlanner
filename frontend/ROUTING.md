@@ -41,6 +41,8 @@ App Router에는 Next.js가 미리 정해둔 파일명이 있습니다. 예약�
 | `loading.tsx` | 불러오는 중일 때 | 선택 |
 | `middleware.ts` | 페이지에 닿기 전에 요청을 가로챔 | 선택 |
 
+`middleware.ts`는 우리 프로젝트에서 로그인 여부에 따라 화면을 나누는 데 사용합니다. 위치는 `src/middleware.ts` 한 곳이며 이 이름이어야 Next.js가 인식합니다.
+
 파일명만 봐서는 역할을 알기 어렵기 때문에 폴더명으로 구분합니다. `trips/page.tsx`는 여행 목록, `mypage/page.tsx`는 마이페이지가 됩니다.
 
 ## 4. 우리 프로젝트 구조
@@ -76,6 +78,26 @@ flowchart TD
 
 주소를 바꿔서 보내는 방식을 택했습니다. 파일 하나가 화면 하나만 책임지고, 링크를 공유하면 받는 사람도 같은 화면으로 들어옵니다.
 
+판단은 `src/middleware.ts`에서 합니다. 페이지가 그려지기 전에 실행되므로 화면이 잠깐 보였다 바뀌는 일이 없습니다.
+
+```ts
+const loggedIn = request.cookies.get("logged_in")?.value === "1";
+
+if (pathname === "/") {
+  return NextResponse.redirect(
+    new URL(loggedIn ? "/trips" : "/landing", request.url),
+  );
+}
+```
+
+`/trips`, `/mypage`, `/notifications`는 로그인이 필요합니다. 비로그인 상태로 접근하면 `/auth`로 보내면서 원래 가려던 주소를 함께 남깁니다.
+
+```
+/auth?redirect=/trips/1
+```
+
+이 쿠키는 화면 이동을 위한 표시이며 보안 장치가 아닙니다. 실제 권한 검사는 API 호출 시 백엔드가 수행합니다.
+
 ## 6. 잘못된 요청 처리
 
 ```mermaid
@@ -90,6 +112,10 @@ flowchart TD
 ```
 
 여행 id는 숫자여야 하므로 `/trips/abc` 같은 요청은 403으로 보냅니다.
+
+없는 주소를 처리하는 `not-found.tsx`와 `/403`은 같은 안내 문구를 보여줍니다. 사용자 입장에서는 주소가 틀렸든 권한이 없든 들어갈 수 없다는 사실만 알면 되기 때문입니다.
+
+흐름도의 권한 검사 단계는 아직 연결되지 않았습니다. 인증 작업이 끝난 뒤 API 응답을 받아 처리할 예정이며, 현재 동작하는 것은 주소와 파라미터 검사입니다.
 
 ```tsx
 const { id } = useParams<{ id: string }>();
@@ -129,11 +155,24 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 
 const router = useRouter();
-router.push("/trips");      뒤로가기 가능
-router.replace("/auth");    뒤로가기 막고 이동
+router.push("/trips");      // 뒤로가기 가능
+router.replace("/auth");    // 뒤로가기 막고 이동
 ```
 
 import 경로는 `next/router`가 아니라 `next/navigation`입니다.
+
+### 현재 연결된 이동
+
+| 클릭 대상 | 이동 위치 |
+| --- | --- |
+| 헤더 로고 | `/trips` |
+| 헤더 프로필 아이콘 | `/mypage` |
+| 헤더 종 아이콘 | `/notifications` |
+| 여행 카드 | `/trips/[id]` |
+| 랜딩 로그인 버튼 | `/auth` |
+| 상세 화면 목록 버튼 | `/trips` |
+
+헤더 이동은 `AppHeader`의 `onLogoClick`, `onProfileClick`, `onNotificationClick`에 연결되어 있습니다.
 
 ## 8. 동적 라우트에서 값 꺼내기
 
