@@ -48,19 +48,21 @@ App Router에는 Next.js가 미리 정해둔 파일명이 있습니다. 예약�
 ## 4. 우리 프로젝트 구조
 
 ```
-src/app/
-├── layout.tsx          전체 공통 껍데기
-├── page.tsx            /
-├── not-found.tsx       없는 주소
-├── landing/            /landing    서비스 소개
-├── auth/               /auth       로그인
-├── trips/
-│   ├── page.tsx        /trips      여행 목록
-│   └── [id]/page.tsx   /trips/1    여행 상세
-├── mypage/             /mypage
-├── notifications/      /notifications
-└── 403/                /403        접근 불가 안내
-```
+src/
+├── middleware.ts           로그인 여부 판단 후 이동 처리
+└── app/
+    ├── layout.tsx          전체 공통 껍데기
+    ├── page.tsx            미들웨어가 가로채므로 직접 열리지 않음
+    ├── not-found.tsx       없는 주소
+    ├── landing/            /landing         서비스 소개
+    ├── auth/               /auth            로그인
+    ├── trips/
+    │   ├── page.tsx        /trips           여행 목록
+    │   └── [id]/page.tsx   /trips/1         여행 상세
+    ├── mypage/             /mypage
+    ├── notifications/      /notifications
+    └── 403/                /403             접근 불가 안내
+````
 
 도메인 단위로 나눠서 어떤 기능을 어느 폴더에서 구현할지 바로 알 수 있게 했습니다.
 
