@@ -34,8 +34,14 @@ const MOCK_USER_BY_PROVIDER: Record<AuthProvider, AuthUser> = {
 export const useAuthStore = create<AuthState>((set) => ({
   isLoggedIn: false,
   user: null,
-  login: (provider) => set({ isLoggedIn: true, user: MOCK_USER_BY_PROVIDER[provider] }),
-  logout: () => set({ isLoggedIn: false, user: null }),
+  login: (provider) => {
+    document.cookie = "logged_in=1; path=/; max-age=86400";
+    set({ isLoggedIn: true, user: MOCK_USER_BY_PROVIDER[provider] });
+  },
+  logout: () => {
+    document.cookie = "logged_in=; path=/; max-age=0";
+    set({ isLoggedIn: false, user: null });
+  },
   updateProfile: (patch) =>
     set((s) => {
       if (!s.user) return s;
