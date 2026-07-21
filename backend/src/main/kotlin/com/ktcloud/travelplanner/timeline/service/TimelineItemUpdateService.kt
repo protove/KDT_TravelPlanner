@@ -42,9 +42,6 @@ class TimelineItemUpdateService(
 		val foodSubcategory = request.foodSubcategory.resolveOptionalText(item.foodSubcategory)
 		val name = request.name.resolveRequired(item.name).trim()
 		val googlePlaceId = request.googlePlaceId.resolveOptionalText(item.googlePlaceId)
-		val latitude = request.latitude.resolveNullable(item.latitude)
-		val longitude = request.longitude.resolveNullable(item.longitude)
-		val rating = request.rating.resolveNullable(item.rating)
 		val memo = request.memo.resolveOptionalText(item.memo)
 
 		if (timelineItemRepository.existsByTravelIdAndDayNumberAndVisitOrderAndIdNot(
@@ -66,9 +63,6 @@ class TimelineItemUpdateService(
 				foodSubcategory = foodSubcategory,
 				name = name,
 				googlePlaceId = googlePlaceId,
-				latitude = latitude,
-				longitude = longitude,
-				rating = rating,
 				visitOrder = visitOrder,
 				memo = memo,
 			)

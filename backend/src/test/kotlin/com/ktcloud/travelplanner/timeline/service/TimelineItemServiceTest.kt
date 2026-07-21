@@ -18,7 +18,6 @@ import org.mockito.Mockito.never
 import org.mockito.Mockito.verify
 import org.mockito.Mockito.verifyNoInteractions
 import org.mockito.Mockito.`when`
-import java.math.BigDecimal
 import java.time.LocalDate
 import java.util.Optional
 import java.util.UUID
@@ -108,9 +107,6 @@ class TimelineItemServiceTest {
 		foodSubcategory = null,
 		name = " 도쿄 타워 ",
 		googlePlaceId = "google-place-id",
-		latitude = BigDecimal("35.658581"),
-		longitude = BigDecimal("139.745433"),
-		rating = BigDecimal("4.5"),
 		visitOrder = 1,
 		memo = " 저녁 방문 ",
 	)
