@@ -1,10 +1,12 @@
 # Next.js 라우팅 규칙
 
-App Router가 어떤 규칙으로 동작하는지와 우리 프로젝트에 어떻게 적용했는지 정리한 문서입니다.
+App Router가 어떤 규칙으로 동작하는지, 우리 프로젝트에 어떻게 적용했는지, 새 화면을 추가할 때 무엇을 하면 되는지 정리한 문서입니다.
+
+디자인 토큰과 컴포넌트 규칙은 `docs/front.md`, 로컬 실행 방법은 저장소 루트의 `README.md`를 참고하세요.
 
 ## 1. 폴더가 곧 주소가 된다
 
-Next.js App Router는 별도 설정 파일이나 라우팅 라이브러리 없이 `src/app` 아래 폴더 구조를 그대로 주소로 사용합니다. React 단독 프로젝트에서 쓰는 `react-router-dom`은 설치하지 않습니다.
+App Router는 별도 설정 파일이나 라우팅 라이브러리 없이 `src/app` 아래 폴더 구조를 그대로 주소로 사용합니다.
 
 ```
 src/app/trips/page.tsx        →  /trips
@@ -12,21 +14,25 @@ src/app/mypage/page.tsx       →  /mypage
 src/app/trips/[id]/page.tsx   →  /trips/1
 ```
 
-주소를 하나 늘리고 싶으면 폴더를 만들고 그 안에 `page.tsx`를 넣으면 됩니다.
+React 단독 프로젝트에서 쓰는 `react-router-dom`은 설치하지 않습니다. 라우팅이 이미 내장되어 있어 중복이며 서버 컴포넌트와 충돌합니다.
 
 ## 2. 요청이 들어오면 어떤 파일이 실행되는가
 
 ```mermaid
 flowchart TD
-    A["브라우저가 /trips/1 요청"] --> B{"app/trips 폴더가 있나"}
-    B -->|없음| C["not-found.tsx 실행"]
-    B -->|있음| D{"1 에 해당하는 폴더가 있나"}
-    D -->|"[id] 폴더가 받음"| E["trips/[id]/page.tsx 실행"]
-    D -->|없음| C
-    E --> F["id 값에 1이 담긴다"]
+    A["브라우저가 /trips/1 요청"] --> B{"미들웨어 검사 대상인가"}
+    B -->|예| C{"로그인 상태인가"}
+    C -->|아니오| D["/auth 로 이동"]
+    C -->|예| E{"app/trips 폴더가 있나"}
+    B -->|아니오| E
+    E -->|없음| F["not-found.tsx 실행"]
+    E -->|있음| G{"1 에 해당하는 폴더가 있나"}
+    G -->|"[id] 폴더가 받음"| H["trips/[id]/page.tsx 실행"]
+    G -->|없음| F
+    H --> I["id 값에 1이 담긴다"]
 ```
 
-`[id]`처럼 대괄호를 쓴 폴더는 어떤 값이 와도 받아냅니다. `/trips/1`과 `/trips/42`를 파일 하나가 처리합니다.
+미들웨어가 먼저 실행되고 그다음 폴더를 찾습니다. `[id]`처럼 대괄호를 쓴 폴더는 어떤 값이 와도 받아내므로 `/trips/1`과 `/trips/42`를 파일 하나가 처리합니다.
 
 ## 3. 이름이 정해져 있는 파일들
 
@@ -41,32 +47,83 @@ App Router에는 Next.js가 미리 정해둔 파일명이 있습니다. 예약�
 | `loading.tsx` | 불러오는 중일 때 | 선택 |
 | `middleware.ts` | 페이지에 닿기 전에 요청을 가로챔 | 선택 |
 
-`middleware.ts`는 우리 프로젝트에서 로그인 여부에 따라 화면을 나누는 데 사용합니다. 위치는 `src/middleware.ts` 한 곳이며 이 이름이어야 Next.js가 인식합니다.
+`middleware.ts`는 반드시 `src/middleware.ts`에 있어야 하며 다른 위치에 두면 실행되지 않습니다.
 
-파일명만 봐서는 역할을 알기 어렵기 때문에 폴더명으로 구분합니다. `trips/page.tsx`는 여행 목록, `mypage/page.tsx`는 마이페이지가 됩니다.
+파일명만으로는 역할을 알기 어렵기 때문에 폴더명으로 구분합니다. `trips/page.tsx`는 여행 목록, `mypage/page.tsx`는 마이페이지가 됩니다.
 
 ## 4. 우리 프로젝트 구조
 
 ```
 src/
 ├── middleware.ts           로그인 여부 판단 후 이동 처리
-└── app/
-    ├── layout.tsx          전체 공통 껍데기
-    ├── page.tsx            미들웨어가 가로채므로 직접 열리지 않음
-    ├── not-found.tsx       없는 주소
-    ├── landing/            /landing         서비스 소개
-    ├── auth/               /auth            로그인
-    ├── trips/
-    │   ├── page.tsx        /trips           여행 목록
-    │   └── [id]/page.tsx   /trips/1         여행 상세
-    ├── mypage/             /mypage
-    ├── notifications/      /notifications
-    └── 403/                /403             접근 불가 안내
+├── app/
+│   ├── layout.tsx          전체 공통 껍데기
+│   ├── page.tsx            미들웨어가 가로채므로 직접 열리지 않음
+│   ├── not-found.tsx       없는 주소
+│   ├── landing/            /landing         서비스 소개
+│   ├── auth/               /auth            로그인
+│   ├── trips/
+│   │   ├── page.tsx        /trips           여행 목록
+│   │   └── [id]/page.tsx   /trips/1         여행 상세
+│   ├── mypage/             /mypage
+│   ├── notifications/      /notifications
+│   └── 403/                /403             접근 불가 안내
+├── components/             화면 조각 (atoms · molecules · organisms · templates)
+└── lib/
+    └── stores/             전역 상태 (zustand)
 ```
 
 도메인 단위로 나눠서 어떤 기능을 어느 폴더에서 구현할지 바로 알 수 있게 했습니다.
 
-## 5. 화면 분기 규칙
+## 5. 새 페이지 추가하기
+
+### 5.1 절차
+
+여행 일정을 수정하는 `/trips/1/edit` 화면을 만든다고 가정합니다.
+
+폴더와 파일을 만듭니다.
+
+```bash
+mkdir -p "src/app/trips/[id]/edit"
+```
+
+`src/app/trips/[id]/edit/page.tsx`를 만들고 컴포넌트를 기본 내보내기로 작성합니다.
+
+```tsx
+"use client";
+
+import { useParams } from "next/navigation";
+
+export default function TripEditPage() {
+  const { id } = useParams<{ id: string }>();
+
+  return <div>여행 {id} 수정</div>;
+}
+```
+
+브라우저에서 `http://localhost:3000/trips/1/edit`으로 확인합니다. 서버를 다시 켤 필요 없이 새로고침하면 반영됩니다.
+
+### 5.2 로그인이 필요한 화면이라면
+
+`src/middleware.ts`의 보호 목록과 `matcher`에 경로를 추가합니다. 두 곳 모두 수정해야 합니다.
+
+```ts
+const PROTECTED = ["/trips", "/mypage", "/notifications"];
+
+export const config = {
+  matcher: ["/", "/trips/:path*", "/mypage/:path*", "/notifications/:path*"],
+};
+```
+
+`/trips/:path*`는 `/trips` 아래 모든 주소를 뜻하므로 `/trips/1/edit`은 이미 포함됩니다.
+
+### 5.3 확인 사항
+
+- 폴더 안에 `page.tsx`가 있는지
+- 로그인이 필요하면 미들웨어에 경로가 있는지
+- 그 화면에서만 쓰는 컴포넌트는 `_components/`에 두었는지
+
+## 6. 화면 분기 규칙
 
 ```mermaid
 flowchart TD
@@ -80,27 +137,86 @@ flowchart TD
 
 주소를 바꿔서 보내는 방식을 택했습니다. 파일 하나가 화면 하나만 책임지고, 링크를 공유하면 받는 사람도 같은 화면으로 들어옵니다.
 
-판단은 `src/middleware.ts`에서 합니다. 페이지가 그려지기 전에 실행되므로 화면이 잠깐 보였다 바뀌는 일이 없습니다.
+한 페이지에서 조건에 따라 다른 내용을 그리는 방식도 가능하지만, 그렇게 하면 `/`가 랜딩과 여행 목록을 동시에 책임지게 되어 파일이 커집니다.
+
+### 6.1 미들웨어 전체 코드
 
 ```ts
-const loggedIn = request.cookies.get("logged_in")?.value === "1";
+import { NextResponse, type NextRequest } from "next/server";
 
-if (pathname === "/") {
-  return NextResponse.redirect(
-    new URL(loggedIn ? "/trips" : "/landing", request.url),
-  );
+const PROTECTED = ["/trips", "/mypage", "/notifications"];
+
+export function middleware(request: NextRequest) {
+  const { pathname } = request.nextUrl;
+  const loggedIn = request.cookies.get("logged_in")?.value === "1";
+
+  if (pathname === "/") {
+    return NextResponse.redirect(
+      new URL(loggedIn ? "/trips" : "/landing", request.url),
+    );
+  }
+
+  if (!loggedIn && PROTECTED.some((p) => pathname.startsWith(p))) {
+    const url = new URL("/auth", request.url);
+    url.searchParams.set("redirect", pathname);
+    return NextResponse.redirect(url);
+  }
+
+  return NextResponse.next();
 }
+
+export const config = {
+  matcher: ["/", "/trips/:path*", "/mypage/:path*", "/notifications/:path*"],
+};
 ```
 
-`/trips`, `/mypage`, `/notifications`는 로그인이 필요합니다. 비로그인 상태로 접근하면 `/auth`로 보내면서 원래 가려던 주소를 함께 남깁니다.
+`matcher`에 적힌 경로에서만 미들웨어가 실행됩니다. 모든 요청에서 실행하면 이미지나 정적 파일 요청까지 검사하게 되어 불필요합니다.
+
+### 6.2 원래 가려던 주소로 돌아가기
+
+비로그인 상태로 `/trips/1`에 접근하면 주소에 목적지를 남깁니다.
 
 ```
 /auth?redirect=/trips/1
 ```
 
-이 쿠키는 화면 이동을 위한 표시이며 보안 장치가 아닙니다. 실제 권한 검사는 API 호출 시 백엔드가 수행합니다.
+로그인에 성공하면 그 값을 읽어 되돌려보냅니다.
 
-## 6. 잘못된 요청 처리
+```tsx
+const searchParams = useSearchParams();
+
+const redirect = searchParams.get("redirect");
+router.push(redirect?.startsWith("/") ? redirect : "/trips");
+```
+
+`startsWith("/")` 검사는 외부 주소가 들어오는 것을 막기 위한 것입니다. 이 검사가 없으면 `/auth?redirect=https://악성사이트`로 사용자를 보낼 수 있습니다.
+
+## 7. 로그인 상태는 어떻게 유지되는가
+
+세 가지가 함께 동작합니다.
+
+| 위치 | 저장 내용 | 읽는 곳 |
+| --- | --- | --- |
+| `logged_in` 쿠키 | 로그인 여부 표시 | 미들웨어 (서버) |
+| zustand 스토어 | 사용자 정보 | 화면 (브라우저) |
+| localStorage | 새로고침 대비 백업 | zustand persist가 자동 처리 |
+
+로그인하면 스토어에 사용자 정보를 넣고 동시에 쿠키를 심습니다.
+
+```ts
+login: (provider) => {
+  document.cookie = "logged_in=1; path=/; max-age=86400";
+  set({ isLoggedIn: true, user: MOCK_USER_BY_PROVIDER[provider] });
+},
+```
+
+쿠키가 필요한 이유는 미들웨어가 서버에서 실행되기 때문입니다. zustand 상태는 브라우저 안에만 있어서 서버가 읽을 수 없습니다.
+
+`path=/`로 지정해야 모든 페이지 요청에 쿠키가 실립니다. 특정 경로로 제한하면 그 경로 요청에만 실려서 미들웨어가 읽지 못합니다.
+
+이 쿠키는 화면 이동을 위한 표시이며 보안 장치가 아닙니다. 브라우저에서 임의로 만들 수 있으므로 실제 권한 검사는 API 호출 시 백엔드가 수행합니다.
+
+## 8. 잘못된 요청 처리
 
 ```mermaid
 flowchart TD
@@ -115,10 +231,6 @@ flowchart TD
 
 여행 id는 숫자여야 하므로 `/trips/abc` 같은 요청은 403으로 보냅니다.
 
-없는 주소를 처리하는 `not-found.tsx`와 `/403`은 같은 안내 문구를 보여줍니다. 사용자 입장에서는 주소가 틀렸든 권한이 없든 들어갈 수 없다는 사실만 알면 되기 때문입니다.
-
-흐름도의 권한 검사 단계는 아직 연결되지 않았습니다. 인증 작업이 끝난 뒤 API 응답을 받아 처리할 예정이며, 현재 동작하는 것은 주소와 파라미터 검사입니다.
-
 ```tsx
 const { id } = useParams<{ id: string }>();
 
@@ -127,7 +239,11 @@ React.useEffect(() => {
 }, [id, router]);
 ```
 
-## 7. 화면을 이동시키는 방법
+`not-found.tsx`와 `/403`은 같은 안내 문구를 보여줍니다. 사용자 입장에서는 주소가 틀렸든 권한이 없든 들어갈 수 없다는 사실만 알면 되기 때문입니다.
+
+흐름도의 권한 검사 단계는 아직 연결되지 않았습니다. 인증 작업이 끝난 뒤 API 응답을 받아 처리할 예정이며, 현재 동작하는 것은 주소와 파라미터 검사입니다.
+
+## 9. 화면을 이동시키는 방법
 
 ```mermaid
 flowchart TD
@@ -148,7 +264,7 @@ import Link from "next/link";
 <Link href={`/trips/${trip.id}`}>{trip.title}</Link>
 ```
 
-`<a>` 태그를 쓰면 페이지 전체가 새로고침되므로 사용하지 않습니다.
+`<a>` 태그를 쓰면 페이지 전체가 새로고침되어 화면이 깜빡이고 상태가 사라집니다.
 
 코드로 이동할 때는 `useRouter`를 씁니다.
 
@@ -161,24 +277,26 @@ router.push("/trips");      // 뒤로가기 가능
 router.replace("/auth");    // 뒤로가기 막고 이동
 ```
 
+로그인 화면처럼 뒤로가기로 돌아가면 안 되는 경우에는 `replace`를 씁니다.
+
 import 경로는 `next/router`가 아니라 `next/navigation`입니다.
 
-### 현재 연결된 이동
+### 9.1 현재 연결된 이동
 
-| 클릭 대상 | 이동 위치 |
-| --- | --- |
-| 헤더 로고 | `/trips` |
-| 헤더 프로필 아이콘 | `/mypage` |
-| 헤더 종 아이콘 | `/notifications` |
-| 여행 카드 | `/trips/[id]` |
-| 랜딩 로그인 버튼 | `/auth` |
-| 상세 화면 목록 버튼 | `/trips` |
+| 클릭 대상 | 이동 위치 | 연결된 곳 |
+| --- | --- | --- |
+| 헤더 로고 | `/trips` | `AppHeader` `onLogoClick` |
+| 헤더 프로필 아이콘 | `/mypage` | `AppHeader` `onProfileClick` |
+| 헤더 종 아이콘 | `/notifications` | `AppHeader` `onNotificationClick` |
+| 여행 카드 | `/trips/[id]` | `trips/page.tsx` |
+| 랜딩 로그인 버튼 | `/auth` | `AppHeader` `onLoginClick` |
+| 상세 화면 목록 버튼 | `/trips` | `trips/[id]/page.tsx` |
 
-헤더 이동은 `AppHeader`의 `onLogoClick`, `onProfileClick`, `onNotificationClick`에 연결되어 있습니다.
+`AppHeader`는 이동 함수를 직접 갖지 않고 props로 받습니다. 같은 헤더를 여러 화면에서 쓰면서 목적지만 다르게 지정하기 위해서입니다.
 
-## 8. 동적 라우트에서 값 꺼내기
+## 10. 동적 라우트에서 값 꺼내기
 
-주소에 들어있는 값을 꺼내는 방법이 두 가지입니다. 파일 맨 위에 `"use client"`가 있는지에 따라 다릅니다.
+파일 맨 위에 `"use client"`가 있는지에 따라 방법이 다릅니다.
 
 클라이언트 컴포넌트일 때
 
@@ -201,12 +319,62 @@ export default async function Page({
 }
 ```
 
-## 9. 주의
+우리 프로젝트의 화면은 대부분 클라이언트 컴포넌트입니다. zustand 상태와 이벤트 핸들러를 쓰기 때문입니다.
 
-| 증상 | 원인 |
+여러 값을 받을 때는 폴더를 중첩합니다.
+
+```
+src/app/trips/[id]/days/[dayId]/page.tsx   →   /trips/1/days/3
+```
+
+```tsx
+const { id, dayId } = useParams<{ id: string; dayId: string }>();
+```
+
+## 11. 컴포넌트를 어디에 둘 것인가
+
+| 사용 범위 | 위치 |
+| --- | --- |
+| 한 화면에서만 | `src/app/{도메인}/_components/` |
+| 두 개 이상 화면에서 | `src/components/` |
+
+밑줄로 시작하는 폴더는 라우팅에서 제외되므로 `_components` 안의 파일은 주소가 생기지 않습니다. 밑줄을 빼면 `/trips/components` 같은 주소가 만들어집니다.
+
+처음에는 도메인 폴더에 두고, 다른 화면에서도 쓰게 될 때 `src/components`로 옮깁니다. 미리 공용으로 만들지 않습니다.
+
+## 12. 확인 방법
+
+개발 환경을 띄운 뒤 아래 주소들이 예상대로 동작하는지 확인합니다.
+
+```bash
+docker compose --env-file .env.dev -f compose.yml -f compose.dev.yml up -d
+```
+
+| 확인 항목 | 기대 결과 |
+| --- | --- |
+| 로그아웃 상태로 `/` | `/landing`으로 이동 |
+| 로그인 상태로 `/` | `/trips`로 이동 |
+| 로그아웃 상태로 `/trips/1` | `/auth?redirect=/trips/1`로 이동 |
+| 위 상태에서 로그인 | `/trips/1`로 복귀 |
+| 로그인 후 새로고침 | 로그인 상태 유지 |
+| `/trips/abc` | 403 안내 화면 |
+| `/asdfasdf` | 없는 주소 안내 화면 |
+
+## 13. 문제가 생겼을 때
+
+| 증상 | 원인과 해결 |
 | --- | --- |
 | 주소로 들어가면 404 | 폴더 안에 `page.tsx`가 없음 |
 | `useRouter is not a function` | `next/router`에서 import함. `next/navigation`으로 변경 |
 | 훅 사용 시 오류 | 파일 맨 위 `"use client"` 누락 |
 | 클릭하면 화면 전체가 깜빡임 | `<Link>` 대신 `<a>` 사용 |
-| `params`가 undefined | `await params` 누락 |
+| `params`가 undefined | 서버 컴포넌트에서 `await params` 누락 |
+| 미들웨어가 동작하지 않음 | 파일 위치가 `src/middleware.ts`가 아니거나 `matcher`에 경로가 없음 |
+| 로그인했는데 계속 로그인 화면으로 감 | 쿠키의 `path`가 `/`가 아님 |
+| `Module not found` | pull 이후 의존성이 늘어남. 이미지 재빌드 필요 |
+
+이미지 재빌드는 다음과 같이 합니다.
+
+```bash
+docker compose --env-file .env.dev -f compose.yml -f compose.dev.yml up --build -d
+```
