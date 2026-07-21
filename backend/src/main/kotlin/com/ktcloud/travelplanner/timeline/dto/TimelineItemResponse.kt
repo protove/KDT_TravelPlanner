@@ -2,7 +2,6 @@ package com.ktcloud.travelplanner.timeline.dto
 
 import com.ktcloud.travelplanner.timeline.model.TimelineCategory
 import com.ktcloud.travelplanner.timeline.model.TimelineItem
-import java.math.BigDecimal
 import java.time.LocalDate
 import java.util.UUID
 
@@ -15,9 +14,6 @@ data class TimelineItemResponse(
 	val foodSubcategory: String?,
 	val name: String,
 	val googlePlaceId: String?,
-	val latitude: BigDecimal?,
-	val longitude: BigDecimal?,
-	val rating: BigDecimal?,
 	val visitOrder: Int,
 	val memo: String?,
 ) {
@@ -31,9 +27,6 @@ data class TimelineItemResponse(
 			foodSubcategory = timelineItem.foodSubcategory,
 			name = timelineItem.name,
 			googlePlaceId = timelineItem.googlePlaceId,
-			latitude = timelineItem.latitude,
-			longitude = timelineItem.longitude,
-			rating = timelineItem.rating,
 			visitOrder = timelineItem.visitOrder.toInt(),
 			memo = timelineItem.memo,
 		)

@@ -45,9 +45,6 @@ class TimelineItemService(
 				foodSubcategory = normalizeOptional(request.foodSubcategory),
 				name = request.name.trim(),
 				googlePlaceId = normalizeOptional(request.googlePlaceId),
-				latitude = request.latitude,
-				longitude = request.longitude,
-				rating = request.rating,
 				visitOrder = visitOrder,
 				memo = normalizeOptional(request.memo),
 			)

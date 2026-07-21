@@ -5,7 +5,6 @@ import com.ktcloud.travelplanner.user.model.OAuthProvider
 import com.ktcloud.travelplanner.user.model.User
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
-import java.math.BigDecimal
 import java.time.LocalDate
 import kotlin.test.assertEquals
 
@@ -56,16 +55,11 @@ class TimelineItemTest {
 	}
 
 	@Test
-	fun `rejects coordinates and rating outside allowed ranges`() {
-		assertThrows<IllegalArgumentException> {
-			timelineItem(latitude = BigDecimal("90.000001"))
-		}
-		assertThrows<IllegalArgumentException> {
-			timelineItem(longitude = BigDecimal("-180.000001"))
-		}
-		assertThrows<IllegalArgumentException> {
-			timelineItem(rating = BigDecimal("5.1"))
-		}
+	fun `accepts nullable and long Google Place IDs`() {
+		val longPlaceId = "place".repeat(100)
+
+		assertEquals(longPlaceId, timelineItem(googlePlaceId = longPlaceId).googlePlaceId)
+		assertEquals(null, timelineItem(googlePlaceId = null).googlePlaceId)
 	}
 
 	@Test
@@ -80,9 +74,6 @@ class TimelineItemTest {
 			foodSubcategory = null,
 			name = "수정 일정",
 			googlePlaceId = null,
-			latitude = null,
-			longitude = null,
-			rating = null,
 			visitOrder = 2,
 			memo = null,
 		)
@@ -98,9 +89,6 @@ class TimelineItemTest {
 				TimelineCategory.ATTRACTION,
 				"일식",
 				item.name,
-				null,
-				null,
-				null,
 				null,
 				item.visitOrder,
 				null,
@@ -133,9 +121,7 @@ class TimelineItemTest {
 		visitDate: LocalDate = LocalDate.parse("2026-08-01"),
 		category: TimelineCategory = TimelineCategory.ATTRACTION,
 		foodSubcategory: String? = null,
-		latitude: BigDecimal? = BigDecimal("35.658581"),
-		longitude: BigDecimal? = BigDecimal("139.745433"),
-		rating: BigDecimal? = BigDecimal("4.5"),
+		googlePlaceId: String? = "google-place-id",
 		visitOrder: Short = 1,
 	): TimelineItem = TimelineItem(
 		travel = travel,
@@ -144,9 +130,7 @@ class TimelineItemTest {
 		category = category,
 		foodSubcategory = foodSubcategory,
 		name = "도쿄 타워",
-		latitude = latitude,
-		longitude = longitude,
-		rating = rating,
+		googlePlaceId = googlePlaceId,
 		visitOrder = visitOrder,
 	)
 }
