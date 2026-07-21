@@ -63,9 +63,6 @@ class TimelineItemUpdateControllerIntegrationTest(
 			  "foodSubcategory": null,
 			  "name": "수정 후 일정",
 			  "googlePlaceId": null,
-			  "latitude": null,
-			  "longitude": null,
-			  "rating": null,
 			  "memo": null
 			}
 			""".trimIndent(),
@@ -75,6 +72,9 @@ class TimelineItemUpdateControllerIntegrationTest(
 				jsonPath("$.data.name", equalTo("수정 후 일정"))
 				jsonPath("$.data.category", equalTo("기타"))
 				jsonPath("$.data.foodSubcategory", nullValue())
+				jsonPath("$.data.latitude") { doesNotExist() }
+				jsonPath("$.data.longitude") { doesNotExist() }
+				jsonPath("$.data.rating") { doesNotExist() }
 				jsonPath("$.data.memo", nullValue())
 			}
 	}

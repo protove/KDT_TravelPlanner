@@ -64,6 +64,9 @@ class TravelDetailControllerIntegrationTest(
 				jsonPath("$.data.permission", equalTo("OWNER"))
 				jsonPath("$.data.timelineItems", hasSize<Any>(3))
 				jsonPath("$.data.timelineItems[0].name", equalTo("1일차 첫 일정"))
+				jsonPath("$.data.timelineItems[0].latitude") { doesNotExist() }
+				jsonPath("$.data.timelineItems[0].longitude") { doesNotExist() }
+				jsonPath("$.data.timelineItems[0].rating") { doesNotExist() }
 				jsonPath("$.data.timelineItems[1].name", equalTo("1일차 두 번째 일정"))
 				jsonPath("$.data.timelineItems[2].name", equalTo("2일차 첫 일정"))
 			}

@@ -19,7 +19,7 @@ import org.springframework.transaction.annotation.Transactional
 import java.util.UUID
 
 @ActiveProfiles("test")
-@SpringBootTest(properties = ["app.external.google.places.api-key="])
+@SpringBootTest(properties = ["GOOGLE_MAPS_API_KEY="])
 @AutoConfigureMockMvc
 @Import(TestcontainersConfiguration::class)
 @Transactional

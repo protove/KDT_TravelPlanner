@@ -25,108 +25,111 @@ import java.util.UUID
 
 @Service
 class TravelUpdateService(
-	private val travelRepository: TravelRepository,
-	private val travelMemberRepository: TravelMemberRepository,
-	private val countryRepository: CountryRepository,
-	private val cityRepository: CityRepository,
-	private val timelineItemRepository: TimelineItemRepository,
+        private val travelRepository: TravelRepository,
+        private val travelMemberRepository: TravelMemberRepository,
+        private val countryRepository: CountryRepository,
+        private val cityRepository: CityRepository,
+        private val timelineItemRepository: TimelineItemRepository,
 ) {
-	@Transactional
-	fun updateTravel(
-		travelId: UUID,
-		requesterId: UUID,
-		request: TravelUpdateRequest,
-	): TravelDetailResponse {
-		val travel = travelRepository.findById(travelId).orElseThrow(::TravelUpdateNotFoundException)
-		val permission = resolveWritePermission(travel, requesterId)
-		if (travel.version != request.version) {
-			throw TravelVersionConflictException()
-		}
+        @Transactional
+        fun updateTravel(
+                travelId: UUID,
+                requesterId: UUID,
+                request: TravelUpdateRequest,
+        ): TravelDetailResponse {
+                val travel = travelRepository.findById(travelId).orElseThrow(::TravelUpdateNotFoundException)
+                val permission = resolveWritePermission(travel, requesterId)
+                if (travel.version != request.version) {
+                        throw TravelVersionConflictException()
+                }
 
-		val startDate = request.startDate.resolveRequired(travel.startDate)
-		val endDate = request.endDate.resolveRequired(travel.endDate)
-		val country = resolveCountry(request.countryId, travel.country)
-		val city = resolveCity(request.cityId, travel.city)
-		val timelineItems = timelineItemRepository.findAllByTravelIdOrderByDayNumberAscVisitOrderAsc(travelId)
-		validateTimelineDates(startDate, endDate, timelineItems)
+                val startDate = request.startDate.resolveRequired(travel.startDate)
+                val endDate = request.endDate.resolveRequired(travel.endDate)
+                val country = resolveCountry(request.countryId, travel.country)
+                val city = resolveCity(request.cityId, travel.city)
+                val timelineItems = timelineItemRepository.findAllByTravelIdOrderByDayNumberAscVisitOrderAsc(travelId)
+                validateTimelineDates(startDate, endDate, timelineItems)
 
-		try {
-			travel.updateBasicInfo(
-				title = request.title.resolveRequired(travel.title).trim(),
-				startDate = startDate,
-				endDate = endDate,
-				country = country,
-				city = city,
-				companionType = request.companionType.resolveNullable(travel.companionType),
-				participantCount = request.participantCount.resolveNullable(travel.participantCount?.toInt())?.toShort(),
-				comment = request.comment.resolveNullable(travel.comment),
-			)
-			val savedTravel = travelRepository.saveAndFlush(travel)
-			return TravelDetailResponse.from(savedTravel, permission, timelineItems)
-		} catch (_: IllegalArgumentException) {
-			throw InvalidTravelUpdateException()
-		} catch (_: OptimisticLockingFailureException) {
-			throw TravelVersionConflictException()
-		}
-	}
+                try {
+                        travel.updateBasicInfo(
+                                title = request.title.resolveRequired(travel.title).trim(),
+                                startDate = startDate,
+                                endDate = endDate,
+                                country = country,
+                                city = city,
+                                companionType = request.companionType.resolveNullable(travel.companionType),
+                                participantCount = request.participantCount.resolveNullable(travel.participantCount?.toInt())?.toShort(),
+                                comment = request.comment.resolveNullable(travel.comment),
+                        )
+                        val savedTravel = travelRepository.saveAndFlush(travel)
+                        return TravelDetailResponse.from(savedTravel, permission, timelineItems)
+                } catch (_: IllegalArgumentException) {
+                        throw InvalidTravelUpdateException()
+                } catch (_: OptimisticLockingFailureException) {
+                        throw TravelVersionConflictException()
+                }
+        }
 
-	private fun resolveWritePermission(
-		travel: Travel,
-		requesterId: UUID,
-	): TravelPermission {
-		if (travel.owner.id == requesterId) {
-			return TravelPermission.OWNER
-		}
-		if (travelMemberRepository.findAcceptedRole(travel.id, requesterId) != TravelRole.READ_WRITE) {
-			throw TravelUpdateAccessDeniedException()
-		}
-		return TravelPermission.READ_WRITE
-	}
+        private fun resolveWritePermission(
+                travel: Travel,
+                requesterId: UUID,
+        ): TravelPermission {
+                if (travel.owner.id == requesterId) {
+                        return TravelPermission.OWNER
+                }
+                if (travelMemberRepository.findAcceptedRole(travel.id, requesterId) != TravelRole.READ_WRITE) {
+                        throw TravelUpdateAccessDeniedException()
+                }
+                return TravelPermission.READ_WRITE
+        }
 
-	private fun resolveCountry(
-		field: PatchField<Short>,
-		current: Country?,
-	): Country? = when (field) {
-		PatchField.Absent -> current
-		is PatchField.Present -> field.value?.let { countryId ->
-			countryRepository.findByIdAndIsActiveTrue(countryId).orElseThrow(::TravelCountryNotFoundException)
-		}
-	}
+        private fun resolveCountry(
+                field: PatchField<Short>,
+                current: Country?,
+        ): Country? = when (field) {
+                PatchField.Absent -> current
+                is PatchField.Present -> field.value?.let { countryId ->
+                        countryRepository.findByIdAndIsActiveTrue(countryId).orElseThrow(::TravelCountryNotFoundException)
+                }
+        }
 
-	private fun resolveCity(
-		field: PatchField<Long>,
-		current: City?,
-	): City? = when (field) {
-		PatchField.Absent -> current
-		is PatchField.Present -> field.value?.let { cityId ->
-			cityRepository.findByIdAndIsActiveTrue(cityId).orElseThrow(::TravelCityNotFoundException)
-		}
-	}
+        private fun resolveCity(
+                field: PatchField<Long>,
+                current: City?,
+        ): City? = when (field) {
+                PatchField.Absent -> current
+                is PatchField.Present -> field.value?.let { cityId ->
+                        cityRepository.findByIdAndIsActiveTrue(cityId).orElseThrow(::TravelCityNotFoundException)
+                }
+        }
 
-	private fun validateTimelineDates(
-		startDate: LocalDate,
-		endDate: LocalDate,
-		timelineItems: List<TimelineItem>,
-	) {
-		val invalid = timelineItems.any { item ->
-			item.visitDate.isBefore(startDate) ||
-				item.visitDate.isAfter(endDate) ||
-				item.dayNumber.toLong() != ChronoUnit.DAYS.between(startDate, item.visitDate) + 1
-		}
-		if (invalid) {
-			throw TravelTimelineDateConflictException()
-		}
-	}
+        private fun validateTimelineDates(
+                startDate: LocalDate,
+                endDate: LocalDate,
+                timelineItems: List<TimelineItem>,
+        ) {
+                // 미배정 항목(dayNumber, visitDate가 null)은 여행 기간 검증 대상이 아니므로 건너뜀
+                val invalid = timelineItems.any { item ->
+                        val visitDate = item.visitDate ?: return@any false
+                        val dayNumber = item.dayNumber ?: return@any false
+                        visitDate.isBefore(startDate) ||
+                                visitDate.isAfter(endDate) ||
+                                dayNumber.toLong() != ChronoUnit.DAYS.between(startDate, visitDate) + 1
+                }
+                if (invalid) {
+                        throw TravelTimelineDateConflictException()
+                }
+        }
 
-	private fun <T> PatchField<T>.resolveRequired(current: T): T = when (this) {
-		PatchField.Absent -> current
-		is PatchField.Present -> value ?: throw InvalidTravelUpdateException()
-	}
+        private fun <T> PatchField<T>.resolveRequired(current: T): T = when (this) {
+                PatchField.Absent -> current
+                is PatchField.Present -> value ?: throw InvalidTravelUpdateException()
+        }
 
-	private fun <T> PatchField<T>.resolveNullable(current: T?): T? = when (this) {
-		PatchField.Absent -> current
-		is PatchField.Present -> value
-	}
+        private fun <T> PatchField<T>.resolveNullable(current: T?): T? = when (this) {
+                PatchField.Absent -> current
+                is PatchField.Present -> value
+        }
 }
 
 class TravelUpdateNotFoundException : DomainException(ErrorCode.RESOURCE_NOT_FOUND)
@@ -137,11 +140,11 @@ class TravelCityNotFoundException : DomainException(ErrorCode.RESOURCE_NOT_FOUND
 
 class TravelUpdateAccessDeniedException : DomainException(ErrorCode.ACCESS_DENIED)
 
-class InvalidTravelUpdateException : DomainException(ErrorCode.INVALID_REQUEST, "플랜 수정값이 올바르지 않습니다.")
+class InvalidTravelUpdateException : DomainException(ErrorCode.INVALID_REQUEST, "플랜 수정값이 올바르지않습니다.")
 
 class TravelTimelineDateConflictException : DomainException(
-	ErrorCode.CONFLICT,
-	"변경할 여행 기간과 기존 타임라인 날짜가 충돌합니다.",
+        ErrorCode.CONFLICT,
+        "변경할 여행 기간과 기존 타임라인 날짜가 충돌합니다.",
 )
 
 class TravelVersionConflictException : DomainException(ErrorCode.CONFLICT, "플랜이 다른 요청에 의해 변경되었습니다.")
