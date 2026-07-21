@@ -13,7 +13,7 @@ type Story = StoryObj<typeof meta>;
 export const Default: Story = {
   render: () => (
     <Select defaultValue="write">
-      <SelectTrigger className="w-[160px]">
+      <SelectTrigger className="w-[160px]" aria-label="권한 선택">
         <SelectValue placeholder="권한 선택" />
       </SelectTrigger>
       <SelectContent>
@@ -30,7 +30,7 @@ export const Default: Story = {
 export const CompanionType: Story = {
   render: () => (
     <Select defaultValue="friends">
-      <SelectTrigger className="w-[160px]">
+      <SelectTrigger className="w-[160px]" aria-label="동행 선택">
         <SelectValue placeholder="동행 선택" />
       </SelectTrigger>
       <SelectContent>
@@ -46,7 +46,7 @@ export const CompanionType: Story = {
 export const Disabled: Story = {
   render: () => (
     <Select disabled>
-      <SelectTrigger className="w-[160px]">
+      <SelectTrigger className="w-[160px]" aria-label="선택 불가">
         <SelectValue placeholder="선택 불가" />
       </SelectTrigger>
       <SelectContent>

@@ -51,9 +51,6 @@ class TimelineItemUpdateService(
                 val foodSubcategory = request.foodSubcategory.resolveOptionalText(item.foodSubcategory)
                 val name = request.name.resolveRequired(item.name).trim()
                 val googlePlaceId = request.googlePlaceId.resolveOptionalText(item.googlePlaceId)
-                val latitude = request.latitude.resolveNullable(item.latitude)
-                val longitude = request.longitude.resolveNullable(item.longitude)
-                val rating = request.rating.resolveNullable(item.rating)
                 val memo = request.memo.resolveOptionalText(item.memo)
 
                 // 미배정 상태(dayNumber == null)에서는 "같은 일차 내 순서 중복" 개념이 없으므로 검사하지 않음
@@ -77,9 +74,6 @@ class TimelineItemUpdateService(
                                 foodSubcategory = foodSubcategory,
                                 name = name,
                                 googlePlaceId = googlePlaceId,
-                                latitude = latitude,
-                                longitude = longitude,
-                                rating = rating,
                                 visitOrder = visitOrder,
                                 memo = memo,
                         )
@@ -144,7 +138,7 @@ class TimelineItemUpdateAccessDeniedException : DomainException(ErrorCode.ACCESS
 
 class InvalidTimelineItemUpdateException : DomainException(
         ErrorCode.INVALID_REQUEST,
-        "타임라인 수정값이 올바르지 않습니다.",
+        "타임라인 수정값이 올바르지않습니다.",
 )
 
 class TimelineItemOrderConflictException : DomainException(ErrorCode.CONFLICT, "같은 일차에 방문 순서가 중복됩니다.")

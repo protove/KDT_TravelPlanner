@@ -2,7 +2,6 @@ package com.ktcloud.travelplanner.timeline.dto
 
 import com.ktcloud.travelplanner.timeline.model.TimelineCategory
 import com.ktcloud.travelplanner.user.dto.PatchField
-import java.math.BigDecimal
 import java.time.LocalDate
 
 data class TimelineItemUpdateRequest(
@@ -13,9 +12,6 @@ data class TimelineItemUpdateRequest(
 	val foodSubcategory: PatchField<String> = PatchField.Absent,
 	val name: PatchField<String> = PatchField.Absent,
 	val googlePlaceId: PatchField<String> = PatchField.Absent,
-	val latitude: PatchField<BigDecimal> = PatchField.Absent,
-	val longitude: PatchField<BigDecimal> = PatchField.Absent,
-	val rating: PatchField<BigDecimal> = PatchField.Absent,
 	val visitOrder: PatchField<Int> = PatchField.Absent,
 	val memo: PatchField<String> = PatchField.Absent,
 )

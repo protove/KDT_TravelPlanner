@@ -151,9 +151,6 @@ class TimelineItemControllerIntegrationTest(
 		  "foodSubcategory": "일식",
 		  "name": "도쿄 스시",
 		  "googlePlaceId": "google-place-id",
-		  "latitude": 35.658581,
-		  "longitude": 139.745433,
-		  "rating": 4.5,
 		  "visitOrder": $visitOrder,
 		  "memo": "저녁 방문"
 		}
