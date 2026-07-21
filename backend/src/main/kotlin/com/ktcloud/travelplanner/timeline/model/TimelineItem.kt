@@ -16,144 +16,175 @@ import java.util.UUID
 @Entity
 @Table(name = "timeline_table")
 class TimelineItem(
-	@Id
-	val id: UUID = UUID.randomUUID(),
+        @Id
+        val id: UUID = UUID.randomUUID(),
 
-	@ManyToOne(fetch = FetchType.LAZY, optional = false)
-	@JoinColumn(name = "planner_id", nullable = false)
-	val travel: Travel,
+        @ManyToOne(fetch = FetchType.LAZY, optional = false)
+        @JoinColumn(name = "planner_id", nullable = false)
+        val travel: Travel,
 
-	dayNumber: Short,
-	visitDate: LocalDate,
+        // null이면 "미배정" 상태 (아직 날짜를 정하지 않은 후보 목적지)
+        dayNumber: Short?,
+        visitDate: LocalDate?,
 
-	@ManyToOne(fetch = FetchType.LAZY)
-	@JoinColumn(name = "city_id")
-	var city: City? = null,
+        @ManyToOne(fetch = FetchType.LAZY)
+        @JoinColumn(name = "city_id")
+        var city: City? = null,
 
-	category: TimelineCategory,
-	foodSubcategory: String? = null,
-	name: String,
-	googlePlaceId: String? = null,
-	visitOrder: Short,
-	memo: String? = null,
+        category: TimelineCategory,
+        foodSubcategory: String? = null,
+        name: String,
+        googlePlaceId: String? = null,
+        visitOrder: Short,
+        memo: String? = null,
 ) {
-	@Column(name = "day_number", nullable = false)
-	var dayNumber: Short = dayNumber
-		protected set
+        @Column(name = "day_number")
+        var dayNumber: Short? = dayNumber
+                protected set
 
-	@Column(name = "visit_date", nullable = false)
-	var visitDate: LocalDate = visitDate
-		protected set
+        @Column(name = "visit_date")
+        var visitDate: LocalDate? = visitDate
+                protected set
 
-	@Column(name = "category", nullable = false, length = 20)
-	private var categoryValue: String = category.toApiValue()
+        @Column(name = "category", nullable = false, length = 20)
+        private var categoryValue: String = category.toApiValue()
 
-	val category: TimelineCategory
-		get() = TimelineCategory.fromApiValue(categoryValue)
+        val category: TimelineCategory
+                get() = TimelineCategory.fromApiValue(categoryValue)
 
-	@Column(name = "food_subcategory", length = 30)
-	var foodSubcategory: String? = foodSubcategory
-		protected set
+        @Column(name = "food_subcategory", length = 30)
+        var foodSubcategory: String? = foodSubcategory
+                protected set
 
-	@Column(nullable = false, length = 100)
-	var name: String = name
-		protected set
+        @Column(nullable = false, length = 100)
+        var name: String = name
+                protected set
 
-	@Column(name = "google_place_id", columnDefinition = "TEXT")
-	var googlePlaceId: String? = googlePlaceId
-		protected set
+        @Column(name = "google_place_id", columnDefinition = "TEXT")
+        var googlePlaceId: String? = googlePlaceId
+                protected set
 
-	@Column(name = "visit_order", nullable = false)
-	var visitOrder: Short = visitOrder
-		protected set
+        @Column(name = "visit_order", nullable = false)
+        var visitOrder: Short = visitOrder
+                protected set
 
-	@Column(columnDefinition = "TEXT")
-	var memo: String? = memo
-		protected set
+        @Column(columnDefinition = "TEXT")
+        var memo: String? = memo
+                protected set
 
-	init {
-		validateDetails(
-			dayNumber,
-			visitDate,
-			category,
-			foodSubcategory,
-			name,
-			visitOrder,
-		)
-	}
+        init {
+                validateDetails(
+                        dayNumber,
+                        visitDate,
+                        category,
+                        foodSubcategory,
+                        name,
+                        visitOrder,
+                )
+        }
 
-	fun updateDetails(
-		dayNumber: Short,
-		visitDate: LocalDate,
-		city: City?,
-		category: TimelineCategory,
-		foodSubcategory: String?,
-		name: String,
-		googlePlaceId: String?,
-		visitOrder: Short,
-		memo: String?,
-	) {
-		validateDetails(
-			dayNumber,
-			visitDate,
-			category,
-			foodSubcategory,
-			name,
-			visitOrder,
-		)
-		this.dayNumber = dayNumber
-		this.visitDate = visitDate
-		this.city = city
-		this.categoryValue = category.toApiValue()
-		this.foodSubcategory = foodSubcategory
-		this.name = name
-		this.googlePlaceId = googlePlaceId
-		this.visitOrder = visitOrder
-		this.memo = memo
-	}
+        fun updateDetails(
+                dayNumber: Short?,
+                visitDate: LocalDate?,
+                city: City?,
+                category: TimelineCategory,
+                foodSubcategory: String?,
+                name: String,
+                googlePlaceId: String?,
+                visitOrder: Short,
+                memo: String?,
+        ) {
+                validateDetails(
+                        dayNumber,
+                        visitDate,
+                        category,
+                        foodSubcategory,
+                        name,
+                        visitOrder,
+                )
+                this.dayNumber = dayNumber
+                this.visitDate = visitDate
+                this.city = city
+                this.categoryValue = category.toApiValue()
+                this.foodSubcategory = foodSubcategory
+                this.name = name
+                this.googlePlaceId = googlePlaceId
+                this.visitOrder = visitOrder
+                this.memo = memo
+        }
 
-	fun moveVisitOrderEarlier() {
-		require(visitOrder > 1) { "visitOrder must remain positive." }
-		visitOrder--
-	}
+        // 미배정 상태의 목적지를 특정 날짜로 배정할 때 사용
+        fun assignToDay(
+                dayNumber: Short,
+                visitDate: LocalDate,
+        ) {
+                validateDayAndDate(dayNumber, visitDate)
+                this.dayNumber = dayNumber
+                this.visitDate = visitDate
+        }
 
-	fun changeVisitOrder(newVisitOrder: Short) {
-		require(newVisitOrder > 0) { "visitOrder must be positive." }
-		visitOrder = newVisitOrder
-	}
+        // 배정된 목적지를 다시 미배정 상태로 되돌릴 때 사용
+        fun unassign() {
+                this.dayNumber = null
+                this.visitDate = null
+        }
 
-	private fun validateDetails(
-		dayNumber: Short,
-		visitDate: LocalDate,
-		category: TimelineCategory,
-		foodSubcategory: String?,
-		name: String,
-		visitOrder: Short,
-	) {
-		require(dayNumber > 0) { "dayNumber must be positive." }
-		require(visitOrder > 0) { "visitOrder must be positive." }
-		require(name.isNotBlank()) { "name must not be blank." }
-		require(name.length <= NAME_MAX_LENGTH) { "name must not exceed $NAME_MAX_LENGTH characters." }
-		require(foodSubcategory == null || foodSubcategory.isNotBlank()) {
-			"foodSubcategory must not be blank."
-		}
-		require(foodSubcategory == null || foodSubcategory.length <= FOOD_SUBCATEGORY_MAX_LENGTH) {
-			"foodSubcategory must not exceed $FOOD_SUBCATEGORY_MAX_LENGTH characters."
-		}
-		require(foodSubcategory == null || category == TimelineCategory.FOOD) {
-			"foodSubcategory is allowed only for food category."
-		}
-		require(!visitDate.isBefore(travel.startDate) && !visitDate.isAfter(travel.endDate)) {
-			"visitDate must be within the travel period."
-		}
-		val expectedDayNumber = ChronoUnit.DAYS.between(travel.startDate, visitDate) + 1
-		require(dayNumber.toLong() == expectedDayNumber) {
-			"dayNumber must match visitDate."
-		}
-	}
+        fun moveVisitOrderEarlier() {
+                require(visitOrder > 1) { "visitOrder must remain positive." }
+                visitOrder--
+        }
 
-	companion object {
-		private const val NAME_MAX_LENGTH = 100
-		private const val FOOD_SUBCATEGORY_MAX_LENGTH = 30
-	}
+        fun changeVisitOrder(newVisitOrder: Short) {
+                require(newVisitOrder > 0) { "visitOrder must be positive." }
+                visitOrder = newVisitOrder
+        }
+
+        private fun validateDetails(
+                dayNumber: Short?,
+                visitDate: LocalDate?,
+                category: TimelineCategory,
+                foodSubcategory: String?,
+                name: String,
+                visitOrder: Short,
+        ) {
+                // dayNumber와 visitDate는 둘 다 있거나 둘 다 없어야 함 (미배정 상태 표현)
+                require((dayNumber == null) == (visitDate == null)) {
+                        "dayNumber and visitDate must be both null or both present."
+                }
+                if (dayNumber != null && visitDate != null) {
+                        validateDayAndDate(dayNumber, visitDate)
+                }
+                require(visitOrder > 0) { "visitOrder must be positive." }
+                require(name.isNotBlank()) { "name must not be blank." }
+                require(name.length <= NAME_MAX_LENGTH) { "name must not exceed $NAME_MAX_LENGTH characters." }
+                require(foodSubcategory == null || foodSubcategory.isNotBlank()) {
+                        "foodSubcategory must not be blank."
+                }
+                require(foodSubcategory == null || foodSubcategory.length <= FOOD_SUBCATEGORY_MAX_LENGTH) {
+                        "foodSubcategory must not exceed $FOOD_SUBCATEGORY_MAX_LENGTH characters."
+                }
+                require(foodSubcategory == null || category == TimelineCategory.FOOD) {
+                        "foodSubcategory is allowed only for food category."
+                }
+        }
+
+        // dayNumber/visitDate가 둘 다 값이 있을 때만 호출되는 교차 검증
+        private fun validateDayAndDate(
+                dayNumber: Short,
+                visitDate: LocalDate,
+        ) {
+                require(dayNumber > 0) { "dayNumber must be positive." }
+                require(!visitDate.isBefore(travel.startDate) && !visitDate.isAfter(travel.endDate)) {
+                        "visitDate must be within the travel period."
+                }
+                val expectedDayNumber = ChronoUnit.DAYS.between(travel.startDate, visitDate) + 1
+                require(dayNumber.toLong() == expectedDayNumber) {
+                        "dayNumber must match visitDate."
+                }
+        }
+
+        companion object {
+                private const val NAME_MAX_LENGTH = 100
+                private const val FOOD_SUBCATEGORY_MAX_LENGTH = 30
+        }
 }

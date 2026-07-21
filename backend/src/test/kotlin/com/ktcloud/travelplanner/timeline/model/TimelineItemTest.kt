@@ -25,7 +25,7 @@ class TimelineItemTest {
 			foodSubcategory = "일식",
 		)
 
-		assertEquals(2, item.dayNumber.toInt())
+		assertEquals(2, item.dayNumber?.toInt())
 		assertEquals(LocalDate.parse("2026-08-02"), item.visitDate)
 		assertEquals(TimelineCategory.FOOD, item.category)
 	}
@@ -78,7 +78,7 @@ class TimelineItemTest {
 			memo = null,
 		)
 
-		assertEquals(2, item.dayNumber.toInt())
+		assertEquals(2, item.dayNumber?.toInt())
 		assertEquals(TimelineCategory.OTHER, item.category)
 		assertEquals("수정 일정", item.name)
 		assertThrows<IllegalArgumentException> {

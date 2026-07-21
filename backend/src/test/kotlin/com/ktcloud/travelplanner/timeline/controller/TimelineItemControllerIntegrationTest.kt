@@ -62,7 +62,7 @@ class TimelineItemControllerIntegrationTest(
 		entityManager.clear()
 		val item = timelineItemRepository.findAll().single()
 		assertEquals(travel.id, item.travel.id)
-		assertEquals(1, item.dayNumber.toInt())
+		assertEquals(1, item.dayNumber?.toInt())
 		assertEquals(LocalDate.parse("2026-08-01"), item.visitDate)
 		assertEquals(TimelineCategory.FOOD, item.category)
 		assertEquals("일식", item.foodSubcategory)
