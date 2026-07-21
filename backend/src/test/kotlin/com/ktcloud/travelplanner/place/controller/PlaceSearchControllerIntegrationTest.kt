@@ -46,6 +46,7 @@ class PlaceSearchControllerIntegrationTest(
 			param("countryCode", "jp")
 		}.andExpect {
 			status { isOk() }
+			header { string(HttpHeaders.CACHE_CONTROL, "no-store") }
 			jsonPath("$.data[0].placeId", equalTo("place-success"))
 			jsonPath("$.data[0].name", equalTo("도쿄 타워"))
 			jsonPath("$.data[0].rating", equalTo(4.5))
@@ -90,7 +91,7 @@ class PlaceSearchControllerIntegrationTest(
 		@JvmStatic
 		@DynamicPropertySource
 		fun googlePlacesProperties(registry: DynamicPropertyRegistry) {
-			registry.add("app.external.google.places.api-key") { "integration-places-key" }
+			registry.add("GOOGLE_MAPS_API_KEY") { "integration-google-maps-key" }
 			registry.add("app.external.google.places.base-url") {
 				"http://127.0.0.1:${googleServer.address.port}"
 			}
