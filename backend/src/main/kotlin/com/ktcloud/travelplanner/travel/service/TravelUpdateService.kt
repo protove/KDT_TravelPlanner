@@ -14,6 +14,7 @@ import com.ktcloud.travelplanner.timeline.repository.TimelineItemRepository
 import com.ktcloud.travelplanner.travel.dto.TravelDetailResponse
 import com.ktcloud.travelplanner.travel.dto.TravelUpdateRequest
 import com.ktcloud.travelplanner.travel.model.Travel
+import com.ktcloud.travelplanner.travel.model.TravelPurpose
 import com.ktcloud.travelplanner.travel.repository.TravelRepository
 import com.ktcloud.travelplanner.user.dto.PatchField
 import org.springframework.dao.OptimisticLockingFailureException
@@ -47,6 +48,7 @@ class TravelUpdateService(
                 val endDate = request.endDate.resolveRequired(travel.endDate)
                 val country = resolveCountry(request.countryId, travel.country)
                 val city = resolveCity(request.cityId, travel.city)
+                val purposes = request.purposes.resolveRequired(travel.purposes)
                 val timelineItems = timelineItemRepository.findAllByTravelIdOrderByDayNumberAscVisitOrderAsc(travelId)
                 validateTimelineDates(startDate, endDate, timelineItems)
 
@@ -60,6 +62,7 @@ class TravelUpdateService(
                                 companionType = request.companionType.resolveNullable(travel.companionType),
                                 participantCount = request.participantCount.resolveNullable(travel.participantCount?.toInt())?.toShort(),
                                 comment = request.comment.resolveNullable(travel.comment),
+                                purposes = purposes,
                         )
                         val savedTravel = travelRepository.saveAndFlush(travel)
                         return TravelDetailResponse.from(savedTravel, permission, timelineItems)
