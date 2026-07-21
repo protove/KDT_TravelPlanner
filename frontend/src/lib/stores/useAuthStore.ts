@@ -1,6 +1,7 @@
 "use client";
 
 import { create } from "zustand";
+import { persist } from "zustand/middleware";
 import type { Gender } from "@/components/organisms/ProfileSection";
 
 export type AuthProvider = "google" | "naver";
@@ -31,7 +32,9 @@ const MOCK_USER_BY_PROVIDER: Record<AuthProvider, AuthUser> = {
   naver: { nickname: "여행자8842", initial: "여", avatarColor: "#03c75a", gender: "unspecified", age: "" },
 };
 
-export const useAuthStore = create<AuthState>((set) => ({
+export const useAuthStore = create<AuthState>()(
+  persist(
+    (set) => ({
   isLoggedIn: false,
   user: null,
   login: (provider) => {
@@ -55,4 +58,7 @@ export const useAuthStore = create<AuthState>((set) => ({
         },
       };
     }),
-}));
+    }),
+    { name: "auth" },
+  ),
+);

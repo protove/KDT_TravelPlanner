@@ -22,10 +22,6 @@ export default function TripsPage() {
   const [tab, setTab] = React.useState<ListTab>("mine");
   const [query, setQuery] = React.useState("");
 
-  React.useEffect(() => {
-    if (!isLoggedIn) router.replace("/landing");
-  }, [isLoggedIn, router]);
-
   if (!isLoggedIn) return null;
 
   const filtered = trips

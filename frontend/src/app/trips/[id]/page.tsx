@@ -99,10 +99,6 @@ export default function TripDetailPage() {
   ]);
 
   React.useEffect(() => {
-    if (!isLoggedIn) router.replace("/landing");
-  }, [isLoggedIn, router]);
-
-  React.useEffect(() => {
     if (id && !/^\d+$/.test(id)) router.replace("/403");
   }, [id, router]);
 
