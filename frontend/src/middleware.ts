@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 
-const PROTECTED = ["/trips", "/mypage", "/notifications"];
+const PROTECTED = ["/trips", "/mypage", "/notifications", "/community"];
 const GUEST_ONLY = ["/auth", "/landing"];
 
 export function middleware(request: NextRequest) {
@@ -34,5 +34,6 @@ export const config = {
     "/trips/:path*",
     "/mypage/:path*",
     "/notifications/:path*",
+    "/community/:path*",
   ],
 };
