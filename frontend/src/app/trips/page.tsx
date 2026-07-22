@@ -16,6 +16,7 @@ type ListTab = "mine" | "shared";
 export default function TripsPage() {
   const router = useRouter();
   const isLoggedIn = useAuthStore((s) => s.isLoggedIn);
+  const isInitializing = useAuthStore((s) => s.isInitializing);
   const user = useAuthStore((s) => s.user);
   const trips = useTripStore((s) => s.trips);
 
@@ -23,10 +24,10 @@ export default function TripsPage() {
   const [query, setQuery] = React.useState("");
 
   React.useEffect(() => {
-    if (!isLoggedIn) router.replace("/landing");
-  }, [isLoggedIn, router]);
+    if (!isInitializing && !isLoggedIn) router.replace("/landing");
+  }, [isInitializing, isLoggedIn, router]);
 
-  if (!isLoggedIn) return null;
+  if (isInitializing || !isLoggedIn) return null;
 
   const filtered = trips
     .filter((trip) => (tab === "mine" ? trip.mine : !trip.mine))
@@ -40,6 +41,7 @@ export default function TripsPage() {
           userInitial={user?.initial}
           avatarColor={user?.avatarColor}
           onLogoClick={() => router.push("/landing")}
+          onProfileClick={() => router.push("/mypage")}
         />
       }
       title={<h1 className="text-2xl font-bold text-foreground">여행일정</h1>}
