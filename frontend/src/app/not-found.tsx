@@ -1,6 +1,6 @@
 import Link from "next/link";
 
-export default function ForbiddenPage() {
+export default function NotFound() {
   return (
     <main style={{ padding: 40 }}>
       <h1>접근할 수 없는 페이지입니다</h1>

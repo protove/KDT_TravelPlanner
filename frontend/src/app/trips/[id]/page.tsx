@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useParams } from "next/navigation";
 import { Pencil, Trash2 } from "lucide-react";
 import { Button } from "@/components/atoms/Button";
 import { Input } from "@/components/atoms/Input";
@@ -49,6 +49,7 @@ function getDateTabs(start: Date, end: Date) {
 
 export default function TripDetailPage() {
   const router = useRouter();
+  const { id } = useParams<{ id: string }>();
   const isLoggedIn = useAuthStore((s) => s.isLoggedIn);
   const isInitializing = useAuthStore((s) => s.isInitializing);
   const user = useAuthStore((s) => s.user);
@@ -98,9 +99,13 @@ export default function TripDetailPage() {
     { id: "3", name: "최준서", avatarColor: "#64748b", permission: "read", status: "pending" },
   ]);
 
-  React.useEffect(() => {
-    if (!isInitializing && !isLoggedIn) router.replace("/landing");
-  }, [isInitializing, isLoggedIn, router]);
+React.useEffect(() => {
+  if (!isInitializing && !isLoggedIn) router.replace("/landing");
+}, [isInitializing, isLoggedIn, router]);
+
+React.useEffect(() => {
+  if (id && !/^\d+$/.test(id)) router.replace("/403");
+}, [id, router]);
 
   if (isInitializing || !isLoggedIn || !user) return null;
 
@@ -151,15 +156,7 @@ export default function TripDetailPage() {
   return (
     <>
       <DetailLayout
-      header={
-        <AppHeader
-          loggedIn
-          userInitial={user.initial}
-          avatarColor={user.avatarColor}
-          onLogoClick={() => router.push("/trips")}
-          onProfileClick={() => router.push("/mypage")}
-        />
-      }
+      header={<AppHeader loggedIn userInitial={user.initial} avatarColor={user.avatarColor} onLogoClick={() => router.push("/trips")} onProfileClick={() => router.push("/mypage")} onNotificationClick={() => router.push("/notifications")} />}
       detailHeader={
         <div className="flex flex-col gap-5">
           <button type="button" onClick={() => router.push("/trips")} className="text-sm font-bold text-primary">
@@ -183,7 +180,7 @@ export default function TripDetailPage() {
               </div>
               <div className="mt-1.5 flex">
                 {members.map((m, i) => (
-                  <Avatar key={i} className="h-[22px] w-[22px] ring-2 ring-background" style={i > 0 ? { marginLeft: "-6px" } : undefined}>
+                  <Avatar key={i} className="h-[22px] w-[22px]" style={i > 0 ? { marginLeft: "-6px" } : undefined}>
                     <AvatarFallback className="text-[10px] text-white" style={{ background: m.color }}>
                       {m.initial}
                     </AvatarFallback>
