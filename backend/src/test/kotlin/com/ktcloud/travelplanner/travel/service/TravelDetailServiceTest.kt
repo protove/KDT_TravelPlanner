@@ -8,6 +8,7 @@ import com.ktcloud.travelplanner.timeline.model.TimelineCategory
 import com.ktcloud.travelplanner.timeline.model.TimelineItem
 import com.ktcloud.travelplanner.timeline.repository.TimelineItemRepository
 import com.ktcloud.travelplanner.travel.model.Travel
+import com.ktcloud.travelplanner.travel.repository.PlannerPurposeRepository
 import com.ktcloud.travelplanner.travel.repository.TravelRepository
 import com.ktcloud.travelplanner.user.model.User
 import org.junit.jupiter.api.Test
@@ -25,10 +26,12 @@ class TravelDetailServiceTest {
 	private val travelRepository = mock(TravelRepository::class.java)
 	private val travelMemberRepository = mock(TravelMemberRepository::class.java)
 	private val timelineItemRepository = mock(TimelineItemRepository::class.java)
+	private val plannerPurposeRepository = mock(PlannerPurposeRepository::class.java)
 	private val service = TravelDetailService(
 		travelRepository,
 		travelMemberRepository,
 		timelineItemRepository,
+		plannerPurposeRepository,
 	)
 
 	@Test
@@ -45,6 +48,7 @@ class TravelDetailServiceTest {
 		`when`(travelRepository.findById(TRAVEL_ID)).thenReturn(Optional.of(travel))
 		`when`(timelineItemRepository.findAllByTravelIdOrderByDayNumberAscVisitOrderAsc(TRAVEL_ID))
 			.thenReturn(listOf(timelineItem))
+		`when`(plannerPurposeRepository.findAllByTravelId(TRAVEL_ID)).thenReturn(emptyList())
 
 		val response = service.getTravelDetail(TRAVEL_ID, OWNER_ID)
 
@@ -61,6 +65,7 @@ class TravelDetailServiceTest {
 		`when`(travelRepository.findById(TRAVEL_ID)).thenReturn(Optional.of(travel))
 		`when`(timelineItemRepository.findAllByTravelIdOrderByDayNumberAscVisitOrderAsc(TRAVEL_ID))
 			.thenReturn(emptyList())
+		`when`(plannerPurposeRepository.findAllByTravelId(TRAVEL_ID)).thenReturn(emptyList())
 		`when`(travelMemberRepository.findAcceptedRole(TRAVEL_ID, MEMBER_ID))
 			.thenReturn(TravelRole.READ_ONLY)
 
