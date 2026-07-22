@@ -9,6 +9,7 @@ import com.ktcloud.travelplanner.timeline.model.TimelineItem
 import com.ktcloud.travelplanner.timeline.repository.TimelineItemRepository
 import com.ktcloud.travelplanner.travel.dto.TravelUpdateRequest
 import com.ktcloud.travelplanner.travel.model.Travel
+import com.ktcloud.travelplanner.travel.repository.PlannerPurposeRepository
 import com.ktcloud.travelplanner.travel.repository.TravelRepository
 import com.ktcloud.travelplanner.user.dto.PatchField
 import com.ktcloud.travelplanner.user.model.User
@@ -32,12 +33,14 @@ class TravelUpdateServiceTest {
 	private val countryRepository = mock(CountryRepository::class.java)
 	private val cityRepository = mock(CityRepository::class.java)
 	private val timelineItemRepository = mock(TimelineItemRepository::class.java)
+	private val plannerPurposeRepository = mock(PlannerPurposeRepository::class.java)
 	private val service = TravelUpdateService(
 		travelRepository,
 		travelMemberRepository,
 		countryRepository,
 		cityRepository,
 		timelineItemRepository,
+		plannerPurposeRepository,
 	)
 
 	@Test
