@@ -39,7 +39,8 @@ class OAuthController(
 	@GetMapping("/{provider}/callback")
 	fun callback(
 		@PathVariable provider: String,
-		@RequestParam @NotBlank code: String,
+		@RequestParam(required = false) code: String?,
+		@RequestParam(required = false) error: String?,
 		@RequestParam @NotBlank state: String,
 		@CookieValue(name = OAuthStateCookieFactory.COOKIE_NAME, required = false) stateCookie: String?,
 		response: HttpServletResponse,
@@ -47,7 +48,15 @@ class OAuthController(
 		response.addHeader(HttpHeaders.SET_COOKIE, stateCookieFactory.expire().toString())
 		return ResponseEntity
 			.status(HttpStatus.FOUND)
-			.location(loginService.completeLogin(provider, code, state, stateCookie))
+			.location(
+				loginService.completeAuthorization(
+					providerName = provider,
+					authorizationCode = code,
+					authorizationError = error,
+					state = state,
+					stateCookie = stateCookie,
+				),
+			)
 			.build()
 	}
 }

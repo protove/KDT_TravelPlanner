@@ -26,6 +26,7 @@ import org.springframework.transaction.annotation.Transactional
 import org.springframework.web.util.UriComponentsBuilder
 import java.net.InetSocketAddress
 import java.nio.charset.StandardCharsets
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.test.assertEquals
 
@@ -118,6 +119,113 @@ class GoogleOAuthFlowIntegrationTest(
 	}
 
 	@Test
+	fun `Google access denied consumes state and redirects without provider call or user change`() {
+		tokenRequestCount.set(0)
+		val userCount = userRepository.count()
+		val (state, stateCookie) = startGoogleLogin()
+
+		mockMvc.get("/api/v1/auth/oauth2/google/callback") {
+			param("error", "access_denied")
+			param("error_description", "User denied access")
+			param("state", state)
+			cookie(stateCookie)
+		}
+			.andExpect {
+				status { isFound() }
+				header { string(HttpHeaders.LOCATION, "$FRONTEND_REDIRECT_URL?error=access_denied") }
+				header {
+					string(
+						HttpHeaders.SET_COOKIE,
+						org.hamcrest.Matchers.containsString("${OAuthStateCookieFactory.COOKIE_NAME}=;"),
+					)
+				}
+			}
+
+		assertEquals(0, tokenRequestCount.get())
+		assertEquals(userCount, userRepository.count())
+
+		mockMvc.get("/api/v1/auth/oauth2/google/callback") {
+			param("error", "access_denied")
+			param("state", state)
+			cookie(stateCookie)
+		}
+			.andExpect {
+				status { isBadRequest() }
+				jsonPath("$.code", equalTo("INVALID_OAUTH_STATE"))
+			}
+		assertEquals(0, tokenRequestCount.get())
+	}
+
+	@Test
+	fun `Google callback rejects code and error together without consuming Redis state`() {
+		tokenRequestCount.set(0)
+		val (state, stateCookie) = startGoogleLogin()
+
+		mockMvc.get("/api/v1/auth/oauth2/google/callback") {
+			param("code", "provider-code")
+			param("error", "access_denied")
+			param("state", state)
+			cookie(stateCookie)
+		}
+			.andExpect {
+				status { isBadRequest() }
+				jsonPath("$.code", equalTo("INVALID_REQUEST"))
+				header {
+					string(
+						HttpHeaders.SET_COOKIE,
+						org.hamcrest.Matchers.containsString("${OAuthStateCookieFactory.COOKIE_NAME}=;"),
+					)
+				}
+			}
+		assertEquals(0, tokenRequestCount.get())
+
+		mockMvc.get("/api/v1/auth/oauth2/google/callback") {
+			param("error", "access_denied")
+			param("state", state)
+			cookie(stateCookie)
+		}
+			.andExpect {
+				status { isFound() }
+				header { string(HttpHeaders.LOCATION, "$FRONTEND_REDIRECT_URL?error=access_denied") }
+			}
+	}
+
+	@Test
+	fun `Google callback rejects missing code and error without consuming Redis state`() {
+		tokenRequestCount.set(0)
+		val userCount = userRepository.count()
+		val (state, stateCookie) = startGoogleLogin()
+
+		mockMvc.get("/api/v1/auth/oauth2/google/callback") {
+			param("state", state)
+			cookie(stateCookie)
+		}
+			.andExpect {
+				status { isBadRequest() }
+				jsonPath("$.code", equalTo("INVALID_REQUEST"))
+				header {
+					string(
+						HttpHeaders.SET_COOKIE,
+						org.hamcrest.Matchers.containsString("${OAuthStateCookieFactory.COOKIE_NAME}=;"),
+					)
+				}
+			}
+
+		assertEquals(0, tokenRequestCount.get())
+		assertEquals(userCount, userRepository.count())
+
+		mockMvc.get("/api/v1/auth/oauth2/google/callback") {
+			param("error", "access_denied")
+			param("state", state)
+			cookie(stateCookie)
+		}
+			.andExpect {
+				status { isFound() }
+				header { string(HttpHeaders.LOCATION, "$FRONTEND_REDIRECT_URL?error=access_denied") }
+			}
+	}
+
+	@Test
 	fun `blank Google callback parameters return common 400 response`() {
 		mockMvc.get("/api/v1/auth/oauth2/google/callback") {
 			param("code", "")
@@ -183,6 +291,7 @@ class GoogleOAuthFlowIntegrationTest(
 		private const val FRONTEND_REDIRECT_URL = "http://localhost:3000/auth/callback"
 		private const val AUTHORIZATION_URL = "http://accounts.example/oauth2/auth"
 		private val profileName = AtomicReference("Google User")
+		private val tokenRequestCount = AtomicInteger()
 		private val googleServer: HttpServer = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
 			.apply {
 				createContext("/token", ::handleToken)
@@ -206,6 +315,7 @@ class GoogleOAuthFlowIntegrationTest(
 		}
 
 		private fun handleToken(exchange: HttpExchange) {
+			tokenRequestCount.incrementAndGet()
 			val requestBody = exchange.requestBody.readAllBytes().toString(StandardCharsets.UTF_8)
 			if (requestBody.contains("code=provider-error")) {
 				respond(exchange, 500, """{"error":"provider-internal-detail"}""")
