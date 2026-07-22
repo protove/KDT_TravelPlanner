@@ -17,25 +17,18 @@ export interface AuthUser {
 interface AuthState {
   isLoggedIn: boolean;
   user: AuthUser | null;
-  login: (provider: AuthProvider) => void;
+  accessToken: string | null;
+  setSession: (accessToken: string, user: AuthUser) => void;
   logout: () => void;
   updateProfile: (patch: Partial<Pick<AuthUser, "nickname" | "gender" | "age">>) => void;
 }
 
-/**
- * 백엔드 연동 전 mock. 실제로는 SSO 콜백 후 서버가 내려주는 JWT+세션과
- * 자동 생성된 닉네임으로 대체된다 (IA 문서: "가입 시 닉네임 자동 생성").
- */
-const MOCK_USER_BY_PROVIDER: Record<AuthProvider, AuthUser> = {
-  google: { nickname: "여행자3021", initial: "여", avatarColor: "#3b82f6", gender: "unspecified", age: "" },
-  naver: { nickname: "여행자8842", initial: "여", avatarColor: "#03c75a", gender: "unspecified", age: "" },
-};
-
 export const useAuthStore = create<AuthState>((set) => ({
   isLoggedIn: false,
   user: null,
-  login: (provider) => set({ isLoggedIn: true, user: MOCK_USER_BY_PROVIDER[provider] }),
-  logout: () => set({ isLoggedIn: false, user: null }),
+  accessToken: null,
+  setSession: (accessToken, user) => set({ isLoggedIn: true, accessToken, user }),
+  logout: () => set({ isLoggedIn: false, user: null, accessToken: null }),
   updateProfile: (patch) =>
     set((s) => {
       if (!s.user) return s;
