@@ -50,6 +50,7 @@ function getDateTabs(start: Date, end: Date) {
 export default function TripDetailPage() {
   const router = useRouter();
   const isLoggedIn = useAuthStore((s) => s.isLoggedIn);
+  const isInitializing = useAuthStore((s) => s.isInitializing);
   const user = useAuthStore((s) => s.user);
 
   const trips = useTripStore((s) => s.trips);
@@ -98,10 +99,10 @@ export default function TripDetailPage() {
   ]);
 
   React.useEffect(() => {
-    if (!isLoggedIn) router.replace("/landing");
-  }, [isLoggedIn, router]);
+    if (!isInitializing && !isLoggedIn) router.replace("/landing");
+  }, [isInitializing, isLoggedIn, router]);
 
-  if (!isLoggedIn || !user) return null;
+  if (isInitializing || !isLoggedIn || !user) return null;
 
   const dateTabs = getDateTabs(info.dateRange.start, info.dateRange.end);
   const activeDayItems = places
@@ -150,7 +151,15 @@ export default function TripDetailPage() {
   return (
     <>
       <DetailLayout
-      header={<AppHeader loggedIn userInitial={user.initial} avatarColor={user.avatarColor} onLogoClick={() => router.push("/trips")} />}
+      header={
+        <AppHeader
+          loggedIn
+          userInitial={user.initial}
+          avatarColor={user.avatarColor}
+          onLogoClick={() => router.push("/trips")}
+          onProfileClick={() => router.push("/mypage")}
+        />
+      }
       detailHeader={
         <div className="flex flex-col gap-5">
           <button type="button" onClick={() => router.push("/trips")} className="text-sm font-bold text-primary">
