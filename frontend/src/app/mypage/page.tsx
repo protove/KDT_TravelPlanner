@@ -31,10 +31,6 @@ export default function MypagePage() {
   const [tab, setTab] = React.useState<MypageTab>("profile");
   const [showWithdraw, setShowWithdraw] = React.useState(false);
 
-  React.useEffect(() => {
-    if (!isLoggedIn) router.replace("/landing");
-  }, [isLoggedIn, router]);
-
   if (!isLoggedIn || !user) return null;
 
   function handleLogout() {
@@ -49,7 +45,7 @@ export default function MypagePage() {
 
   return (
     <MyPageLayout
-      header={<AppHeader loggedIn userInitial={user.initial} avatarColor={user.avatarColor} onLogoClick={() => router.push("/trips")} />}
+      header={<AppHeader loggedIn userInitial={user.initial} avatarColor={user.avatarColor} onLogoClick={() => router.push("/trips")} onProfileClick={() => router.push("/mypage")} onNotificationClick={() => router.push("/notifications")} />}
       tabs={TABS}
       activeTab={tab}
       onTabChange={(key) => setTab(key as MypageTab)}

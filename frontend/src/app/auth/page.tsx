@@ -1,17 +1,19 @@
 "use client";
 
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { Button } from "@/components/atoms/Button";
 import { AuthLayout } from "@/components/templates/AuthLayout";
 import { useAuthStore, type AuthProvider } from "@/lib/stores/useAuthStore";
 
 export default function AuthPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const login = useAuthStore((s) => s.login);
 
   function handleLogin(provider: AuthProvider) {
     login(provider);
-    router.push("/trips");
+    const redirect = searchParams.get("redirect");
+    router.push(redirect?.startsWith("/") ? redirect : "/trips");
   }
 
   return (
