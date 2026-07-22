@@ -21,7 +21,7 @@ function FormField({ label, htmlFor, description, error, required, children, cla
       </Label>
       {children}
       {error ? (
-        <p className="text-xs text-destructive">{error}</p>
+        <p className="text-xs text-red-700">{error}</p>
       ) : description ? (
         <p className="text-xs text-muted-foreground">{description}</p>
       ) : null}

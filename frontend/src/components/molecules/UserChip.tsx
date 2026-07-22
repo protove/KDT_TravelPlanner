@@ -18,7 +18,7 @@ function UserChip({ name, avatarSrc, avatarColor, className }: UserChipProps) {
           className={avatarColor ? "text-white" : undefined}
           style={avatarColor ? { background: avatarColor } : undefined}
         >
-          {name.slice(0, 1)}
+        {name.slice(0, 1)}
         </AvatarFallback>
       </Avatar>
       <span className="text-sm font-medium text-foreground">{name}</span>

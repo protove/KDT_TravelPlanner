@@ -10,8 +10,8 @@ export interface CommentRowProps {
   className?: string;
 }
 
-function CommentRow({ name, avatarColor = "var(--brand-500)", timeLabel, text, className }: CommentRowProps) {
-  return (
+function CommentRow({ name, avatarColor = "var(--brand-700)", timeLabel, text, className }: CommentRowProps) {
+    return (
     <div className={cn("flex gap-2.5", className)}>
       <Avatar className="h-[30px] w-[30px] shrink-0">
         <AvatarFallback className="text-xs text-white" style={{ background: avatarColor }}>
