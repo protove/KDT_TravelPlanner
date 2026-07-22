@@ -175,7 +175,7 @@ export default function TripDetailPage() {
               </div>
               <div className="mt-1.5 flex">
                 {members.map((m, i) => (
-                  <Avatar key={i} className="h-[22px] w-[22px] ring-2 ring-background" style={i > 0 ? { marginLeft: "-6px" } : undefined}>
+                  <Avatar key={i} className="h-[22px] w-[22px]" style={i > 0 ? { marginLeft: "-6px" } : undefined}>
                     <AvatarFallback className="text-[10px] text-white" style={{ background: m.color }}>
                       {m.initial}
                     </AvatarFallback>
