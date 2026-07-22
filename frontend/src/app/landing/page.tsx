@@ -10,14 +10,16 @@ import { useAuthStore } from "@/lib/stores/useAuthStore";
 export default function LandingPage() {
   const router = useRouter();
   const isLoggedIn = useAuthStore((s) => s.isLoggedIn);
+  const isInitializing = useAuthStore((s) => s.isInitializing);
   const user = useAuthStore((s) => s.user);
 
   // 비로그인 랜딩은 로그인 상태에서는 의미가 없어 /trips로 보낸다 (IA: 로그인여부 X 전용 화면).
+  // 세션 복구가 끝나기 전엔 isLoggedIn이 아직 기본값(false)이라, isInitializing이 끝날 때까지 판단을 미룬다.
   React.useEffect(() => {
-    if (isLoggedIn) router.replace("/trips");
-  }, [isLoggedIn, router]);
+    if (!isInitializing && isLoggedIn) router.replace("/trips");
+  }, [isInitializing, isLoggedIn, router]);
 
-  if (isLoggedIn) return null;
+  if (isInitializing || isLoggedIn) return null;
 
   return (
     <LandingLayout
