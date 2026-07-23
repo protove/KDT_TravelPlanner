@@ -19,6 +19,7 @@ loki.source.file "backend_logs" {
 
 loki.process "backend_logs" {
   stage.json {
+    drop_malformed = true
     expressions = {
       level = "log.level",
     }
@@ -28,6 +29,10 @@ loki.process "backend_logs" {
     values = {
       level = "",
     }
+  }
+
+  stage.label_keep {
+    values = ["service", "environment", "level"]
   }
 
   forward_to = [loki.write.default.receiver]

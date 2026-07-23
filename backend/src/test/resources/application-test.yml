@@ -11,6 +11,8 @@ logging:
     root: WARN
 
 app:
+  logging:
+    error-frame-limit: 5
   storage:
     profile-image:
       upload-url-ttl: 10m
