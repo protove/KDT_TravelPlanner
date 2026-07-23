@@ -1,5 +1,6 @@
 package com.ktcloud.travelplanner.global.security
 
+import com.fasterxml.jackson.databind.ObjectMapper
 import com.ktcloud.travelplanner.global.logging.RequestIdGenerator
 import com.ktcloud.travelplanner.testsupport.TestcontainersConfiguration
 import com.ktcloud.travelplanner.user.model.OAuthProvider
@@ -7,6 +8,8 @@ import com.ktcloud.travelplanner.user.model.User
 import com.ktcloud.travelplanner.user.repository.UserRepository
 import jakarta.persistence.EntityManager
 import org.hamcrest.Matchers.equalTo
+import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertNotEquals
 import org.junit.jupiter.api.Test
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc
@@ -37,18 +40,24 @@ class JwtAuthenticationIntegrationTest(
 	@Autowired private val userRepository: UserRepository,
 	@Autowired private val jwtTokenService: JwtTokenService,
 	@Autowired private val entityManager: EntityManager,
+	@Autowired private val objectMapper: ObjectMapper,
 ) {
 	@Test
 	fun `protected API returns common 401 without token`() {
-		mockMvc.get("/api/test/security/principal") {
+		val response = mockMvc.get("/api/test/security/principal") {
 			header(RequestIdGenerator.HEADER_NAME, "jwt-missing")
 		}
 			.andExpect {
 				status { isUnauthorized() }
-				header { string(RequestIdGenerator.HEADER_NAME, "jwt-missing") }
 				jsonPath("$.code", equalTo("UNAUTHORIZED"))
-				jsonPath("$.requestId", equalTo("jwt-missing"))
 			}
+			.andReturn()
+			.response
+
+		val responseRequestId = response.getHeader(RequestIdGenerator.HEADER_NAME)
+		UUID.fromString(responseRequestId)
+		assertNotEquals("jwt-missing", responseRequestId)
+		assertEquals(responseRequestId, objectMapper.readTree(response.contentAsString).path("requestId").asText())
 	}
 
 	@Test
@@ -70,15 +79,21 @@ class JwtAuthenticationIntegrationTest(
 		val user = saveUser()
 		val token = jwtTokenService.issueAccessToken(requireNotNull(user.id)).value
 
-		mockMvc.get("/api/test/security/admin") {
+		val response = mockMvc.get("/api/test/security/admin") {
 			header(RequestIdGenerator.HEADER_NAME, "jwt-forbidden")
 			header("Authorization", "Bearer $token")
 		}
 			.andExpect {
 				status { isForbidden() }
 				jsonPath("$.code", equalTo("ACCESS_DENIED"))
-				jsonPath("$.requestId", equalTo("jwt-forbidden"))
 			}
+			.andReturn()
+			.response
+
+		val responseRequestId = response.getHeader(RequestIdGenerator.HEADER_NAME)
+		UUID.fromString(responseRequestId)
+		assertNotEquals("jwt-forbidden", responseRequestId)
+		assertEquals(responseRequestId, objectMapper.readTree(response.contentAsString).path("requestId").asText())
 	}
 
 	@Test
