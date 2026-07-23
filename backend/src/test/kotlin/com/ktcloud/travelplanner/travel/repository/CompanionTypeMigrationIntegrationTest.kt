@@ -46,6 +46,7 @@ class CompanionTypeMigrationIntegrationTest : ContainerIntegrationTestSupport() 
 				.dataSource(dataSource)
 				.schemas(schema)
 				.defaultSchema(schema)
+				.target(MigrationVersion.fromVersion("8"))
 				.load()
 				.migrate()
 

@@ -10,6 +10,7 @@ import { ConfirmDialog } from "@/components/molecules/ConfirmDialog";
 import { MyPageLayout } from "@/components/templates/MyPageLayout";
 import { useAuthStore } from "@/lib/stores/useAuthStore";
 import { useNotificationStore } from "@/lib/stores/useNotificationStore";
+import { requestLogout } from "@/lib/api/auth";
 
 type MypageTab = "profile" | "notif";
 
@@ -21,6 +22,7 @@ const TABS = [
 export default function MypagePage() {
   const router = useRouter();
   const isLoggedIn = useAuthStore((s) => s.isLoggedIn);
+  const isInitializing = useAuthStore((s) => s.isInitializing);
   const user = useAuthStore((s) => s.user);
   const updateProfile = useAuthStore((s) => s.updateProfile);
   const logout = useAuthStore((s) => s.logout);
@@ -31,14 +33,20 @@ export default function MypagePage() {
   const [tab, setTab] = React.useState<MypageTab>("profile");
   const [showWithdraw, setShowWithdraw] = React.useState(false);
 
-  if (!isLoggedIn || !user) return null;
+  React.useEffect(() => {
+    if (!isInitializing && !isLoggedIn) router.replace("/landing");
+  }, [isInitializing, isLoggedIn, router]);
 
-  function handleLogout() {
+  if (isInitializing || !isLoggedIn || !user) return null;
+
+  async function handleLogout() {
+    await requestLogout(); // 서버 refresh_token 폐기 (실패해도 클라이언트 로그아웃은 진행)
     logout();
     router.push("/landing");
   }
 
   function handleWithdraw() {
+    // TODO: 회원 탈퇴는 DELETE /api/v1/users/me 연동 필요 (아직 mock)
     logout();
     router.push("/landing");
   }

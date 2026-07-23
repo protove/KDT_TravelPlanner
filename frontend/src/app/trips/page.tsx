@@ -16,13 +16,18 @@ type ListTab = "mine" | "shared";
 export default function TripsPage() {
   const router = useRouter();
   const isLoggedIn = useAuthStore((s) => s.isLoggedIn);
+  const isInitializing = useAuthStore((s) => s.isInitializing);
   const user = useAuthStore((s) => s.user);
   const trips = useTripStore((s) => s.trips);
 
   const [tab, setTab] = React.useState<ListTab>("mine");
   const [query, setQuery] = React.useState("");
 
-  if (!isLoggedIn) return null;
+  React.useEffect(() => {
+    if (!isInitializing && !isLoggedIn) router.replace("/landing");
+  }, [isInitializing, isLoggedIn, router]);
+
+  if (isInitializing || !isLoggedIn) return null;
 
   const filtered = trips
     .filter((trip) => (tab === "mine" ? trip.mine : !trip.mine))

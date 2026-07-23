@@ -48,10 +48,15 @@ app:
   external:
     google:
       places:
-        api-key: ${GOOGLE_PLACES_API_KEY:}
+        api-key: ${GOOGLE_MAPS_API_KEY:}
         base-url: ${GOOGLE_PLACES_BASE_URL:https://places.googleapis.com}
         connect-timeout: ${GOOGLE_PLACES_CONNECT_TIMEOUT:2s}
         read-timeout: ${GOOGLE_PLACES_READ_TIMEOUT:3s}
+      routes:
+        api-key: ${GOOGLE_MAPS_API_KEY:}
+        base-url: ${GOOGLE_ROUTES_BASE_URL:https://routes.googleapis.com}
+        connect-timeout: ${GOOGLE_ROUTES_CONNECT_TIMEOUT:2s}
+        read-timeout: ${GOOGLE_ROUTES_READ_TIMEOUT:5s}
   storage:
     profile-image:
       enabled: ${PROFILE_IMAGE_STORAGE_ENABLED:false}
