@@ -6,6 +6,7 @@ import { Button } from "@/components/atoms/Button";
 import { Tabs, TabsList, TabsTrigger } from "@/components/atoms/Tabs";
 import { AppHeader } from "@/components/organisms/AppHeader";
 import { TripList } from "@/components/organisms/TripList";
+import { NewTripModal } from "@/components/organisms/NewTripModal";
 import { SearchBar } from "@/components/molecules/SearchBar";
 import { ListLayout } from "@/components/templates/ListLayout";
 import { useAuthStore } from "@/lib/stores/useAuthStore";
@@ -50,6 +51,8 @@ export default function TripsPage() {
   const [page, setPage] = React.useState(0);
   const [isLast, setIsLast] = React.useState(false);
   const [loadingMore, setLoadingMore] = React.useState(false);
+  const [showNewTripModal, setShowNewTripModal] = React.useState(false);
+  const [refreshKey, setRefreshKey] = React.useState(0);
   const sentinelRef = React.useRef<HTMLDivElement>(null);
 
   React.useEffect(() => {
@@ -69,7 +72,7 @@ export default function TripsPage() {
         setTravels([]);
         setIsLast(true);
       });
-  }, [accessToken, query]);
+  }, [accessToken, query, refreshKey]);
 
   const loadMore = React.useCallback(() => {
     if (!accessToken || isLast || loadingMore) return;
@@ -113,7 +116,7 @@ export default function TripsPage() {
         />
       }
       title={<h1 className="text-2xl font-bold text-foreground">여행일정</h1>}
-      actions={<Button onClick={() => router.push("/trips/1")}>+ 새 여행 만들기</Button>}
+      actions={<Button onClick={() => setShowNewTripModal(true)}>+ 새 여행 만들기</Button>}
     >
       <SearchBar
         placeholder="일정 검색"
@@ -130,10 +133,17 @@ export default function TripsPage() {
       </Tabs>
 
       <TripList
-        trips={filtered.map(toTripListItem)}
+        trips={filtered.map((t) => ({ ...toTripListItem(t), onClick: () => router.push(`/trips/${t.travelId}`) }))}
         emptyMessage={tab === "mine" ? "아직 만든 여행일정이 없어요." : "공유받은 여행일정이 없어요."}
       />
       <div ref={sentinelRef} className="h-px" />
+
+      <NewTripModal
+        open={showNewTripModal}
+        onOpenChange={setShowNewTripModal}
+        accessToken={accessToken}
+        onCreated={() => setRefreshKey((k) => k + 1)}
+      />
     </ListLayout>
   );
 }
