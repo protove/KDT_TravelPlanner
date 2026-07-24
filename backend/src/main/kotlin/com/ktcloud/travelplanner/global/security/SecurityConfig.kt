@@ -52,6 +52,11 @@ class SecurityConfig(
 					"/api/v1/auth/token/exchange",
 					"/api/v1/auth/token/refresh",
 					"/actuator/health/**",
+					"/v3/api-docs",
+					"/v3/api-docs.yaml",
+					"/v3/api-docs/**",
+					"/swagger-ui.html",
+					"/swagger-ui/**",
 				).permitAll()
 					.requestMatchers("/api/**").authenticated()
 					.anyRequest().permitAll()

@@ -20,3 +20,9 @@ app:
   security:
     jwt:
       secret: ${JWT_SECRET:local-development-jwt-secret-change-me}
+
+springdoc:
+  api-docs:
+    enabled: true
+  swagger-ui:
+    enabled: true
