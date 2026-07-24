@@ -19,7 +19,8 @@ export interface ConfirmDialogProps {
   confirmLabel?: string;
   cancelLabel?: string;
   destructive?: boolean;
-  onConfirm: () => void;
+  isConfirming?: boolean;
+  onConfirm: () => void | Promise<void>;
 }
 
 function ConfirmDialog({
@@ -30,6 +31,7 @@ function ConfirmDialog({
   confirmLabel = "확인",
   cancelLabel = "취소",
   destructive,
+  isConfirming = false,
   onConfirm,
 }: ConfirmDialogProps) {
   return (
@@ -40,17 +42,18 @@ function ConfirmDialog({
           {description && <DialogDescription>{description}</DialogDescription>}
         </DialogHeader>
         <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>
+          <Button variant="outline" disabled={isConfirming} onClick={() => onOpenChange(false)}>
             {cancelLabel}
           </Button>
           <Button
             variant={destructive ? "destructive" : "default"}
-            onClick={() => {
-              onConfirm();
+            disabled={isConfirming}
+            onClick={async () => {
+              await onConfirm();
               onOpenChange(false);
             }}
           >
-            {confirmLabel}
+            {isConfirming ? "처리 중..." : confirmLabel}
           </Button>
         </DialogFooter>
       </DialogContent>

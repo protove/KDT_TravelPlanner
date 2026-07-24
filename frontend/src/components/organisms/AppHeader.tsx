@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import { Bell } from "lucide-react";
-import { Avatar, AvatarFallback } from "@/components/atoms/Avatar";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/atoms/Avatar";
 import { Button } from "@/components/atoms/Button";
 import { Icon } from "@/components/atoms/Icon";
 import { cn } from "@/lib/utils";
@@ -11,6 +11,7 @@ export interface AppHeaderProps {
   loggedIn: boolean;
   userInitial?: string;
   avatarColor?: string;
+  avatarSrc?: string;
   onLogoClick?: () => void;
   onNotificationClick?: () => void;
   onProfileClick?: () => void;
@@ -22,6 +23,7 @@ function AppHeader({
   loggedIn,
   userInitial = "지",
   avatarColor = "var(--brand-500)",
+  avatarSrc,
   onLogoClick,
   onNotificationClick,
   onProfileClick,
@@ -62,6 +64,7 @@ function AppHeader({
             className="rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
             <Avatar className="h-8 w-8">
+              {avatarSrc && <AvatarImage src={avatarSrc} alt={`${userInitial} 프로필`} />}
               <AvatarFallback className="text-white" style={{ background: avatarColor }}>
                 {userInitial}
               </AvatarFallback>
