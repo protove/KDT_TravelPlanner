@@ -17,11 +17,13 @@ function FormField({ label, htmlFor, description, error, required, children, cla
     <div className={cn("flex flex-col gap-1.5", className)}>
       <Label htmlFor={htmlFor}>
         {label}
-        {required && <span className="ml-0.5 text-destructive">*</span>}
+        {required && <span className="ml-0.5 text-destructive-text" aria-hidden="true">*</span>}
       </Label>
       {children}
       {error ? (
-        <p className="text-xs text-red-700">{error}</p>
+        <p id={htmlFor ? `${htmlFor}-error` : undefined} role="alert" className="text-sm font-medium text-destructive-text">
+          {error}
+        </p>
       ) : description ? (
         <p className="text-xs text-muted-foreground">{description}</p>
       ) : null}

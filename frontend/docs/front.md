@@ -26,6 +26,7 @@ UI 컴포넌트는 **shadcn 컴포넌트를 우선 사용**하고, 스타일은 
 | `--brand-700` | #1d4ed8 |
 | `--accent-violet` | #9747ff |
 | `--red-500` (destructive) | #ef4444 |
+| `--red-600` (destructive text) | #dc2626 |
 | `--white` / `--black` | #ffffff / #000000 |
 
 ### 2.2 색상 — Semantic (컴포넌트는 반드시 이 계층만 사용)
@@ -45,6 +46,7 @@ UI 컴포넌트는 **shadcn 컴포넌트를 우선 사용**하고, 스타일은 
 | `--border-strong` | slate-300 | 강조 테두리 |
 | `--ring-focus` | black | 포커스 링 |
 | `--destructive` | red-500 | 삭제·위험 동작 |
+| `--destructive-text` | red-600 | 흰 배경 위 오류·위험 안내 텍스트 |
 
 ### 2.3 타이포그래피
 
