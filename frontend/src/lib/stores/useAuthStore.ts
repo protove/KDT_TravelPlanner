@@ -7,11 +7,14 @@ import type { AuthProvider } from "@/lib/types/auth";
 export type { Gender, AuthProvider };
 
 export interface AuthUser {
+  provider: AuthProvider;
+  name: string | null;
   nickname: string;
   initial: string;
   avatarColor: string;
+  profileImageUrl: string | null;
   gender: Gender;
-  age: number | "";
+  birthYear: number | "";
 }
 
 interface AuthState {
@@ -26,7 +29,11 @@ interface AuthState {
   setSession: (accessToken: string, user: AuthUser) => void;
   logout: () => void;
   finishInitializing: () => void;
-  updateProfile: (patch: Partial<Pick<AuthUser, "nickname" | "gender" | "age">>) => void;
+  updateProfile: (
+    patch: Partial<
+      Pick<AuthUser, "nickname" | "gender" | "birthYear" | "profileImageUrl">
+    >,
+  ) => void;
 }
 
 export const useAuthStore = create<AuthState>((set) => ({
