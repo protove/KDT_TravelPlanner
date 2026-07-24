@@ -30,8 +30,25 @@ import {
   PURPOSE_OPTIONS,
   type Place,
 } from "@/lib/stores/useTripDetailStore";
+import { fetchTravelDetail, type TravelDetail, type CompanionType } from "@/lib/api/travel";
 
 const WEEKDAYS = ["일", "월", "화", "수", "목", "금", "토"];
+
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+const COMPANION_LABELS: Record<CompanionType, string> = {
+  SOLO: "혼자",
+  COUPLE: "연인과",
+  FAMILY: "가족과",
+  FRIEND: "친구와",
+  PET: "반려동물과",
+  ETC: "기타",
+};
+
+function parseIsoDate(iso: string) {
+  const [y, m, d] = iso.split("-").map(Number);
+  return new Date(y, m - 1, d);
+}
 
 function getDateTabs(start: Date, end: Date) {
   const tabs: { key: string; label: string; date: Date }[] = [];
@@ -53,8 +70,8 @@ export default function TripDetailPage() {
   const isLoggedIn = useAuthStore((s) => s.isLoggedIn);
   const isInitializing = useAuthStore((s) => s.isInitializing);
   const user = useAuthStore((s) => s.user);
+  const accessToken = useAuthStore((s) => s.accessToken);
 
-  const trips = useTripStore((s) => s.trips);
   const removeTrip = useTripStore((s) => s.removeTrip);
 
   const info = useTripDetailStore((s) => s.info);
@@ -63,17 +80,29 @@ export default function TripDetailPage() {
   const comments = useTripDetailStore((s) => s.comments);
   const setCountry = useTripDetailStore((s) => s.setCountry);
   const setCity = useTripDetailStore((s) => s.setCity);
-  const setCompanion = useTripDetailStore((s) => s.setCompanion);
   const setDescription = useTripDetailStore((s) => s.setDescription);
-  const setDateRange = useTripDetailStore((s) => s.setDateRange);
   const togglePurpose = useTripDetailStore((s) => s.togglePurpose);
   const addPlace = useTripDetailStore((s) => s.addPlace);
   const updatePlace = useTripDetailStore((s) => s.updatePlace);
   const removePlace = useTripDetailStore((s) => s.removePlace);
   const addComment = useTripDetailStore((s) => s.addComment);
 
-  // mock: 이 데모는 trip id와 무관하게 항상 같은 상세 데이터를 보여준다 (백엔드 연동 전).
-  const isOwner = trips.find((t) => t.id === "1")?.mine ?? true;
+  const [detail, setDetail] = React.useState<TravelDetail | null>(null);
+  const [dateRange, setDateRange] = React.useState({ start: new Date(), end: new Date() });
+  const [companion, setCompanion] = React.useState(COMPANION_OPTIONS[0]);
+
+  React.useEffect(() => {
+    if (!accessToken || !id || !UUID_PATTERN.test(id)) return;
+    fetchTravelDetail(accessToken, id)
+      .then((res) => {
+        setDetail(res);
+        setDateRange({ start: parseIsoDate(res.startDate), end: parseIsoDate(res.endDate) });
+        setCompanion(res.companionType ? COMPANION_LABELS[res.companionType] : COMPANION_OPTIONS[0]);
+      })
+      .catch(() => router.replace("/403"));
+  }, [accessToken, id, router]);
+
+  const isOwner = detail?.permission === "OWNER";
 
   const [activeDay, setActiveDay] = React.useState("0");
   const [showCalendar, setShowCalendar] = React.useState(false);
@@ -104,12 +133,12 @@ React.useEffect(() => {
 }, [isInitializing, isLoggedIn, router]);
 
 React.useEffect(() => {
-  if (id && !/^\d+$/.test(id)) router.replace("/403");
+  if (id && !UUID_PATTERN.test(id)) router.replace("/403");
 }, [id, router]);
 
-  if (isInitializing || !isLoggedIn || !user) return null;
+  if (isInitializing || !isLoggedIn || !user || !detail) return null;
 
-  const dateTabs = getDateTabs(info.dateRange.start, info.dateRange.end);
+  const dateTabs = getDateTabs(dateRange.start, dateRange.end);
   const activeDayItems = places
     .filter((p) => p.day === Number(activeDay))
     .map((p) => ({ id: p.id, placeName: p.name, note: p.note || undefined }));
@@ -166,7 +195,7 @@ React.useEffect(() => {
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
               <div className="flex items-center gap-2">
-                <h1 className="text-2xl font-bold text-foreground">{info.title}</h1>
+                <h1 className="text-2xl font-bold text-foreground">{detail.title}</h1>
                 {isOwner && (
                   <>
                     <button type="button" title="제목 · 기간 수정" className="text-muted-foreground">
@@ -226,10 +255,10 @@ React.useEffect(() => {
               onClick={() => setShowCalendar((v) => !v)}
               className="flex items-center gap-2 rounded-full px-3.5 py-2 text-sm font-bold text-foreground hover:bg-muted"
             >
-              📅 <DateRangeBadge start={info.dateRange.start} end={info.dateRange.end} />
+              📅 <DateRangeBadge start={dateRange.start} end={dateRange.end} />
             </button>
             <div className="h-5 w-px bg-border" />
-            <Select value={info.companion} onValueChange={setCompanion}>
+            <Select value={companion} onValueChange={setCompanion}>
               <SelectTrigger className="h-auto w-auto gap-1.5 border-none px-3 py-1.5 shadow-none">
                 <span>👥</span>
                 <SelectValue />
@@ -246,7 +275,7 @@ React.useEffect(() => {
             {showCalendar && (
               <div className="absolute left-0 top-[calc(100%+8px)] z-20">
                 <CalendarPopover
-                  value={info.dateRange}
+                  value={dateRange}
                   onChange={(range) => setDateRange(range)}
                   onApply={() => setShowCalendar(false)}
                 />
