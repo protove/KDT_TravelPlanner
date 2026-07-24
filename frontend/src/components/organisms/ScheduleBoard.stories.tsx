@@ -74,3 +74,23 @@ export const WithMap: Story = {
   args: { days, activeDay: "d1", onDayChange: () => {}, items: itemsByDay.d1 },
   render: () => <DemoWithMap />,
 };
+
+function DemoReadOnly() {
+  const [activeDay, setActiveDay] = React.useState("d1");
+  return (
+    <ScheduleBoard
+      days={days}
+      activeDay={activeDay}
+      onDayChange={setActiveDay}
+      items={itemsByDay[activeDay]}
+      unassigned={[{ id: "u1", name: "시부야 스카이" }]}
+      readOnly
+    />
+  );
+}
+
+/** READ_ONLY 권한으로 조회할 때: 수정/취소/삭제 버튼이 전부 숨겨진다. */
+export const ReadOnly: Story = {
+  args: { days, activeDay: "d1", onDayChange: () => {}, items: itemsByDay.d1, readOnly: true },
+  render: () => <DemoReadOnly />,
+};

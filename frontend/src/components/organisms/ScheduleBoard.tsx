@@ -32,6 +32,8 @@ export interface ScheduleBoardProps {
   unassigned?: UnassignedPlace[];
   /** 날짜 탭과 일정 목록 사이에 끼워 넣는 지도 영역 (초안 순서: 탭 → 지도 → 일정 목록). */
   map?: React.ReactNode;
+  /** READ_ONLY 권한 등 조회만 가능할 때 수정/취소/삭제 관련 버튼을 전부 숨긴다. */
+  readOnly?: boolean;
   onOpenItem?: (id: string) => void;
   onEditItem?: (id: string) => void;
   onCancelItem?: (id: string) => void;
@@ -47,6 +49,7 @@ function ScheduleBoard({
   items,
   unassigned = [],
   map,
+  readOnly = false,
   onOpenItem,
   onEditItem,
   onCancelItem,
@@ -76,6 +79,7 @@ function ScheduleBoard({
             placeName={item.placeName}
             note={item.note}
             isLast={i === items.length - 1}
+            readOnly={readOnly}
             onOpen={() => onOpenItem?.(item.id)}
             onEdit={() => onEditItem?.(item.id)}
             onCancel={() => onCancelItem?.(item.id)}
@@ -93,32 +97,41 @@ function ScheduleBoard({
                 key={place.id}
                 className="flex items-center gap-3 rounded-lg bg-card p-2.5 px-3.5 shadow-card"
               >
-                <button
-                  type="button"
-                  onClick={() => onAssignPlace?.(place.id)}
-                  className="flex-1 text-left"
-                >
-                  <div className="text-sm font-semibold text-foreground">{place.name}</div>
-                  {place.note && <div className="mt-0.5 text-xs text-muted-foreground">{place.note}</div>}
-                </button>
-                <div className="flex shrink-0 gap-1">
-                  <button
-                    type="button"
-                    title="수정"
-                    onClick={() => onAssignPlace?.(place.id)}
-                    className="flex h-[26px] w-[26px] items-center justify-center rounded-md text-muted-foreground hover:bg-muted"
-                  >
-                    <Icon icon={Pencil} size="sm" aria-label="수정" />
-                  </button>
-                  <button
-                    type="button"
-                    title="완전 삭제"
-                    onClick={() => onDeleteItem?.(place.id)}
-                    className="flex h-[26px] w-[26px] items-center justify-center rounded-md text-destructive hover:bg-muted"
-                  >
-                    <Icon icon={Trash2} size="sm" aria-label="완전 삭제" />
-                  </button>
-                </div>
+                {readOnly ? (
+                  <div className="flex-1">
+                    <div className="text-sm font-semibold text-foreground">{place.name}</div>
+                    {place.note && <div className="mt-0.5 text-xs text-muted-foreground">{place.note}</div>}
+                  </div>
+                ) : (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => onAssignPlace?.(place.id)}
+                      className="flex-1 text-left"
+                    >
+                      <div className="text-sm font-semibold text-foreground">{place.name}</div>
+                      {place.note && <div className="mt-0.5 text-xs text-muted-foreground">{place.note}</div>}
+                    </button>
+                    <div className="flex shrink-0 gap-1">
+                      <button
+                        type="button"
+                        title="수정"
+                        onClick={() => onAssignPlace?.(place.id)}
+                        className="flex h-[26px] w-[26px] items-center justify-center rounded-md text-muted-foreground hover:bg-muted"
+                      >
+                        <Icon icon={Pencil} size="sm" aria-label="수정" />
+                      </button>
+                      <button
+                        type="button"
+                        title="완전 삭제"
+                        onClick={() => onDeleteItem?.(place.id)}
+                        className="flex h-[26px] w-[26px] items-center justify-center rounded-md text-destructive hover:bg-muted"
+                      >
+                        <Icon icon={Trash2} size="sm" aria-label="완전 삭제" />
+                      </button>
+                    </div>
+                  </>
+                )}
               </div>
             ))}
           </div>

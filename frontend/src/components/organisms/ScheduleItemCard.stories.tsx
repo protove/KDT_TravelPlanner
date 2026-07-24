@@ -15,3 +15,4 @@ type Story = StoryObj<typeof meta>;
 export const WithNote: Story = { args: { note: "도착 후 리무진버스로 이동" } };
 export const NoNote: Story = {};
 export const Last: Story = { args: { note: "체크인 후 자유시간", isLast: true } };
+export const ReadOnly: Story = { args: { note: "도착 후 리무진버스로 이동", readOnly: true } };
