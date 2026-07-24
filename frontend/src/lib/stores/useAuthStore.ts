@@ -1,11 +1,10 @@
 "use client";
 
 import { create } from "zustand";
-import { persist } from "zustand/middleware";
 import type { Gender } from "@/components/organisms/ProfileSection";
+import type { AuthProvider } from "@/lib/types/auth";
 
-export type AuthProvider = "google" | "naver";
-export type { Gender };
+export type { Gender, AuthProvider };
 
 export interface AuthUser {
   nickname: string;
@@ -18,33 +17,32 @@ export interface AuthUser {
 interface AuthState {
   isLoggedIn: boolean;
   user: AuthUser | null;
-  login: (provider: AuthProvider) => void;
+  accessToken: string | null;
+  /**
+   * 앱이 막 부팅돼서 새로고침 후 세션 복구(silent refresh)가 아직 안 끝난 상태.
+   * true인 동안은 isLoggedIn 값을 신뢰하면 안 된다 (기본값 false라서 오판하기 쉬움).
+   */
+  isInitializing: boolean;
+  setSession: (accessToken: string, user: AuthUser) => void;
   logout: () => void;
+  finishInitializing: () => void;
   updateProfile: (patch: Partial<Pick<AuthUser, "nickname" | "gender" | "age">>) => void;
 }
 
-/**
- * 백엔드 연동 전 mock. 실제로는 SSO 콜백 후 서버가 내려주는 JWT+세션과
- * 자동 생성된 닉네임으로 대체된다 (IA 문서: "가입 시 닉네임 자동 생성").
- */
-const MOCK_USER_BY_PROVIDER: Record<AuthProvider, AuthUser> = {
-  google: { nickname: "여행자3021", initial: "여", avatarColor: "#3b82f6", gender: "unspecified", age: "" },
-  naver: { nickname: "여행자8842", initial: "여", avatarColor: "#03c75a", gender: "unspecified", age: "" },
-};
-
-export const useAuthStore = create<AuthState>()(
-  persist(
-    (set) => ({
+export const useAuthStore = create<AuthState>((set) => ({
   isLoggedIn: false,
   user: null,
-  login: (provider) => {
-    document.cookie = "logged_in=1; path=/; max-age=86400";
-    set({ isLoggedIn: true, user: MOCK_USER_BY_PROVIDER[provider] });
+  accessToken: null,
+  isInitializing: true,
+  setSession: (accessToken, user) => {
+    document.cookie = "logged_in=1; path=/; max-age=604800";
+    set({ isLoggedIn: true, accessToken, user });
   },
   logout: () => {
     document.cookie = "logged_in=; path=/; max-age=0";
-    set({ isLoggedIn: false, user: null });
+    set({ isLoggedIn: false, user: null, accessToken: null });
   },
+  finishInitializing: () => set({ isInitializing: false }),
   updateProfile: (patch) =>
     set((s) => {
       if (!s.user) return s;
@@ -58,7 +56,4 @@ export const useAuthStore = create<AuthState>()(
         },
       };
     }),
-    }),
-    { name: "auth" },
-  ),
-);
+}));

@@ -18,109 +18,114 @@ import java.util.UUID
 
 @Service
 class TimelineItemUpdateService(
-	private val travelRepository: TravelRepository,
-	private val travelMemberRepository: TravelMemberRepository,
-	private val cityRepository: CityRepository,
-	private val timelineItemRepository: TimelineItemRepository,
+        private val travelRepository: TravelRepository,
+        private val travelMemberRepository: TravelMemberRepository,
+        private val cityRepository: CityRepository,
+        private val timelineItemRepository: TimelineItemRepository,
 ) {
-	@Transactional
-	fun updateTimelineItem(
-		travelId: UUID,
-		itemId: UUID,
-		requesterId: UUID,
-		request: TimelineItemUpdateRequest,
-	): TimelineItemResponse {
-		val travel = travelRepository.findById(travelId).orElseThrow(::TimelineUpdateTravelNotFoundException)
-		validateWritePermission(travel, requesterId)
-		val item = timelineItemRepository.findByIdAndTravelId(itemId, travelId)
-			?: throw TimelineItemNotFoundException()
-		val dayNumber = request.dayNumber.resolveRequired(item.dayNumber.toInt()).toShortChecked()
-		val visitOrder = request.visitOrder.resolveRequired(item.visitOrder.toInt()).toShortChecked()
-		val city = resolveCity(request.cityId, item.city)
-		val visitDate = request.visitDate.resolveRequired(item.visitDate)
-		val category = request.category.resolveRequired(item.category)
-		val foodSubcategory = request.foodSubcategory.resolveOptionalText(item.foodSubcategory)
-		val name = request.name.resolveRequired(item.name).trim()
-		val googlePlaceId = request.googlePlaceId.resolveOptionalText(item.googlePlaceId)
-		val latitude = request.latitude.resolveNullable(item.latitude)
-		val longitude = request.longitude.resolveNullable(item.longitude)
-		val rating = request.rating.resolveNullable(item.rating)
-		val memo = request.memo.resolveOptionalText(item.memo)
+        @Transactional
+        fun updateTimelineItem(
+                travelId: UUID,
+                itemId: UUID,
+                requesterId: UUID,
+                request: TimelineItemUpdateRequest,
+        ): TimelineItemResponse {
+                val travel = travelRepository.findById(travelId).orElseThrow(::TimelineUpdateTravelNotFoundException)
+                validateWritePermission(travel, requesterId)
+                val item = timelineItemRepository.findByIdAndTravelId(itemId, travelId)
+                        ?: throw TimelineItemNotFoundException()
 
-		if (timelineItemRepository.existsByTravelIdAndDayNumberAndVisitOrderAndIdNot(
-				travelId,
-				dayNumber,
-				visitOrder,
-				itemId,
-			)
-		) {
-			throw TimelineItemOrderConflictException()
-		}
+                // dayNumber, visitDate는 "미배정 상태"를 표현할 수 있어야 하므로
+                // 필수값(resolveRequired)이 아니라 null 허용(resolveNullable)으로 처리
+                val dayNumber = request.dayNumber
+                        .resolveNullable(item.dayNumber?.toInt())
+                        ?.toShortChecked()
+                val visitDate = request.visitDate.resolveNullable(item.visitDate)
+                if ((dayNumber == null) != (visitDate == null)) {
+                        throw InvalidTimelineItemUpdateException()
+                }
 
-		try {
-			item.updateDetails(
-				dayNumber = dayNumber,
-				visitDate = visitDate,
-				city = city,
-				category = category,
-				foodSubcategory = foodSubcategory,
-				name = name,
-				googlePlaceId = googlePlaceId,
-				latitude = latitude,
-				longitude = longitude,
-				rating = rating,
-				visitOrder = visitOrder,
-				memo = memo,
-			)
-		} catch (_: IllegalArgumentException) {
-			throw InvalidTimelineItemUpdateException()
-		}
+                val visitOrder = request.visitOrder.resolveRequired(item.visitOrder.toInt()).toShortChecked()
+                val city = resolveCity(request.cityId, item.city)
+                val category = request.category.resolveRequired(item.category)
+                val foodSubcategory = request.foodSubcategory.resolveOptionalText(item.foodSubcategory)
+                val name = request.name.resolveRequired(item.name).trim()
+                val googlePlaceId = request.googlePlaceId.resolveOptionalText(item.googlePlaceId)
+                val memo = request.memo.resolveOptionalText(item.memo)
 
-		val savedItem = try {
-			timelineItemRepository.saveAndFlush(item)
-		} catch (_: DataIntegrityViolationException) {
-			throw TimelineItemOrderConflictException()
-		}
-		return TimelineItemResponse.from(savedItem)
-	}
+                // 미배정 상태(dayNumber == null)에서는 "같은 일차 내 순서 중복" 개념이 없으므로 검사하지 않음
+                if (dayNumber != null &&
+                        timelineItemRepository.existsByTravelIdAndDayNumberAndVisitOrderAndIdNot(
+                                travelId,
+                                dayNumber,
+                                visitOrder,
+                                itemId,
+                        )
+                ) {
+                        throw TimelineItemOrderConflictException()
+                }
 
-	private fun validateWritePermission(
-		travel: Travel,
-		requesterId: UUID,
-	) {
-		if (travel.owner.id == requesterId) return
-		if (!travelMemberRepository.existsAcceptedReadWriteMember(travel.id, requesterId)) {
-			throw TimelineItemUpdateAccessDeniedException()
-		}
-	}
+                try {
+                        item.updateDetails(
+                                dayNumber = dayNumber,
+                                visitDate = visitDate,
+                                city = city,
+                                category = category,
+                                foodSubcategory = foodSubcategory,
+                                name = name,
+                                googlePlaceId = googlePlaceId,
+                                visitOrder = visitOrder,
+                                memo = memo,
+                        )
+                } catch (_: IllegalArgumentException) {
+                        throw InvalidTimelineItemUpdateException()
+                }
 
-	private fun resolveCity(
-		field: PatchField<Long>,
-		current: City?,
-	): City? = when (field) {
-		PatchField.Absent -> current
-		is PatchField.Present -> field.value?.let { cityId ->
-			cityRepository.findByIdAndIsActiveTrue(cityId).orElseThrow(::TimelineUpdateCityNotFoundException)
-		}
-	}
+                val savedItem = try {
+                        timelineItemRepository.saveAndFlush(item)
+                } catch (_: DataIntegrityViolationException) {
+                        throw TimelineItemOrderConflictException()
+                }
+                return TimelineItemResponse.from(savedItem)
+        }
 
-	private fun Int.toShortChecked(): Short {
-		if (this !in 1..Short.MAX_VALUE.toInt()) throw InvalidTimelineItemUpdateException()
-		return toShort()
-	}
+        private fun validateWritePermission(
+                travel: Travel,
+                requesterId: UUID,
+        ) {
+                if (travel.owner.id == requesterId) return
+                if (!travelMemberRepository.existsAcceptedReadWriteMember(travel.id, requesterId)) {
+                        throw TimelineItemUpdateAccessDeniedException()
+                }
+        }
 
-	private fun <T> PatchField<T>.resolveRequired(current: T): T = when (this) {
-		PatchField.Absent -> current
-		is PatchField.Present -> value ?: throw InvalidTimelineItemUpdateException()
-	}
+        private fun resolveCity(
+                field: PatchField<Long>,
+                current: City?,
+        ): City? = when (field) {
+                PatchField.Absent -> current
+                is PatchField.Present -> field.value?.let { cityId ->
+                        cityRepository.findByIdAndIsActiveTrue(cityId).orElseThrow(::TimelineUpdateCityNotFoundException)
+                }
+        }
 
-	private fun <T> PatchField<T>.resolveNullable(current: T?): T? = when (this) {
-		PatchField.Absent -> current
-		is PatchField.Present -> value
-	}
+        private fun Int.toShortChecked(): Short {
+                if (this !in 1..Short.MAX_VALUE.toInt()) throw InvalidTimelineItemUpdateException()
+                return toShort()
+        }
 
-	private fun PatchField<String>.resolveOptionalText(current: String?): String? =
-		resolveNullable(current)?.trim()?.takeIf(String::isNotEmpty)
+        private fun <T> PatchField<T>.resolveRequired(current: T): T = when (this) {
+                PatchField.Absent -> current
+                is PatchField.Present -> value ?: throw InvalidTimelineItemUpdateException()
+        }
+
+        private fun <T> PatchField<T>.resolveNullable(current: T?): T? = when (this) {
+                PatchField.Absent -> current
+                is PatchField.Present -> value
+        }
+
+        private fun PatchField<String>.resolveOptionalText(current: String?): String? =
+                resolveNullable(current)?.trim()?.takeIf(String::isNotEmpty)
 }
 
 class TimelineUpdateTravelNotFoundException : DomainException(ErrorCode.RESOURCE_NOT_FOUND)
@@ -132,8 +137,8 @@ class TimelineUpdateCityNotFoundException : DomainException(ErrorCode.RESOURCE_N
 class TimelineItemUpdateAccessDeniedException : DomainException(ErrorCode.ACCESS_DENIED)
 
 class InvalidTimelineItemUpdateException : DomainException(
-	ErrorCode.INVALID_REQUEST,
-	"타임라인 수정값이 올바르지 않습니다.",
+        ErrorCode.INVALID_REQUEST,
+        "타임라인 수정값이 올바르지않습니다.",
 )
 
 class TimelineItemOrderConflictException : DomainException(ErrorCode.CONFLICT, "같은 일차에 방문 순서가 중복됩니다.")

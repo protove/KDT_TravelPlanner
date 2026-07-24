@@ -51,6 +51,7 @@ export default function TripDetailPage() {
   const router = useRouter();
   const { id } = useParams<{ id: string }>();
   const isLoggedIn = useAuthStore((s) => s.isLoggedIn);
+  const isInitializing = useAuthStore((s) => s.isInitializing);
   const user = useAuthStore((s) => s.user);
 
   const trips = useTripStore((s) => s.trips);
@@ -98,11 +99,15 @@ export default function TripDetailPage() {
     { id: "3", name: "최준서", avatarColor: "#64748b", permission: "read", status: "pending" },
   ]);
 
-  React.useEffect(() => {
-    if (id && !/^\d+$/.test(id)) router.replace("/403");
-  }, [id, router]);
+React.useEffect(() => {
+  if (!isInitializing && !isLoggedIn) router.replace("/landing");
+}, [isInitializing, isLoggedIn, router]);
 
-  if (!isLoggedIn || !user) return null;
+React.useEffect(() => {
+  if (id && !/^\d+$/.test(id)) router.replace("/403");
+}, [id, router]);
+
+  if (isInitializing || !isLoggedIn || !user) return null;
 
   const dateTabs = getDateTabs(info.dateRange.start, info.dateRange.end);
   const activeDayItems = places

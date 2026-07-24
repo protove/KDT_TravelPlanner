@@ -7,6 +7,7 @@ import com.ktcloud.travelplanner.auth.config.OAuthHttpClientProperties
 import com.ktcloud.travelplanner.auth.config.RefreshTokenProperties
 import com.ktcloud.travelplanner.global.security.JwtProperties
 import com.ktcloud.travelplanner.place.config.GooglePlacesProperties
+import com.ktcloud.travelplanner.route.config.GoogleRoutesProperties
 import com.ktcloud.travelplanner.user.config.ProfileImageStorageProperties
 import org.springframework.boot.autoconfigure.SpringBootApplication
 import org.springframework.boot.context.properties.EnableConfigurationProperties
@@ -22,6 +23,7 @@ import org.springframework.boot.runApplication
 	RefreshTokenProperties::class,
 	ProfileImageStorageProperties::class,
 	GooglePlacesProperties::class,
+	GoogleRoutesProperties::class,
 )
 class TravelPlannerBackendApplication
 
