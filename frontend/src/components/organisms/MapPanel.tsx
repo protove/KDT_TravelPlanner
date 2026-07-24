@@ -45,7 +45,7 @@ function MapPanel({ markers = [], onMarkerClick, onOptimizeRoute, className }: M
         </button>
       ))}
 
-      <Button size="sm" onClick={onOptimizeRoute} className="absolute right-3 top-3">
+      <Button size="sm" onClick={onOptimizeRoute} className="absolute bottom-3 right-3">
         경로 최적화
       </Button>
     </div>

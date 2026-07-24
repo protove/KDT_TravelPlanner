@@ -19,8 +19,6 @@ import { ParticipantManageDialog, type Participant } from "@/components/organism
 import { DateRangeBadge } from "@/components/molecules/DateRangeBadge";
 import { PurposeTagSelect } from "@/components/molecules/PurposeTagSelect";
 import { ConfirmDialog } from "@/components/molecules/ConfirmDialog";
-import { CommentRow } from "@/components/molecules/CommentRow";
-import { CommentInput } from "@/components/molecules/CommentInput";
 import { DetailLayout } from "@/components/templates/DetailLayout";
 import { useAuthStore } from "@/lib/stores/useAuthStore";
 import { useTripStore } from "@/lib/stores/useTripStore";
@@ -77,7 +75,6 @@ export default function TripDetailPage() {
   const info = useTripDetailStore((s) => s.info);
   const members = useTripDetailStore((s) => s.members);
   const places = useTripDetailStore((s) => s.places);
-  const comments = useTripDetailStore((s) => s.comments);
   const setCountry = useTripDetailStore((s) => s.setCountry);
   const setCity = useTripDetailStore((s) => s.setCity);
   const setDescription = useTripDetailStore((s) => s.setDescription);
@@ -85,7 +82,6 @@ export default function TripDetailPage() {
   const addPlace = useTripDetailStore((s) => s.addPlace);
   const updatePlace = useTripDetailStore((s) => s.updatePlace);
   const removePlace = useTripDetailStore((s) => s.removePlace);
-  const addComment = useTripDetailStore((s) => s.addComment);
 
   const [detail, setDetail] = React.useState<TravelDetail | null>(null);
   const [dateRange, setDateRange] = React.useState({ start: new Date(), end: new Date() });
@@ -110,7 +106,6 @@ export default function TripDetailPage() {
   const [showLeaveConfirm, setShowLeaveConfirm] = React.useState(false);
   const [showInvite, setShowInvite] = React.useState(false);
   const [showManage, setShowManage] = React.useState(false);
-  const [commentDraft, setCommentDraft] = React.useState("");
 
   const [editingPlace, setEditingPlace] = React.useState<Place | null>(null);
   const [addingPlace, setAddingPlace] = React.useState(false);
@@ -144,7 +139,7 @@ React.useEffect(() => {
     .map((p) => ({ id: p.id, placeName: p.name, note: p.note || undefined }));
   const unassignedPlaces = places
     .filter((p) => p.day === null)
-    .map((p) => ({ id: p.id, name: p.name }));
+    .map((p) => ({ id: p.id, name: p.name, note: p.note || undefined }));
   const mapMarkers = places.map((p) => ({
     id: p.id,
     name: p.name,
@@ -188,8 +183,12 @@ React.useEffect(() => {
       header={<AppHeader loggedIn userInitial={user.initial} avatarColor={user.avatarColor} onLogoClick={() => router.push("/trips")} onProfileClick={() => router.push("/mypage")} onNotificationClick={() => router.push("/notifications")} />}
       detailHeader={
         <div className="flex flex-col gap-5">
-          <button type="button" onClick={() => router.push("/trips")} className="text-sm font-bold text-primary">
-            ← 여행일정 목록
+          <button
+            type="button"
+            onClick={() => router.push("/trips")}
+            className="self-start text-sm font-bold text-primary"
+          >
+            ← 여행일정 목록123123
           </button>
 
           <div className="flex flex-wrap items-start justify-between gap-3">
@@ -291,12 +290,14 @@ React.useEffect(() => {
       }
       schedule={
         <div className="flex flex-col gap-6">
+          <div className="text-lg font-bold text-foreground">여행계획</div>
           <ScheduleBoard
             days={dateTabs}
             activeDay={activeDay}
             onDayChange={setActiveDay}
             items={activeDayItems}
             unassigned={unassignedPlaces}
+            map={<MapPanel markers={mapMarkers} onMarkerClick={openEditPlace} />}
             onOpenItem={openEditPlace}
             onEditItem={openEditPlace}
             onCancelItem={(id) => updatePlace(id, { day: null })}
@@ -306,22 +307,6 @@ React.useEffect(() => {
           <Button variant="outline" className="w-full border-dashed" onClick={openAddPlace}>
             + 목적지 추가
           </Button>
-
-          <div>
-            <div className="mb-3 flex flex-col gap-3">
-              {comments.map((c) => (
-                <CommentRow key={c.id} name={c.name} avatarColor={c.avatarColor} timeLabel={c.timeLabel} text={c.text} />
-              ))}
-            </div>
-            <CommentInput
-              value={commentDraft}
-              onChange={setCommentDraft}
-              onSubmit={() => {
-                addComment({ name: user.nickname, avatarColor: user.avatarColor, timeLabel: "방금 전", text: commentDraft });
-                setCommentDraft("");
-              }}
-            />
-          </div>
 
           <div>
             <div className="mb-2 text-sm font-bold text-foreground">여행 설명</div>
@@ -334,7 +319,6 @@ React.useEffect(() => {
           </div>
         </div>
       }
-        map={<MapPanel markers={mapMarkers} onMarkerClick={openEditPlace} />}
       />
 
       <PlaceModal

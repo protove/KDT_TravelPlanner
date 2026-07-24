@@ -32,10 +32,13 @@ function PurposeTagSelect({ options, selected, onToggle, className }: PurposeTag
           className="flex items-center gap-1.5 rounded-full bg-accent py-1.5 pl-3 pr-2 text-sm font-semibold text-accent-foreground"
         >
           {tag}
-          <button type="button"
-          onClick={() => onToggle(tag)} className="opacity-700 hover:opacity-900">
+          <button
+            type="button"
+            onClick={() => onToggle(tag)}
+            aria-label={`${tag} 삭제`}
+            className="opacity-70 hover:opacity-100"
+          >
             ×
-          삭제
           </button>
         </div>
       ))}
