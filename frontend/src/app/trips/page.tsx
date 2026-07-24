@@ -40,8 +40,9 @@ export default function TripsPage() {
           loggedIn
           userInitial={user?.initial}
           avatarColor={user?.avatarColor}
-          onLogoClick={() => router.push("/landing")}
+          onLogoClick={() => router.push("/trips")}
           onProfileClick={() => router.push("/mypage")}
+          onNotificationClick={() => router.push("/notifications")}
         />
       }
       title={<h1 className="text-2xl font-bold text-foreground">여행일정</h1>}

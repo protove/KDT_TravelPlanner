@@ -33,6 +33,18 @@ server:
     accesslog:
       enabled: false
 
+springdoc:
+  api-docs:
+    enabled: false
+  paths-to-match:
+    - /api/v1/**
+  swagger-ui:
+    enabled: false
+    path: /swagger-ui.html
+    try-it-out-enabled: true
+    persist-authorization: false
+    disable-swagger-default-url: true
+
 management:
   server:
     port: ${MANAGEMENT_SERVER_PORT:9091}

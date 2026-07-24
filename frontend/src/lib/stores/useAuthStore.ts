@@ -34,8 +34,14 @@ export const useAuthStore = create<AuthState>((set) => ({
   user: null,
   accessToken: null,
   isInitializing: true,
-  setSession: (accessToken, user) => set({ isLoggedIn: true, accessToken, user }),
-  logout: () => set({ isLoggedIn: false, user: null, accessToken: null }),
+  setSession: (accessToken, user) => {
+    document.cookie = "logged_in=1; path=/; max-age=604800";
+    set({ isLoggedIn: true, accessToken, user });
+  },
+  logout: () => {
+    document.cookie = "logged_in=; path=/; max-age=0";
+    set({ isLoggedIn: false, user: null, accessToken: null });
+  },
   finishInitializing: () => set({ isInitializing: false }),
   updateProfile: (patch) =>
     set((s) => {

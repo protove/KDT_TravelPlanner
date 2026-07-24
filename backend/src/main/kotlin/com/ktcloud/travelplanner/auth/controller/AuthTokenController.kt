@@ -5,6 +5,7 @@ import com.ktcloud.travelplanner.auth.service.InvalidRefreshTokenException
 import com.ktcloud.travelplanner.auth.service.RefreshTokenService
 import com.ktcloud.travelplanner.global.response.ApiResponse
 import com.ktcloud.travelplanner.global.security.IssuedAccessToken
+import io.swagger.v3.oas.annotations.security.SecurityRequirements
 import jakarta.servlet.http.HttpServletResponse
 import jakarta.validation.Valid
 import jakarta.validation.constraints.NotBlank
@@ -31,6 +32,7 @@ data class AccessTokenResponse(
 
 @RestController
 @RequestMapping("/api/v1/auth/token")
+@SecurityRequirements
 class AuthTokenController(
 	private val exchangeCodeService: OAuthExchangeCodeService,
 	private val refreshTokenService: RefreshTokenService,
