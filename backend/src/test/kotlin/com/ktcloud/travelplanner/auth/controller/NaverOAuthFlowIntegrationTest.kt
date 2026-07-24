@@ -27,6 +27,7 @@ import org.springframework.web.util.UriComponentsBuilder
 import java.net.InetSocketAddress
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -120,6 +121,44 @@ class NaverOAuthFlowIntegrationTest(
 			}
 	}
 
+	@Test
+	fun `Naver access denied consumes state and redirects without provider call or user change`() {
+		tokenRequestCount.set(0)
+		val userCount = userRepository.count()
+		val (state, stateCookie) = startNaverLogin()
+
+		mockMvc.get("/api/v1/auth/oauth2/naver/callback") {
+			param("error", "access_denied")
+			param("error_description", "User denied access")
+			param("state", state)
+			cookie(stateCookie)
+		}
+			.andExpect {
+				status { isFound() }
+				header { string(HttpHeaders.LOCATION, "$FRONTEND_REDIRECT_URL?error=access_denied") }
+				header {
+					string(
+						HttpHeaders.SET_COOKIE,
+						org.hamcrest.Matchers.containsString("${OAuthStateCookieFactory.COOKIE_NAME}=;"),
+					)
+				}
+			}
+
+		assertEquals(0, tokenRequestCount.get())
+		assertEquals(userCount, userRepository.count())
+
+		mockMvc.get("/api/v1/auth/oauth2/naver/callback") {
+			param("error", "access_denied")
+			param("state", state)
+			cookie(stateCookie)
+		}
+			.andExpect {
+				status { isBadRequest() }
+				jsonPath("$.code", equalTo("INVALID_OAUTH_STATE"))
+			}
+		assertEquals(0, tokenRequestCount.get())
+	}
+
 	private fun completeNaverLogin(authorizationCode: String): String {
 		val (state, stateCookie) = startNaverLogin()
 		val callbackResponse = mockMvc.get("/api/v1/auth/oauth2/naver/callback") {
@@ -178,6 +217,7 @@ class NaverOAuthFlowIntegrationTest(
 		private const val AUTHORIZATION_URL = "http://nid.example/oauth2.0/authorize"
 		private val profileName = AtomicReference("Naver User")
 		private val lastTokenRequestBody = AtomicReference("")
+		private val tokenRequestCount = AtomicInteger()
 		private val naverServer: HttpServer = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
 			.apply {
 				createContext("/token", ::handleToken)
@@ -201,6 +241,7 @@ class NaverOAuthFlowIntegrationTest(
 		}
 
 		private fun handleToken(exchange: HttpExchange) {
+			tokenRequestCount.incrementAndGet()
 			val requestBody = exchange.requestBody.readAllBytes().toString(StandardCharsets.UTF_8)
 			lastTokenRequestBody.set(requestBody)
 			if (requestBody.contains("code=provider-error")) {

@@ -10,7 +10,15 @@ logging:
   level:
     root: WARN
 
+springdoc:
+  api-docs:
+    enabled: true
+  swagger-ui:
+    enabled: true
+
 app:
+  logging:
+    error-frame-limit: 5
   storage:
     profile-image:
       upload-url-ttl: 10m

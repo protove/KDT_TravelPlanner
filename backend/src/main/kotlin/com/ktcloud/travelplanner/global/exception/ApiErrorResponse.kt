@@ -2,8 +2,9 @@ package com.ktcloud.travelplanner.global.exception
 
 import com.fasterxml.jackson.annotation.JsonInclude
 import com.ktcloud.travelplanner.global.logging.RequestIdGenerator
+import com.ktcloud.travelplanner.global.logging.RequestLoggingContext
+import jakarta.servlet.http.HttpServletRequest
 import jakarta.servlet.http.HttpServletResponse
-import org.slf4j.MDC
 
 data class FieldErrorResponse(
 	val field: String,
@@ -33,9 +34,9 @@ internal object ApiErrorResponseFactory {
 		fieldErrors = fieldErrors?.sortedBy(FieldErrorResponse::field),
 	)
 
-	fun resolveRequestId(response: HttpServletResponse): String {
-		val requestId = MDC.get(RequestIdGenerator.MDC_KEY)
-			?: requestIdGenerator.resolve(response.getHeader(RequestIdGenerator.HEADER_NAME))
+	fun resolveRequestId(request: HttpServletRequest, response: HttpServletResponse): String {
+		val requestId = RequestLoggingContext.getRequestId(request)
+			?: requestIdGenerator.generate().also { RequestLoggingContext.setRequestId(request, it) }
 
 		response.setHeader(RequestIdGenerator.HEADER_NAME, requestId)
 		return requestId

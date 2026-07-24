@@ -1,6 +1,7 @@
 package com.ktcloud.travelplanner.auth.controller
 
 import com.ktcloud.travelplanner.auth.service.OAuthLoginService
+import io.swagger.v3.oas.annotations.security.SecurityRequirements
 import jakarta.servlet.http.HttpServletResponse
 import jakarta.validation.constraints.NotBlank
 import org.springframework.http.HttpHeaders
@@ -17,6 +18,7 @@ import org.springframework.web.bind.annotation.RestController
 @RestController
 @RequestMapping("/api/v1/auth/oauth2")
 @Validated
+@SecurityRequirements
 class OAuthController(
 	private val loginService: OAuthLoginService,
 	private val stateCookieFactory: OAuthStateCookieFactory,
@@ -39,7 +41,8 @@ class OAuthController(
 	@GetMapping("/{provider}/callback")
 	fun callback(
 		@PathVariable provider: String,
-		@RequestParam @NotBlank code: String,
+		@RequestParam(required = false) code: String?,
+		@RequestParam(required = false) error: String?,
 		@RequestParam @NotBlank state: String,
 		@CookieValue(name = OAuthStateCookieFactory.COOKIE_NAME, required = false) stateCookie: String?,
 		response: HttpServletResponse,
@@ -47,7 +50,15 @@ class OAuthController(
 		response.addHeader(HttpHeaders.SET_COOKIE, stateCookieFactory.expire().toString())
 		return ResponseEntity
 			.status(HttpStatus.FOUND)
-			.location(loginService.completeLogin(provider, code, state, stateCookie))
+			.location(
+				loginService.completeAuthorization(
+					providerName = provider,
+					authorizationCode = code,
+					authorizationError = error,
+					state = state,
+					stateCookie = stateCookie,
+				),
+			)
 			.build()
 	}
 }

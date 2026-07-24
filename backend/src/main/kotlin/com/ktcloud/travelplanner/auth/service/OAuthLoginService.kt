@@ -38,13 +38,31 @@ class OAuthLoginService(
 		)
 	}
 
-	fun completeLogin(
+	fun completeAuthorization(
 		providerName: String,
-		authorizationCode: String,
+		authorizationCode: String?,
+		authorizationError: String?,
 		state: String,
 		stateCookie: String?,
 	): URI {
 		val provider = resolveProvider(providerName)
+		return when {
+			!authorizationCode.isNullOrBlank() && authorizationError == null ->
+				completeApprovedAuthorization(provider, authorizationCode, state, stateCookie)
+
+			authorizationCode == null && authorizationError == ACCESS_DENIED_ERROR ->
+				completeDeniedAuthorization(provider, state, stateCookie)
+
+			else -> throw InvalidOAuthAuthorizationResponseException()
+		}
+	}
+
+	private fun completeApprovedAuthorization(
+		provider: OAuthProvider,
+		authorizationCode: String,
+		state: String,
+		stateCookie: String?,
+	): URI {
 		val client = resolveClient(provider)
 		val consumedState = stateService.consume(state, stateCookie, provider)
 		val profile = client.fetchUserProfile(
@@ -65,15 +83,38 @@ class OAuthLoginService(
 			.toUri()
 	}
 
+	private fun completeDeniedAuthorization(
+		provider: OAuthProvider,
+		state: String,
+		stateCookie: String?,
+	): URI {
+		val consumedState = stateService.consume(state, stateCookie, provider)
+		return UriComponentsBuilder.fromUriString(consumedState.frontendRedirectUrl)
+			.queryParam(ERROR_QUERY_PARAMETER, ACCESS_DENIED_ERROR)
+			.build()
+			.encode()
+			.toUri()
+	}
+
 	private fun resolveProvider(providerName: String): OAuthProvider =
 		OAuthProvider.entries.firstOrNull { it.name.equals(providerName, ignoreCase = true) }
 			?: throw UnsupportedOAuthProviderException()
 
 	private fun resolveClient(provider: OAuthProvider): OAuthProviderClient =
 		providerClients[provider] ?: throw UnsupportedOAuthProviderException()
+
+	companion object {
+		private const val ERROR_QUERY_PARAMETER = "error"
+		private const val ACCESS_DENIED_ERROR = "access_denied"
+	}
 }
 
 class UnsupportedOAuthProviderException : DomainException(ErrorCode.INVALID_REQUEST)
+
+class InvalidOAuthAuthorizationResponseException : DomainException(
+	ErrorCode.INVALID_REQUEST,
+	"OAuth 인증 응답이 올바르지 않습니다.",
+)
 
 class OAuthProviderException(
 	cause: Throwable? = null,
