@@ -115,6 +115,14 @@ export default function TripDetailPage() {
     return () => clearTimeout(handle);
   }, [accessToken, placeQuery, countries, selectedCountryId]);
 
+  // 여행 기간을 편집해서 날짜 탭 개수가 줄어들면, 이미 골라둔 activeDay가 범위 밖으로
+  // 밀려나 탭이 하나도 선택 안 된 것처럼 보이고 일정 목록도 텅 비는 문제가 있었다 —
+  // 탭 개수가 바뀔 때마다 activeDay가 아직 유효한 범위인지 확인해서, 아니면 첫 날로 되돌린다.
+  React.useEffect(() => {
+    const tabCount = getDateTabs(dateRange.start, dateRange.end).length;
+    if (Number(activeDay) >= tabCount) setActiveDay("0");
+  }, [dateRange, activeDay]);
+
 React.useEffect(() => {
   if (!isInitializing && !isLoggedIn) router.replace("/landing");
 }, [isInitializing, isLoggedIn, router]);
