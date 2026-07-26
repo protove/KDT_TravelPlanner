@@ -13,12 +13,7 @@ import { AppHeader } from "@/components/organisms/AppHeader";
 import { CalendarPopover } from "@/components/organisms/CalendarPopover";
 import { MapPanel } from "@/components/organisms/MapPanel";
 import { ScheduleBoard } from "@/components/organisms/ScheduleBoard";
-import {
-  PlaceModal,
-  type PlaceDateChip,
-  type PlaceSearchResultOption,
-  type TimelineCategoryOption,
-} from "@/components/organisms/PlaceModal";
+import { PlaceModal, type PlaceSearchResultOption } from "@/components/organisms/PlaceModal";
 import { InviteDialog } from "@/components/organisms/InviteDialog";
 import { ParticipantManageDialog, type Participant } from "@/components/organisms/ParticipantManageDialog";
 import { DateRangeBadge } from "@/components/molecules/DateRangeBadge";
@@ -26,20 +21,11 @@ import { ConfirmDialog } from "@/components/molecules/ConfirmDialog";
 import type { Permission } from "@/components/molecules/PermissionSelect";
 import { DetailLayout } from "@/components/templates/DetailLayout";
 import { useAuthStore } from "@/lib/stores/useAuthStore";
-import { type TimelineItem } from "@/lib/api/travel";
 import { toPermission, type TravelRole } from "@/lib/api/permission";
-import { searchPlaces, type PlaceSearchResult } from "@/lib/api/places";
 
-import {
-  COMPANION_OPTIONS,
-  UUID_PATTERN,
-  NEW_ITEM_PREFIX,
-  formatIsoDate,
-  pseudoMapPosition,
-  computeNextVisitOrder,
-  getDateTabs,
-} from "./utils";
+import { COMPANION_OPTIONS, UUID_PATTERN, pseudoMapPosition, getDateTabs } from "./utils";
 import { useTripEditor } from "./useTripEditor";
+import { usePlaceEditor } from "./usePlaceEditor";
 
 export default function TripDetailPage() {
   const router = useRouter();
@@ -95,33 +81,52 @@ export default function TripDetailPage() {
   const [showInvite, setShowInvite] = React.useState(false);
   const [showManage, setShowManage] = React.useState(false);
 
-  const [editingPlace, setEditingPlace] = React.useState<TimelineItem | null>(null);
-  const [addingPlace, setAddingPlace] = React.useState(false);
-  const [placeDraftName, setPlaceDraftName] = React.useState("");
-  const [placeDraftNote, setPlaceDraftNote] = React.useState("");
-  const [placeDraftCategory, setPlaceDraftCategory] = React.useState<TimelineCategoryOption>("관광지");
-  const [placeDraftFoodSubcategory, setPlaceDraftFoodSubcategory] = React.useState("");
-  const [placeDraftDayNumbers, setPlaceDraftDayNumbers] = React.useState<number[]>([]);
-  const [placeQuery, setPlaceQuery] = React.useState("");
-  const [placeResults, setPlaceResults] = React.useState<PlaceSearchResult[]>([]);
-  const [selectedGooglePlaceId, setSelectedGooglePlaceId] = React.useState<string | null>(null);
+  // detail이 아직 안 불려왔을 수도 있어(초기 로딩 중) 안전한 기본값을 씀 — 아래
+  // 훅들은 조건 없이 매번 호출돼야 해서(Rules of Hooks), null 가드보다 앞에 와야 한다.
+  const dateTabs = getDateTabs(dateRange.start, dateRange.end);
+  const timelineItems = draftTimelineItems ?? detail?.timelineItems ?? [];
 
-  React.useEffect(() => {
-    const countryCode = countries.find((c) => c.countryId === selectedCountryId)?.code;
-    if (!accessToken || !placeQuery.trim() || !countryCode) return;
-    const handle = setTimeout(() => {
-      searchPlaces(accessToken, placeQuery.trim(), countryCode).then(setPlaceResults).catch(() => {});
-    }, 300);
-    return () => clearTimeout(handle);
-  }, [accessToken, placeQuery, countries, selectedCountryId]);
+  const {
+    editingPlace,
+    addingPlace,
+    setAddingPlace,
+    placeDraftName,
+    setPlaceDraftName,
+    placeDraftNote,
+    setPlaceDraftNote,
+    placeDraftCategory,
+    setPlaceDraftCategory,
+    placeDraftFoodSubcategory,
+    setPlaceDraftFoodSubcategory,
+    placeQuery,
+    setPlaceQuery,
+    placeResults,
+    setPlaceResults,
+    setEditingPlace,
+    setSelectedGooglePlaceId,
+    openEditPlace,
+    openAddPlace,
+    savePlaceModal,
+    handleSelectDateChip,
+    handleCancelItem,
+    handleDeleteItem,
+    dateChips,
+  } = usePlaceEditor({
+    accessToken,
+    countries,
+    selectedCountryId,
+    selectedCityId,
+    dateTabs,
+    timelineItems,
+    setDraftTimelineItems,
+  });
 
   // 여행 기간을 편집해서 날짜 탭 개수가 줄어들면, 이미 골라둔 activeDay가 범위 밖으로
   // 밀려나 탭이 하나도 선택 안 된 것처럼 보이고 일정 목록도 텅 비는 문제가 있었다 —
   // 탭 개수가 바뀔 때마다 activeDay가 아직 유효한 범위인지 확인해서, 아니면 첫 날로 되돌린다.
   React.useEffect(() => {
-    const tabCount = getDateTabs(dateRange.start, dateRange.end).length;
-    if (Number(activeDay) >= tabCount) setActiveDay("0");
-  }, [dateRange, activeDay]);
+    if (Number(activeDay) >= dateTabs.length) setActiveDay("0");
+  }, [dateTabs, activeDay]);
 
 React.useEffect(() => {
   if (!isInitializing && !isLoggedIn) router.replace("/landing");
@@ -133,14 +138,11 @@ React.useEffect(() => {
 
   if (isInitializing || !isLoggedIn || !user || !detail) return null;
 
-  const dateTabs = getDateTabs(dateRange.start, dateRange.end);
   const activeDayNumber = Number(activeDay) + 1;
   // 일정(할일) 관련 조작도 상단 "정보 수정"(연필) 모드일 때만 가능하다 — 페이지 전체가 하나의 조회/수정 스위치를 공유한다.
   const canEditSchedule = canEditInfo && isEditingInfo;
   const selectedCountryName = countries.find((c) => c.countryId === selectedCountryId)?.nameKo ?? "나라 미지정";
   const selectedCityName = cities.find((c) => c.cityId === selectedCityId)?.nameKo ?? "도시 미지정";
-  // 정보 수정 중이면 로컬 draft를, 아니면 서버 원본을 화면에 그대로 보여준다.
-  const timelineItems = draftTimelineItems ?? detail.timelineItems;
   const activeDayItems = timelineItems
     .filter((t) => t.dayNumber === activeDayNumber)
     .sort((a, b) => a.visitOrder - b.visitOrder)
@@ -163,118 +165,6 @@ React.useEffect(() => {
       permission: toPermission(m.role as TravelRole),
       status: "accepted",
     }));
-
-  function openEditPlace(itemId: string) {
-    const item = timelineItems.find((t) => t.timelineItemId === itemId);
-    if (!item) return;
-    setEditingPlace(item);
-    setPlaceDraftNote(item.memo ?? "");
-    setPlaceDraftCategory(item.category);
-    setPlaceDraftFoodSubcategory(item.foodSubcategory ?? "");
-    setPlaceDraftDayNumbers(item.dayNumber != null ? [item.dayNumber] : []);
-  }
-
-  function openAddPlace() {
-    setAddingPlace(true);
-    setPlaceDraftName("");
-    setPlaceDraftNote("");
-    setPlaceDraftCategory("관광지");
-    setPlaceDraftFoodSubcategory("");
-    setPlaceDraftDayNumbers([]);
-    setPlaceQuery("");
-    setPlaceResults([]);
-    setSelectedGooglePlaceId(null);
-  }
-
-  // 전부 로컬 draft(draftTimelineItems)만 바꾼다 — 실제 서버 반영은 상단 "저장"을 눌러야 일어난다.
-  function savePlaceModal() {
-    if (editingPlace) {
-      const [primaryDay, ...extraDays] = [...placeDraftDayNumbers].sort((a, b) => a - b);
-      const resolvedPrimaryDay = primaryDay ?? null;
-      const visitDate = resolvedPrimaryDay != null ? formatIsoDate(dateTabs[resolvedPrimaryDay - 1].date) : null;
-      setDraftTimelineItems((prev) => {
-        const base = prev ?? [];
-        const updated = base.map((item) =>
-          item.timelineItemId === editingPlace.timelineItemId
-            ? {
-                ...item,
-                category: placeDraftCategory,
-                foodSubcategory: placeDraftCategory === "음식" ? placeDraftFoodSubcategory || null : null,
-                memo: placeDraftNote || null,
-                dayNumber: resolvedPrimaryDay,
-                visitDate,
-                visitOrder:
-                  resolvedPrimaryDay !== editingPlace.dayNumber
-                    ? computeNextVisitOrder(base, resolvedPrimaryDay)
-                    : item.visitOrder,
-              }
-            : item
-        );
-        // 같은 장소를 여러 날짜에 배정하면, 첫 날짜는 원본에 반영하고 나머지 날짜는 같은 내용으로 복제한다.
-        const clones: TimelineItem[] = extraDays.map((day) => ({
-          timelineItemId: `${NEW_ITEM_PREFIX}${crypto.randomUUID()}`,
-          dayNumber: day,
-          visitDate: formatIsoDate(dateTabs[day - 1].date),
-          cityId: editingPlace.cityId,
-          category: placeDraftCategory,
-          foodSubcategory: placeDraftCategory === "음식" ? placeDraftFoodSubcategory || null : null,
-          name: editingPlace.name,
-          googlePlaceId: editingPlace.googlePlaceId,
-          visitOrder: computeNextVisitOrder(base, day),
-          memo: placeDraftNote || null,
-        }));
-        return [...updated, ...clones];
-      });
-      setEditingPlace(null);
-    } else if (addingPlace) {
-      const name = placeDraftName.trim();
-      if (!name) return;
-      setDraftTimelineItems((prev) => {
-        const base = prev ?? [];
-        const newItem: TimelineItem = {
-          timelineItemId: `${NEW_ITEM_PREFIX}${crypto.randomUUID()}`,
-          dayNumber: null,
-          visitDate: null,
-          cityId: selectedCityId,
-          category: placeDraftCategory,
-          foodSubcategory: placeDraftCategory === "음식" ? placeDraftFoodSubcategory || null : null,
-          name,
-          googlePlaceId: selectedGooglePlaceId,
-          visitOrder: computeNextVisitOrder(base, null),
-          memo: placeDraftNote || null,
-        };
-        return [...base, newItem];
-      });
-      setAddingPlace(false);
-    }
-  }
-
-  function handleSelectDateChip(i: number) {
-    const dayNumber = Number(dateTabs[i].key) + 1;
-    setPlaceDraftDayNumbers((prev) =>
-      prev.includes(dayNumber) ? prev.filter((d) => d !== dayNumber) : [...prev, dayNumber]
-    );
-  }
-
-  function handleCancelItem(itemId: string) {
-    setDraftTimelineItems((prev) => {
-      if (!prev) return prev;
-      return prev.map((item) =>
-        item.timelineItemId === itemId
-          ? { ...item, dayNumber: null, visitDate: null, visitOrder: computeNextVisitOrder(prev, null) }
-          : item
-      );
-    });
-  }
-
-  function handleDeleteItem(itemId: string) {
-    setDraftTimelineItems((prev) => (prev ? prev.filter((item) => item.timelineItemId !== itemId) : prev));
-  }
-
-  const dateChips: PlaceDateChip[] = dateTabs.map((tab) => ({
-    label: `${tab.date.getMonth() + 1}.${tab.date.getDate()}`,
-    selected: placeDraftDayNumbers.includes(Number(tab.key) + 1),
-  }));
 
   return (
     <>
