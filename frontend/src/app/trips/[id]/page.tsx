@@ -465,6 +465,7 @@ export default function TripDetailPage() {
   }
 
   const isOwner = detail?.permission === "OWNER";
+  const canEditInfo = isOwner || detail?.permission === "READ_WRITE";
 
   const [activeDay, setActiveDay] = React.useState("0");
   const [showCalendar, setShowCalendar] = React.useState(false);
@@ -505,7 +506,7 @@ React.useEffect(() => {
   const dateTabs = getDateTabs(dateRange.start, dateRange.end);
   const activeDayNumber = Number(activeDay) + 1;
   // 일정(할일) 관련 조작도 상단 "정보 수정"(연필) 모드일 때만 가능하다 — 페이지 전체가 하나의 조회/수정 스위치를 공유한다.
-  const canEditSchedule = (isOwner || detail.permission === "READ_WRITE") && isEditingInfo;
+  const canEditSchedule = canEditInfo && isEditingInfo;
   const selectedCountryName = countries.find((c) => c.countryId === selectedCountryId)?.nameKo ?? "나라 미지정";
   const selectedCityName = cities.find((c) => c.cityId === selectedCityId)?.nameKo ?? "도시 미지정";
   // 정보 수정 중이면 로컬 draft를, 아니면 서버 원본을 화면에 그대로 보여준다.
@@ -672,7 +673,7 @@ React.useEffect(() => {
                 ) : (
                   <h1 className="text-2xl font-bold text-foreground">{detail.title}</h1>
                 )}
-                {isOwner && (
+                {canEditInfo && (
                   <>
                     {isEditingInfo ? (
                       <>
@@ -688,9 +689,11 @@ React.useEffect(() => {
                         <button type="button" title="정보 수정" className="text-muted-foreground" onClick={startEditInfo}>
                           <Icon icon={Pencil} size="sm" aria-label="정보 수정" />
                         </button>
-                        <button type="button" title="여행일정 삭제" className="text-destructive" onClick={() => setShowDeleteConfirm(true)}>
-                          <Icon icon={Trash2} size="sm" aria-label="여행일정 삭제" />
-                        </button>
+                        {isOwner && (
+                          <button type="button" title="여행일정 삭제" className="text-destructive" onClick={() => setShowDeleteConfirm(true)}>
+                            <Icon icon={Trash2} size="sm" aria-label="여행일정 삭제" />
+                          </button>
+                        )}
                       </>
                     )}
                   </>
