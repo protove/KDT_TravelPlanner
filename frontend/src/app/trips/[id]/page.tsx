@@ -486,12 +486,13 @@ export default function TripDetailPage() {
   const [selectedGooglePlaceId, setSelectedGooglePlaceId] = React.useState<string | null>(null);
 
   React.useEffect(() => {
-    if (!accessToken || !placeQuery.trim()) return;
+    const countryCode = countries.find((c) => c.countryId === selectedCountryId)?.code;
+    if (!accessToken || !placeQuery.trim() || !countryCode) return;
     const handle = setTimeout(() => {
-      searchPlaces(accessToken, placeQuery.trim()).then(setPlaceResults).catch(() => {});
+      searchPlaces(accessToken, placeQuery.trim(), countryCode).then(setPlaceResults).catch(() => {});
     }, 300);
     return () => clearTimeout(handle);
-  }, [accessToken, placeQuery]);
+  }, [accessToken, placeQuery, countries, selectedCountryId]);
 
 React.useEffect(() => {
   if (!isInitializing && !isLoggedIn) router.replace("/landing");
