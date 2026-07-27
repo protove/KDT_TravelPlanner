@@ -56,7 +56,7 @@ export default function TripsPage() {
   const sentinelRef = React.useRef<HTMLDivElement>(null);
 
   React.useEffect(() => {
-    if (!isInitializing && !isLoggedIn) router.replace("/landing");
+    if (!isInitializing && !isLoggedIn) router.replace("/");
   }, [isInitializing, isLoggedIn, router]);
 
   // 검색어가 바뀌면 첫 페이지부터 새로 조회한다.

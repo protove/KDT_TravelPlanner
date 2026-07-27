@@ -92,7 +92,7 @@ export default function MypagePage() {
 
   React.useEffect(() => {
     if (!isInitializing && !isLoggedIn) {
-      router.replace("/landing");
+      router.replace("/");
     }
   }, [isInitializing, isLoggedIn, router]);
 
@@ -108,7 +108,7 @@ export default function MypagePage() {
         const refreshedToken = await refreshAccessToken();
         if (!refreshedToken) {
           logout();
-          router.replace("/landing");
+          router.replace("/");
           throw new Error("로그인이 만료되었어요. 다시 로그인해 주세요.");
         }
 
@@ -154,7 +154,7 @@ export default function MypagePage() {
     try {
       await runAuthenticated(requestLogout);
       logout();
-      router.replace("/landing");
+      router.replace("/");
     } catch (error) {
       setProfileError(
         error instanceof Error ? error.message : "로그아웃에 실패했어요.",
@@ -169,7 +169,7 @@ export default function MypagePage() {
       await runAuthenticated(deleteAccount);
       setShowWithdraw(false);
       logout();
-      router.replace("/landing");
+      router.replace("/");
     } catch (error) {
       setProfileError(
         error instanceof Error ? error.message : "회원 탈퇴에 실패했어요.",
