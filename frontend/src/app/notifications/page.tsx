@@ -23,7 +23,7 @@ export default function NotificationsPage() {
 
   React.useEffect(() => {
     if (!isInitializing && !isLoggedIn) {
-      router.replace("/landing");
+      router.replace("/");
       return;
     }
 

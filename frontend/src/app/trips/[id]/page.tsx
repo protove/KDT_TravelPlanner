@@ -129,7 +129,7 @@ export default function TripDetailPage() {
   }, [dateTabs, activeDay]);
 
 React.useEffect(() => {
-  if (!isInitializing && !isLoggedIn) router.replace("/landing");
+  if (!isInitializing && !isLoggedIn) router.replace("/");
 }, [isInitializing, isLoggedIn, router]);
 
 React.useEffect(() => {
