@@ -92,6 +92,7 @@ class OpenApiDocumentationIntegrationTest(
 		listOf(
 			"/api/v1/auth/token/exchange",
 			"/api/v1/users/me/profile",
+			"/api/v1/users/me/profile-image/complete",
 			"/api/v1/travels",
 			"/api/v1/countries",
 			"/api/v1/places/search",
@@ -101,6 +102,7 @@ class OpenApiDocumentationIntegrationTest(
 		).forEach { path -> assertTrue(path in documentedPaths, "Missing documented path: $path") }
 
 		assertTrue(document.path("components").path("schemas").has("TravelCreateRequest"))
+		assertTrue(document.path("components").path("schemas").has("ProfileImageUploadCompleteRequest"))
 	}
 
 	private fun assertAuthenticationContracts(document: JsonNode) {

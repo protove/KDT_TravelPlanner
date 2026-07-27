@@ -3,6 +3,7 @@ package com.ktcloud.travelplanner.user.controller
 import com.ktcloud.travelplanner.auth.controller.RefreshTokenCookieFactory
 import com.ktcloud.travelplanner.global.response.ApiResponse
 import com.ktcloud.travelplanner.global.security.AuthenticatedUserPrincipal
+import com.ktcloud.travelplanner.user.dto.ProfileImageUploadCompleteRequest
 import com.ktcloud.travelplanner.user.dto.ProfileImageUploadUrlRequest
 import com.ktcloud.travelplanner.user.dto.ProfileImageUploadUrlResponse
 import com.ktcloud.travelplanner.user.dto.UserProfileResponse
@@ -50,6 +51,13 @@ class UserController(
 		@Valid @RequestBody request: ProfileImageUploadUrlRequest,
 	): ApiResponse<ProfileImageUploadUrlResponse> =
 		ApiResponse.success(profileImageUploadService.createUploadUrl(principal.userId, request))
+
+	@PostMapping("/profile-image/complete")
+	fun completeProfileImageUpload(
+		@AuthenticationPrincipal principal: AuthenticatedUserPrincipal,
+		@Valid @RequestBody request: ProfileImageUploadCompleteRequest,
+	): ApiResponse<UserProfileResponse> =
+		ApiResponse.success(profileImageUploadService.completeUpload(principal.userId, request))
 
 	@DeleteMapping
 	fun deleteAccount(

@@ -21,6 +21,7 @@ app:
     error-frame-limit: 5
   storage:
     profile-image:
+      public-base-url: https://images.test
       upload-url-ttl: 10m
   auth:
     refresh-token:

@@ -5,6 +5,7 @@ import com.ktcloud.travelplanner.testsupport.TestcontainersConfiguration
 import com.ktcloud.travelplanner.user.model.OAuthProvider
 import com.ktcloud.travelplanner.user.model.User
 import com.ktcloud.travelplanner.user.repository.UserRepository
+import com.ktcloud.travelplanner.user.storage.ProfileImageObjectMetadata
 import com.ktcloud.travelplanner.user.storage.ProfileImageStorage
 import com.ktcloud.travelplanner.user.storage.ProfileImageUploadCommand
 import org.hamcrest.Matchers.equalTo
@@ -103,6 +104,105 @@ class ProfileImageUploadControllerIntegrationTest(
 			}
 	}
 
+	@Test
+	fun `authenticated user completes upload and persists public profile image URL`() {
+		val user = saveUser()
+		val accessToken = jwtTokenService.issueAccessToken(requireNotNull(user.id)).value
+		val objectKey = "users/${user.id}/profile/11111111-1111-4111-8111-111111111111.webp"
+		fakeProfileImageStorage.objectMetadata = ProfileImageObjectMetadata("image/webp", 1024)
+
+		mockMvc.post("/api/v1/users/me/profile-image/complete") {
+			header(HttpHeaders.AUTHORIZATION, "Bearer $accessToken")
+			contentType = MediaType.APPLICATION_JSON
+			content = """{"objectKey":"$objectKey"}"""
+		}
+			.andExpect {
+				status { isOk() }
+				jsonPath("$.data.userId", equalTo(user.id.toString()))
+				jsonPath("$.data.profileImageUrl", equalTo("https://images.test/$objectKey"))
+			}
+
+		assertEquals(objectKey, fakeProfileImageStorage.lastMetadataObjectKey)
+		assertEquals(
+			"https://images.test/$objectKey",
+			userRepository.findById(requireNotNull(user.id)).orElseThrow().profileImageUrl,
+		)
+	}
+
+	@Test
+	fun `completion rejects missing invalid and unowned objects without changing profile`() {
+		val user = saveUser()
+		val accessToken = jwtTokenService.issueAccessToken(requireNotNull(user.id)).value
+		val objectKey = "users/${user.id}/profile/11111111-1111-4111-8111-111111111111.png"
+
+		fakeProfileImageStorage.objectMetadata = null
+		mockMvc.post("/api/v1/users/me/profile-image/complete") {
+			header(HttpHeaders.AUTHORIZATION, "Bearer $accessToken")
+			contentType = MediaType.APPLICATION_JSON
+			content = """{"objectKey":"$objectKey"}"""
+		}
+			.andExpect {
+				status { isNotFound() }
+				jsonPath("$.code", equalTo("RESOURCE_NOT_FOUND"))
+			}
+
+		fakeProfileImageStorage.objectMetadata = ProfileImageObjectMetadata("image/jpeg", 1024)
+		mockMvc.post("/api/v1/users/me/profile-image/complete") {
+			header(HttpHeaders.AUTHORIZATION, "Bearer $accessToken")
+			contentType = MediaType.APPLICATION_JSON
+			content = """{"objectKey":"$objectKey"}"""
+		}
+			.andExpect {
+				status { isBadRequest() }
+				jsonPath("$.code", equalTo("INVALID_REQUEST"))
+			}
+
+		val metadataInvocations = fakeProfileImageStorage.metadataInvocationCount
+		mockMvc.post("/api/v1/users/me/profile-image/complete") {
+			header(HttpHeaders.AUTHORIZATION, "Bearer $accessToken")
+			contentType = MediaType.APPLICATION_JSON
+			content = """{"objectKey":"users/${UUID.randomUUID()}/profile/11111111-1111-4111-8111-111111111111.png"}"""
+		}
+			.andExpect {
+				status { isBadRequest() }
+				jsonPath("$.code", equalTo("INVALID_REQUEST"))
+			}
+
+		assertEquals(metadataInvocations, fakeProfileImageStorage.metadataInvocationCount)
+		assertEquals(null, userRepository.findById(requireNotNull(user.id)).orElseThrow().profileImageUrl)
+	}
+
+	@Test
+	fun `unauthenticated completion request is rejected`() {
+		mockMvc.post("/api/v1/users/me/profile-image/complete") {
+			contentType = MediaType.APPLICATION_JSON
+			content = """{"objectKey":"users/${UUID.randomUUID()}/profile/11111111-1111-4111-8111-111111111111.png"}"""
+		}
+			.andExpect {
+				status { isUnauthorized() }
+				jsonPath("$.code", equalTo("UNAUTHORIZED"))
+			}
+	}
+
+	@Test
+	fun `blank completion object key returns validation error without invoking storage`() {
+		val user = saveUser()
+		val accessToken = jwtTokenService.issueAccessToken(requireNotNull(user.id)).value
+
+		mockMvc.post("/api/v1/users/me/profile-image/complete") {
+			header(HttpHeaders.AUTHORIZATION, "Bearer $accessToken")
+			contentType = MediaType.APPLICATION_JSON
+			content = """{"objectKey":""}"""
+		}
+			.andExpect {
+				status { isBadRequest() }
+				jsonPath("$.code", equalTo("VALIDATION_ERROR"))
+				jsonPath("$.fieldErrors[0].field", equalTo("objectKey"))
+			}
+
+		assertEquals(0, fakeProfileImageStorage.metadataInvocationCount)
+	}
+
 	private fun saveUser(): User = userRepository.saveAndFlush(
 		User(
 			provider = OAuthProvider.GOOGLE,
@@ -120,7 +220,10 @@ class FakeProfileImageStorageConfiguration {
 
 class FakeProfileImageStorage : ProfileImageStorage {
 	var lastCommand: ProfileImageUploadCommand? = null
+	var lastMetadataObjectKey: String? = null
+	var objectMetadata: ProfileImageObjectMetadata? = null
 	var invocationCount: Int = 0
+	var metadataInvocationCount: Int = 0
 
 	override fun createUploadUrl(command: ProfileImageUploadCommand): URI {
 		lastCommand = command
@@ -128,8 +231,17 @@ class FakeProfileImageStorage : ProfileImageStorage {
 		return URI.create("https://storage.test/upload")
 	}
 
+	override fun getObjectMetadata(objectKey: String): ProfileImageObjectMetadata? {
+		lastMetadataObjectKey = objectKey
+		metadataInvocationCount++
+		return objectMetadata
+	}
+
 	fun reset() {
 		lastCommand = null
+		lastMetadataObjectKey = null
+		objectMetadata = null
 		invocationCount = 0
+		metadataInvocationCount = 0
 	}
 }
