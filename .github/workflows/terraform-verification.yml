@@ -95,17 +95,8 @@ jobs:
         run: terraform test
 
   tflint:
-    name: TFLint ${{ matrix.directory }}
+    name: TFLint
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        directory:
-          - infra/bootstrap
-          - infra/environments/dev
-          - infra/environments/prod
-          - infra/modules/terraform_state_backend
-          - infra/modules/profile_image
     steps:
       - name: Check out repository
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -117,9 +108,22 @@ jobs:
 
       - name: Initialize TFLint plugins
         run: tflint --init --config="${GITHUB_WORKSPACE}/infra/.tflint.hcl"
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
 
       - name: Lint Terraform
-        run: tflint --config="${GITHUB_WORKSPACE}/infra/.tflint.hcl" --chdir="${{ matrix.directory }}"
+        run: |
+          for directory in \
+            infra/bootstrap \
+            infra/environments/dev \
+            infra/environments/prod \
+            infra/modules/terraform_state_backend \
+            infra/modules/profile_image
+          do
+            tflint \
+              --config="${GITHUB_WORKSPACE}/infra/.tflint.hcl" \
+              --chdir="${directory}"
+          done
 
   trivy:
     name: Trivy IaC and secret scan
