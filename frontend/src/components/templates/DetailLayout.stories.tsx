@@ -28,19 +28,6 @@ function ScheduleSlot() {
       onDayChange={setActiveDay}
       items={[{ id: "1", placeName: "나리타 국제공항", note: "도착 후 리무진버스로 이동" }]}
       unassigned={[{ id: "u1", name: "시부야 스카이" }]}
-    />
-  );
-}
-
-export const Default: Story = {
-  args: { schedule: null, map: null },
-  render: () => (
-    <DetailLayout
-      header={<AppHeader loggedIn userInitial="지" />}
-      detailHeader={
-        <TripDetailHeader title="도쿄 벚꽃 여행" start={new Date(2027, 3, 2)} end={new Date(2027, 3, 5)} />
-      }
-      schedule={<ScheduleSlot />}
       map={
         <MapPanel
           markers={[
@@ -49,6 +36,19 @@ export const Default: Story = {
           ]}
         />
       }
+    />
+  );
+}
+
+export const Default: Story = {
+  args: { schedule: null },
+  render: () => (
+    <DetailLayout
+      header={<AppHeader loggedIn userInitial="지" />}
+      detailHeader={
+        <TripDetailHeader title="도쿄 벚꽃 여행" start={new Date(2027, 3, 2)} end={new Date(2027, 3, 5)} />
+      }
+      schedule={<ScheduleSlot />}
     />
   ),
 };

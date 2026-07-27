@@ -66,7 +66,24 @@ export async function createTravel(
 
 export type CompanionType = "SOLO" | "COUPLE" | "FAMILY" | "FRIEND" | "PET" | "ETC";
 
-/** 백엔드 TravelDetailResponse.kt와 대응. timelineItems/멤버/댓글은 아직 프론트에서 안 씀. */
+/** 백엔드 TimelineCategory.kt와 대응. @JsonValue로 한글 문자열로 직렬화된다. */
+export type TimelineCategory = "관광지" | "음식" | "숙소" | "교통" | "기타";
+
+/** 백엔드 TimelineItemResponse.kt와 대응. */
+export interface TimelineItem {
+  timelineItemId: string;
+  dayNumber: number | null;
+  visitDate: string | null;
+  cityId: number | null;
+  category: TimelineCategory;
+  foodSubcategory: string | null;
+  name: string;
+  googlePlaceId: string | null;
+  visitOrder: number;
+  memo: string | null;
+}
+
+/** 백엔드 TravelDetailResponse.kt와 대응. 멤버/댓글은 아직 프론트에서 안 씀. */
 export interface TravelDetail {
   travelId: string;
   ownerId: string;
@@ -81,9 +98,44 @@ export interface TravelDetail {
   comment: string | null;
   version: number;
   permission: "OWNER" | "READ_ONLY" | "READ_WRITE";
+  timelineItems: TimelineItem[];
 }
 
 /** 여행 상세를 조회한다. 없는 id면 404, 접근 권한 없으면 403. */
 export async function fetchTravelDetail(accessToken: string, travelId: string): Promise<TravelDetail> {
   return apiFetch<TravelDetail>(`/api/v1/travels/${travelId}`, accessToken);
+}
+
+/**
+ * 백엔드 TravelUpdateRequest.kt와 대응. PatchField 방식이라 바뀐 키만 담아 보내면 된다
+ * (키를 아예 안 넣으면 해당 필드는 그대로 유지). version은 낙관적 락이라 항상 필수.
+ */
+export interface TravelUpdatePatch {
+  title?: string;
+  startDate?: string;
+  endDate?: string;
+  countryId?: number | null;
+  cityId?: number | null;
+  companionType?: CompanionType;
+  companionCount?: number;
+  comment?: string | null;
+  version: number;
+}
+
+/** 여행 기본정보를 부분 수정한다. version 충돌 시 409(ApiError)가 던져진다. */
+export async function updateTravel(
+  accessToken: string,
+  travelId: string,
+  patch: TravelUpdatePatch,
+): Promise<TravelDetail> {
+  return apiFetch<TravelDetail>(`/api/v1/travels/${travelId}`, accessToken, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+}
+
+/** 여행을 삭제한다. OWNER만 가능. */
+export async function deleteTravel(accessToken: string, travelId: string): Promise<void> {
+  await apiFetch<void>(`/api/v1/travels/${travelId}`, accessToken, { method: "DELETE" });
 }
