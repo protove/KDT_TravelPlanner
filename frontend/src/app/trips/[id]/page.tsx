@@ -23,9 +23,10 @@ import { DetailLayout } from "@/components/templates/DetailLayout";
 import { useAuthStore } from "@/lib/stores/useAuthStore";
 import { toPermission, type TravelRole } from "@/lib/api/permission";
 
-import { COMPANION_OPTIONS, UUID_PATTERN, pseudoMapPosition, getDateTabs } from "./utils";
+import { COMPANION_OPTIONS, UUID_PATTERN, getDateTabs } from "./utils";
 import { useTripEditor } from "./useTripEditor";
 import { usePlaceEditor } from "./usePlaceEditor";
+import { useMapPoints } from "./useMapPoints";
 
 export default function TripDetailPage() {
   const router = useRouter();
@@ -128,6 +129,9 @@ export default function TripDetailPage() {
     if (Number(activeDay) >= dateTabs.length) setActiveDay("0");
   }, [dateTabs, activeDay]);
 
+  const activeDayNumber = Number(activeDay) + 1;
+  const mapPoints = useMapPoints(accessToken, id, activeDayNumber, detail?.timelineItems);
+
 React.useEffect(() => {
   if (!isInitializing && !isLoggedIn) router.replace("/landing");
 }, [isInitializing, isLoggedIn, router]);
@@ -138,7 +142,6 @@ React.useEffect(() => {
 
   if (isInitializing || !isLoggedIn || !user || !detail) return null;
 
-  const activeDayNumber = Number(activeDay) + 1;
   // 일정(할일) 관련 조작도 상단 "정보 수정"(연필) 모드일 때만 가능하다 — 페이지 전체가 하나의 조회/수정 스위치를 공유한다.
   const canEditSchedule = canEditInfo && isEditingInfo;
   const selectedCountryName = countries.find((c) => c.countryId === selectedCountryId)?.nameKo ?? "나라 미지정";
@@ -151,11 +154,9 @@ React.useEffect(() => {
     .filter((t) => t.dayNumber === null)
     .sort((a, b) => a.visitOrder - b.visitOrder)
     .map((t) => ({ id: t.timelineItemId, name: t.name, note: t.memo || undefined }));
-  const mapMarkers = timelineItems.map((t) => ({
-    id: t.timelineItemId,
-    name: t.name,
-    ...pseudoMapPosition(t.timelineItemId),
-  }));
+  // mapPoints는 activeDayNumber에 배정되고 googlePlaceId가 연결된 항목만 좌표가 나온다.
+  // 미배정이거나 장소 검색으로 연결 안 된 항목은 지도에 안 찍힌다(경로 아이콘도 없음).
+  const mapMarkers = mapPoints.map((p) => ({ id: p.timelineItemId, name: p.name, lat: p.latitude, lng: p.longitude }));
 
   const manageableParticipants: Participant[] = travelMembers
     .filter((m) => !m.isOwner)
