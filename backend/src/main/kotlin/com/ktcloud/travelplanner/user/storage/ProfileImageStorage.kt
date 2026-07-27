@@ -3,8 +3,10 @@ package com.ktcloud.travelplanner.user.storage
 import java.net.URI
 import java.time.Duration
 
-fun interface ProfileImageStorage {
+interface ProfileImageStorage {
 	fun createUploadUrl(command: ProfileImageUploadCommand): URI
+
+	fun getObjectMetadata(objectKey: String): ProfileImageObjectMetadata?
 }
 
 data class ProfileImageUploadCommand(
@@ -12,4 +14,9 @@ data class ProfileImageUploadCommand(
 	val contentType: String,
 	val fileSize: Long,
 	val expiresIn: Duration,
+)
+
+data class ProfileImageObjectMetadata(
+	val contentType: String?,
+	val fileSize: Long,
 )
