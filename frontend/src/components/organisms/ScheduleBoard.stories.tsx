@@ -60,8 +60,8 @@ function DemoWithMap() {
       map={
         <MapPanel
           markers={[
-            { id: "1", name: "나리타 국제공항", x: 20, y: 30 },
-            { id: "2", name: "신주쿠 숙소", x: 55, y: 45 },
+            { id: "1", name: "나리타 국제공항", lat: 35.772, lng: 140.3929 },
+            { id: "2", name: "신주쿠 숙소", lat: 35.6938, lng: 139.7034 },
           ]}
         />
       }

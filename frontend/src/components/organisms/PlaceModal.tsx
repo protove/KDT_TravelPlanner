@@ -19,6 +19,8 @@ export interface PlaceDateChip {
 export interface PlaceSearchResultOption {
   placeId: string;
   name: string;
+  latitude: number;
+  longitude: number;
 }
 
 export interface PlaceModalProps {
@@ -83,7 +85,7 @@ function PlaceModal({
               onChange={(e) => onPlaceQueryChange(e.target.value)}
             />
             {placeResults.length > 0 && (
-              <div className="mt-1.5 flex flex-col gap-1 rounded-lg border border-border bg-popover p-1.5 shadow-dialog">
+              <div className="mt-1.5 flex max-h-48 flex-col gap-1 overflow-y-auto rounded-lg border border-border bg-popover p-1.5 shadow-dialog">
                 {placeResults.map((result) => (
                   <button
                     key={result.placeId}

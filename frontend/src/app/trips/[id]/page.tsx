@@ -22,9 +22,10 @@ import { DetailLayout } from "@/components/templates/DetailLayout";
 import { useAuthStore } from "@/lib/stores/useAuthStore";
 import { toPermission, type TravelRole } from "@/lib/api/permission";
 
-import { COMPANION_OPTIONS, UUID_PATTERN, pseudoMapPosition, getDateTabs } from "./utils";
+import { COMPANION_OPTIONS, UUID_PATTERN, getDateTabs } from "./utils";
 import { useTripEditor } from "./useTripEditor";
 import { usePlaceEditor } from "./usePlaceEditor";
+import { useMapPoints } from "./useMapPoints";
 
 export default function TripDetailPage() {
   const router = useRouter();
@@ -103,6 +104,8 @@ export default function TripDetailPage() {
     setPlaceResults,
     setEditingPlace,
     setSelectedGooglePlaceId,
+    setSelectedPlaceCoords,
+    draftPlaceCoords,
     openEditPlace,
     openAddPlace,
     savePlaceModal,
@@ -120,6 +123,14 @@ export default function TripDetailPage() {
     setDraftTimelineItems,
   });
 
+  // 여행 기간을 편집해서 날짜 탭 개수가 줄어들면, 이미 골라둔 activeDay가 범위 밖으로
+  // 밀려나 탭이 하나도 선택 안 된 것처럼 보이고 일정 목록도 텅 비는 문제가 있었다 —
+  // useEffect로 나중에 되돌리는 대신, 렌더링 시점에 바로 유효한 값으로 보정해서 쓴다.
+  const visibleActiveDay = Number(activeDay) < dateTabs.length ? activeDay : "0";
+
+  const activeDayNumber = Number(visibleActiveDay) + 1;
+  const mapPoints = useMapPoints(accessToken, id, activeDayNumber, detail?.timelineItems);
+
 React.useEffect(() => {
   if (!isInitializing && !isLoggedIn) router.replace("/");
 }, [isInitializing, isLoggedIn, router]);
@@ -130,9 +141,6 @@ React.useEffect(() => {
 
   if (isInitializing || !isLoggedIn || !user || !detail) return null;
 
-  const visibleActiveDay =
-    Number(activeDay) < dateTabs.length ? activeDay : "0";
-  const activeDayNumber = Number(visibleActiveDay) + 1;
   // 일정(할일) 관련 조작도 상단 "정보 수정"(연필) 모드일 때만 가능하다 — 페이지 전체가 하나의 조회/수정 스위치를 공유한다.
   const canEditSchedule = canEditInfo && isEditingInfo;
   const selectedCountryName = countries.find((c) => c.countryId === selectedCountryId)?.nameKo ?? "나라 미지정";
@@ -145,11 +153,20 @@ React.useEffect(() => {
     .filter((t) => t.dayNumber === null)
     .sort((a, b) => a.visitOrder - b.visitOrder)
     .map((t) => ({ id: t.timelineItemId, name: t.name, note: t.memo || undefined }));
-  const mapMarkers = timelineItems.map((t) => ({
-    id: t.timelineItemId,
-    name: t.name,
-    ...pseudoMapPosition(t.timelineItemId),
-  }));
+  // mapPoints는 activeDayNumber에 배정되고 googlePlaceId가 연결된 항목만 좌표가 나온다.
+  // 미배정이거나 장소 검색으로 연결 안 된 항목은 지도에 안 찍힌다(경로 아이콘도 없음).
+  const savedMarkers = mapPoints.map((p) => ({ id: p.timelineItemId, name: p.name, lat: p.latitude, lng: p.longitude }));
+  // 아직 "저장" 전인 신규 항목도, 장소 검색으로 좌표를 이미 아는 경우 활성 날짜에 배정되는
+  // 즉시 미리보기 마커로 보여준다(savedMarkers엔 저장 전이라 안 잡힘).
+  const draftMarkers = timelineItems
+    .filter((t) => t.dayNumber === activeDayNumber && draftPlaceCoords[t.timelineItemId])
+    .map((t) => ({
+      id: t.timelineItemId,
+      name: t.name,
+      lat: draftPlaceCoords[t.timelineItemId].lat,
+      lng: draftPlaceCoords[t.timelineItemId].lng,
+    }));
+  const mapMarkers = [...savedMarkers, ...draftMarkers];
 
   const manageableParticipants: Participant[] = travelMembers
     .filter((m) => !m.isOwner)
@@ -391,10 +408,18 @@ React.useEffect(() => {
         onFoodSubcategoryChange={setPlaceDraftFoodSubcategory}
         placeQuery={placeQuery}
         onPlaceQueryChange={setPlaceQuery}
-        placeResults={placeResults.map((r): PlaceSearchResultOption => ({ placeId: r.placeId, name: r.name }))}
+        placeResults={placeResults.map(
+          (r): PlaceSearchResultOption => ({
+            placeId: r.placeId,
+            name: r.name,
+            latitude: r.latitude,
+            longitude: r.longitude,
+          })
+        )}
         onSelectPlaceResult={(result) => {
           setPlaceDraftName(result.name);
           setSelectedGooglePlaceId(result.placeId);
+          setSelectedPlaceCoords({ lat: result.latitude, lng: result.longitude });
           setPlaceQuery("");
           setPlaceResults([]);
         }}

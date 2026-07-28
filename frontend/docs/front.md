@@ -97,8 +97,8 @@ src/
 |---|---|---|
 | atoms | 비즈니스 로직 금지, props로만 제어 | Button, Input, Badge, Avatar, Tabs, Checkbox, Select, Textarea, Dialog(shell), Tooltip, Icon |
 | molecules | atoms 조합, 도메인 무관 | SearchBar, FormField, ConfirmDialog, UserChip(아바타+닉네임), PermissionSelect(읽기/읽기쓰기), DateRangeBadge, CommentRow, CommentInput, SocialLoginButton(구글/네이버 공식 로그인 버튼) |
-| organisms | 도메인 데이터 소비 | GNB/Header, TripCard, TripList, TripDetailHeader(제목·기간 수정), ScheduleBoard(일자별 계획+미배정 목록), MapPanel(지도·경로 최적화), InviteDialog, ParticipantManageDialog, NotificationList, ProfileSection, CalendarPopover(기간 선택), PlaceModal(마커노트/목적지 추가) |
-| templates | 슬롯만 배치 | AuthLayout, ListLayout, DetailLayout(2-pane: 일정+지도), MyPageLayout, LandingLayout |
+| organisms | 도메인 데이터 소비 | GNB/Header, TripCard, TripList, TripDetailHeader(제목·기간 수정), ScheduleBoard(날짜 탭 → map 슬롯(지도) → 일정 목록 → 미배정 목록, 초안 순서 그대로), MapPanel(Google Maps JS SDK, @react-google-maps/api·useJsApiLoader, 서버가 조회한 실제 위도/경도로 마커·경로 최적화), InviteDialog, ParticipantManageDialog, NotificationList, ProfileSection, CalendarPopover(기간 선택), PlaceModal(마커노트/목적지 추가) |
+| templates | 슬롯만 배치 | AuthLayout, ListLayout, DetailLayout(1단 세로: 헤더+일정, 지도는 ScheduleBoard 내부 인라인), MyPageLayout, LandingLayout |
 | pages | IA의 [화면] 항목과 1:1 | 비로그인 랜딩, 로그인/회원가입, 여행일정 목록, 여행일정 상세, 마이페이지(알림 포함), 403 |
 
 동행 선택은 새 컴포넌트를 만들지 않고 기존 `Select` atom을 그대로 사용한다(단일 선택이라 커스텀 드롭다운이 불필요).
