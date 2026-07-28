@@ -24,6 +24,12 @@ import {
   type UserProfile,
   updateUserProfile,
 } from "@/lib/api/profile";
+import {
+  ProfileImageUploadError,
+  type ProfileImageUploadStep,
+  uploadProfileImage,
+  validateProfileImage,
+} from "@/lib/api/profileImage";
 import type { Gender } from "@/components/organisms/ProfileSection";
 
 type MypageTab = "profile" | "notif";
@@ -89,6 +95,19 @@ export default function MypagePage() {
   const [nicknameError, setNicknameError] = React.useState<string | undefined>();
   const [ageError, setAgeError] = React.useState<string | undefined>();
   const [statusMessage, setStatusMessage] = React.useState<string | undefined>();
+  const [selectedImage, setSelectedImage] = React.useState<File | null>(null);
+  const [imagePreviewUrl, setImagePreviewUrl] = React.useState<string>();
+  const [imageError, setImageError] = React.useState<string>();
+  const [imageStatusMessage, setImageStatusMessage] = React.useState<string>();
+  const [imageUploadStep, setImageUploadStep] =
+    React.useState<ProfileImageUploadStep>();
+
+  React.useEffect(
+    () => () => {
+      if (imagePreviewUrl) URL.revokeObjectURL(imagePreviewUrl);
+    },
+    [imagePreviewUrl],
+  );
 
   React.useEffect(() => {
     if (!isInitializing && !isLoggedIn) {
@@ -208,9 +227,11 @@ export default function MypagePage() {
 
     setIsSaving(true);
     setProfileError(null);
+    setImageError(undefined);
+    setImageStatusMessage(undefined);
     setStatusMessage(undefined);
     try {
-      const updatedProfile = await runAuthenticated((token) =>
+      let updatedProfile = await runAuthenticated((token) =>
         updateUserProfile(token, {
           nickname: draft.nickname.trim(),
           gender: mapGenderToApi(draft.gender),
@@ -218,6 +239,13 @@ export default function MypagePage() {
             draft.age === "" ? null : new Date().getFullYear() - draft.age,
         }),
       );
+
+      if (selectedImage) {
+        setImageUploadStep("requesting-url");
+        updatedProfile = await runAuthenticated((token) =>
+          uploadProfileImage(token, selectedImage, setImageUploadStep),
+        );
+      }
 
       setProfile(updatedProfile);
       setDraft(profileToDraft(updatedProfile));
@@ -228,9 +256,14 @@ export default function MypagePage() {
         birthYear: authProfile.birthYear,
         profileImageUrl: authProfile.profileImageUrl,
       });
+      if (imagePreviewUrl) URL.revokeObjectURL(imagePreviewUrl);
+      setImagePreviewUrl(undefined);
+      setSelectedImage(null);
       setStatusMessage("프로필을 저장했어요.");
     } catch (error) {
-      if (error instanceof ApiError && error.code === "CONFLICT") {
+      if (error instanceof ProfileImageUploadError) {
+        setImageError(error.message);
+      } else if (error instanceof ApiError && error.code === "CONFLICT") {
         setNicknameError(error.message);
       } else if (error instanceof ApiError && error.fieldErrors) {
         for (const fieldError of error.fieldErrors) {
@@ -244,14 +277,46 @@ export default function MypagePage() {
       }
     } finally {
       setIsSaving(false);
+      setImageUploadStep(undefined);
     }
   }
+
+  function handleImageSelect(file: File | null) {
+    setImageError(undefined);
+    setImageStatusMessage(undefined);
+
+    if (imagePreviewUrl) URL.revokeObjectURL(imagePreviewUrl);
+    setImagePreviewUrl(undefined);
+    setSelectedImage(null);
+
+    if (!file) return;
+
+    try {
+      validateProfileImage(file);
+      setSelectedImage(file);
+      setImagePreviewUrl(URL.createObjectURL(file));
+    } catch (error) {
+      setImageError(
+        error instanceof Error ? error.message : "이미지를 확인하지 못했어요.",
+      );
+    }
+  }
+
+  const savingLabel =
+    imageUploadStep === "requesting-url"
+      ? "저장 중..."
+      : imageUploadStep === "uploading"
+        ? "저장 중..."
+        : imageUploadStep === "completing"
+          ? "저장 중..."
+          : undefined;
 
   const hasProfileChanges =
     profile !== null &&
     (draft.nickname.trim() !== (profile.nickname ?? profile.name ?? "") ||
       draft.gender !== mapGenderToForm(profile.gender) ||
-      draft.age !== profileToDraft(profile).age);
+      draft.age !== profileToDraft(profile).age ||
+      selectedImage !== null);
 
   return (
     <MyPageLayout
@@ -296,9 +361,13 @@ export default function MypagePage() {
               }}
               avatarSrc={profile?.profileImageUrl ?? undefined}
               avatarColor={user.avatarColor}
+              imagePreviewSrc={imagePreviewUrl}
+              imageError={imageError}
+              imageStatusMessage={imageStatusMessage}
+              onImageSelect={handleImageSelect}
               nicknameError={nicknameError}
               ageError={ageError}
-              statusMessage={statusMessage}
+              statusMessage={savingLabel ?? statusMessage}
               isSaving={isSaving}
               hasChanges={hasProfileChanges}
               onSave={() => void handleSave()}
