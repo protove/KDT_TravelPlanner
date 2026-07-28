@@ -62,7 +62,7 @@ function NewTripModal({ open, onOpenChange, accessToken, onCreated }: NewTripMod
           <button
             type="button"
             onClick={() => setShowCalendar((v) => !v)}
-            className="flex items-center gap-2 rounded-full bg-muted px-3.5 py-2 text-sm font-bold text-foreground"
+            className="flex cursor-pointer items-center gap-2 rounded-full bg-muted px-3.5 py-2 text-sm font-bold text-foreground"
           >
             📅 <DateRangeBadge start={range.start} end={range.end} />
           </button>

@@ -81,7 +81,7 @@ function CalendarPopover({ value, onChange, onApply, className }: CalendarPopove
         <button
           type="button"
           onClick={() => setViewMonth(new Date(year, month - 1, 1))}
-          className="text-muted-foreground"
+          className="cursor-pointer text-muted-foreground"
         >
           <Icon icon={ChevronLeft} size="sm" aria-label="이전 달" />
         </button>
@@ -89,7 +89,7 @@ function CalendarPopover({ value, onChange, onApply, className }: CalendarPopove
         <button
           type="button"
           onClick={() => setViewMonth(new Date(year, month + 1, 1))}
-          className="text-muted-foreground"
+          className="cursor-pointer text-muted-foreground"
         >
           <Icon icon={ChevronRight} size="sm" aria-label="다음 달" />
         </button>
@@ -116,7 +116,7 @@ function CalendarPopover({ value, onChange, onApply, className }: CalendarPopove
               onClick={() => handleSelectDay(day)}
               onMouseEnter={() => pendingStart && setHoverDay(day)}
               className={cn(
-                "flex h-6 items-center justify-center rounded text-[11px] transition-colors",
+                "flex h-6 cursor-pointer items-center justify-center rounded text-[11px] transition-colors",
                 pendingStart
                   ? isSameDay(day, pendingStart)
                     ? "bg-primary font-bold text-primary-foreground ring-2 ring-primary ring-offset-1 ring-offset-popover"

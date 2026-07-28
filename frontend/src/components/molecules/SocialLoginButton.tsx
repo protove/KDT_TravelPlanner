@@ -23,7 +23,7 @@ const SocialLoginButton = React.forwardRef<HTMLButtonElement, SocialLoginButtonP
         ref={ref}
         type="button"
         className={cn(
-          "flex w-full cursor-pointer items-center justify-center rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50",
+          "flex w-full cursor-pointer items-center justify-center rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50",
           className
         )}
         {...props}
