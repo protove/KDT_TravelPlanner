@@ -105,6 +105,8 @@ export default function TripDetailPage() {
     setPlaceResults,
     setEditingPlace,
     setSelectedGooglePlaceId,
+    setSelectedPlaceCoords,
+    draftPlaceCoords,
     openEditPlace,
     openAddPlace,
     savePlaceModal,
@@ -156,7 +158,18 @@ React.useEffect(() => {
     .map((t) => ({ id: t.timelineItemId, name: t.name, note: t.memo || undefined }));
   // mapPoints는 activeDayNumber에 배정되고 googlePlaceId가 연결된 항목만 좌표가 나온다.
   // 미배정이거나 장소 검색으로 연결 안 된 항목은 지도에 안 찍힌다(경로 아이콘도 없음).
-  const mapMarkers = mapPoints.map((p) => ({ id: p.timelineItemId, name: p.name, lat: p.latitude, lng: p.longitude }));
+  const savedMarkers = mapPoints.map((p) => ({ id: p.timelineItemId, name: p.name, lat: p.latitude, lng: p.longitude }));
+  // 아직 "저장" 전인 신규 항목도, 장소 검색으로 좌표를 이미 아는 경우 활성 날짜에 배정되는
+  // 즉시 미리보기 마커로 보여준다(savedMarkers엔 저장 전이라 안 잡힘).
+  const draftMarkers = timelineItems
+    .filter((t) => t.dayNumber === activeDayNumber && draftPlaceCoords[t.timelineItemId])
+    .map((t) => ({
+      id: t.timelineItemId,
+      name: t.name,
+      lat: draftPlaceCoords[t.timelineItemId].lat,
+      lng: draftPlaceCoords[t.timelineItemId].lng,
+    }));
+  const mapMarkers = [...savedMarkers, ...draftMarkers];
 
   const manageableParticipants: Participant[] = travelMembers
     .filter((m) => !m.isOwner)
@@ -398,10 +411,18 @@ React.useEffect(() => {
         onFoodSubcategoryChange={setPlaceDraftFoodSubcategory}
         placeQuery={placeQuery}
         onPlaceQueryChange={setPlaceQuery}
-        placeResults={placeResults.map((r): PlaceSearchResultOption => ({ placeId: r.placeId, name: r.name }))}
+        placeResults={placeResults.map(
+          (r): PlaceSearchResultOption => ({
+            placeId: r.placeId,
+            name: r.name,
+            latitude: r.latitude,
+            longitude: r.longitude,
+          })
+        )}
         onSelectPlaceResult={(result) => {
           setPlaceDraftName(result.name);
           setSelectedGooglePlaceId(result.placeId);
+          setSelectedPlaceCoords({ lat: result.latitude, lng: result.longitude });
           setPlaceQuery("");
           setPlaceResults([]);
         }}
