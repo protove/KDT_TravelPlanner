@@ -51,7 +51,7 @@ function AddDemo() {
   const [category, setCategory] = React.useState<TimelineCategoryOption>("관광지");
   const [placeQuery, setPlaceQuery] = React.useState("");
   const placeResults: PlaceSearchResultOption[] = placeQuery
-    ? [{ placeId: "mock-1", name: `${placeQuery} 검색 결과` }]
+    ? [{ placeId: "mock-1", name: `${placeQuery} 검색 결과`, latitude: 37.5796, longitude: 126.977 }]
     : [];
 
   return (

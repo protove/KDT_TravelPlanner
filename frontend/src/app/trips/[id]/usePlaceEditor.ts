@@ -40,6 +40,11 @@ export function usePlaceEditor({
   const [placeQuery, setPlaceQuery] = React.useState("");
   const [placeResults, setPlaceResults] = React.useState<PlaceSearchResult[]>([]);
   const [selectedGooglePlaceId, setSelectedGooglePlaceId] = React.useState<string | null>(null);
+  // 검색 결과에서 고른 장소의 좌표 — 저장 전에도 지도에 바로 미리보기 마커를 찍기 위한 값.
+  const [selectedPlaceCoords, setSelectedPlaceCoords] = React.useState<{ lat: number; lng: number } | null>(null);
+  // 아직 서버에 저장 안 된(=draft) 신규 일정 항목들의 좌표. timelineItemId -> {lat, lng}.
+  // 저장하면 서버가 실제 좌표를 다시 내려주니, 그때부터는 이 값 대신 mapPoints 쪽을 쓰면 된다.
+  const [draftPlaceCoords, setDraftPlaceCoords] = React.useState<Record<string, { lat: number; lng: number }>>({});
 
   React.useEffect(() => {
     const countryCode = countries.find((c) => c.countryId === selectedCountryId)?.code;
@@ -70,6 +75,7 @@ export function usePlaceEditor({
     setPlaceQuery("");
     setPlaceResults([]);
     setSelectedGooglePlaceId(null);
+    setSelectedPlaceCoords(null);
   }
 
   // 전부 로컬 draft(draftTimelineItems)만 바꾼다 — 실제 서버 반영은 상단 "저장"을 눌러야 일어난다.
@@ -115,10 +121,11 @@ export function usePlaceEditor({
     } else if (addingPlace) {
       const name = placeDraftName.trim();
       if (!name) return;
+      const newItemId = `${NEW_ITEM_PREFIX}${crypto.randomUUID()}`;
       setDraftTimelineItems((prev) => {
         const base = prev ?? [];
         const newItem: TimelineItem = {
-          timelineItemId: `${NEW_ITEM_PREFIX}${crypto.randomUUID()}`,
+          timelineItemId: newItemId,
           dayNumber: null,
           visitDate: null,
           cityId: selectedCityId,
@@ -131,6 +138,10 @@ export function usePlaceEditor({
         };
         return [...base, newItem];
       });
+      // 장소 검색으로 골라서 좌표를 아는 경우, 저장 전이라도 지도에 바로 미리보기 마커를 찍는다.
+      if (selectedPlaceCoords) {
+        setDraftPlaceCoords((prev) => ({ ...prev, [newItemId]: selectedPlaceCoords }));
+      }
       setAddingPlace(false);
     }
   }
@@ -155,6 +166,12 @@ export function usePlaceEditor({
 
   function handleDeleteItem(itemId: string) {
     setDraftTimelineItems((prev) => (prev ? prev.filter((item) => item.timelineItemId !== itemId) : prev));
+    setDraftPlaceCoords((prev) => {
+      if (!(itemId in prev)) return prev;
+      const rest = { ...prev };
+      delete rest[itemId];
+      return rest;
+    });
   }
 
   const dateChips: PlaceDateChip[] = dateTabs.map((tab) => ({
@@ -180,6 +197,8 @@ export function usePlaceEditor({
     placeResults,
     setPlaceResults,
     setSelectedGooglePlaceId,
+    setSelectedPlaceCoords,
+    draftPlaceCoords,
     openEditPlace,
     openAddPlace,
     savePlaceModal,
