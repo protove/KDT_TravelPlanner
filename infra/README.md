@@ -47,8 +47,8 @@ AWS 인증은 `AWS_PROFILE` 또는 AWS SDK 기본 자격증명 체인으로만 �
 - 사용자 AWS Account ID
 
 ```bash
-aws sso login --profile kdt-travelplanner-dev
-aws sts get-caller-identity --profile kdt-travelplanner-dev
+aws sso login --profile kdt-travel-bootstrap
+aws sts get-caller-identity --profile kdt-travel-bootstrap
 ```
 
 `Account`가 `terraform.tfvars`의 `aws_account_id`와 정확히 같은지 확인한다.
@@ -62,7 +62,7 @@ cp infra/bootstrap/terraform.tfvars.example infra/bootstrap/terraform.tfvars
 terraform -chdir=infra/bootstrap init
 terraform -chdir=infra/bootstrap fmt -check
 terraform -chdir=infra/bootstrap validate
-AWS_PROFILE=kdt-travelplanner-dev \
+AWS_PROFILE=kdt-travel-bootstrap \
   terraform -chdir=infra/bootstrap plan \
   -out=bootstrap.tfplan
 ```
@@ -70,11 +70,11 @@ AWS_PROFILE=kdt-travelplanner-dev \
 Plan에는 Terraform State 버킷 관련 리소스만 있어야 한다. 계획을 사람이 검토한 뒤 저장된 plan을 적용한다.
 
 ```bash
-AWS_PROFILE=kdt-travelplanner-dev \
+AWS_PROFILE=kdt-travel-bootstrap \
   terraform -chdir=infra/bootstrap apply bootstrap.tfplan
 ```
 
-`-auto-approve`를 사용하지 않는다. 현재 작업 범위에서 실제 AWS apply가 허용된 대상은 이 State 버킷뿐이다.
+`-auto-approve`를 사용하지 않는다. Bootstrap Root에서는 State 버킷 외 리소스를 생성하지 않는다.
 
 ## 2. Bootstrap State를 원격 S3로 이전
 
@@ -90,7 +90,7 @@ terraform {
 
 ```bash
 cp infra/bootstrap/backend.hcl.example infra/bootstrap/backend.hcl
-AWS_PROFILE=kdt-travelplanner-dev \
+AWS_PROFILE=kdt-travel-bootstrap \
   terraform -chdir=infra/bootstrap init \
   -migrate-state \
   -backend-config=backend.hcl
@@ -104,16 +104,23 @@ AWS_PROFILE=kdt-travelplanner-dev \
 cp infra/environments/dev/backend.hcl.example infra/environments/dev/backend.hcl
 cp infra/environments/dev/terraform.tfvars.example infra/environments/dev/terraform.tfvars
 
-AWS_PROFILE=kdt-travelplanner-dev \
+AWS_PROFILE=kdt-travel-terraform \
   terraform -chdir=infra/environments/dev init \
   -backend-config=backend.hcl
 
-AWS_PROFILE=kdt-travelplanner-dev \
+AWS_PROFILE=kdt-travel-terraform \
   terraform -chdir=infra/environments/dev plan \
   -var-file=terraform.tfvars
 ```
 
-이번 작업에서는 dev 이미지 S3, CloudFront와 Runtime Policy를 `apply`하지 않는다. prod는 정적 검증만 수행한다.
+Plan에서 교체·삭제가 없고 예상 리소스만 생성되는지 검토한 뒤 저장된 plan을 적용한다.
+
+```bash
+AWS_PROFILE=kdt-travel-terraform \
+  terraform -chdir=infra/environments/dev apply dev-profile-image.tfplan
+```
+
+현재 dev 이미지 S3, CloudFront와 Runtime Policy는 적용되어 있으며 `terraform plan` 결과가 `No changes`임을 확인했다. prod는 별도 승인 전까지 정적 검증만 수행한다.
 
 ## 애플리케이션 연결 출력
 
@@ -126,6 +133,8 @@ AWS_PROFILE=kdt-travelplanner-dev \
 | `profile_image_runtime_policy_arn` | 개발 SSO Permission Set 또는 운영 Runtime Role 연결 |
 
 AWS S3에서는 `PROFILE_IMAGE_STORAGE_PATH_STYLE_ACCESS_ENABLED=false`를 사용한다.
+
+`profile_image_runtime_policy_arn`은 생성만 되고 자동 연결되지 않는다. 개발용 `KDT-Dev-Runtime-Test` Permission Set에는 동일한 최소권한 인라인 정책을 유지하거나, 생성된 고객 관리형 정책을 이름과 `/` 경로로 연결한다. 두 방식을 중복 적용하지 않는다.
 
 ## 금지 사항
 
@@ -158,3 +167,4 @@ Trivy의 WAF(`AVD-AWS-0011`)와 고객 관리 KMS key(`AVD-AWS-0132`) 권고는 
 
 - `reference/infrastructure/TERRAFORM_AWS_INITIAL_SETUP.md`
 - `reference/storage/AWS_SSO_LOCAL_AND_RUNTIME_CREDENTIALS.md`
+- `reference/storage/PROFILE_IMAGE_AWS_BACKEND_RUNTIME_SETUP.md`
