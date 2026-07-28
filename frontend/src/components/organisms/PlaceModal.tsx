@@ -91,7 +91,7 @@ function PlaceModal({
                     key={result.placeId}
                     type="button"
                     onClick={() => onSelectPlaceResult?.(result)}
-                    className="rounded-md px-2.5 py-1.5 text-left text-sm text-foreground hover:bg-muted"
+                    className="cursor-pointer rounded-md px-2.5 py-1.5 text-left text-sm text-foreground hover:bg-muted"
                   >
                     {result.name}
                   </button>
@@ -155,7 +155,7 @@ function PlaceModal({
                   disabled={readOnly}
                   onClick={() => onSelectDateChip?.(i)}
                   className={cn(
-                    "rounded-md px-2.5 py-1 text-xs font-semibold disabled:pointer-events-none disabled:opacity-50",
+                    "cursor-pointer rounded-md px-2.5 py-1 text-xs font-semibold disabled:cursor-not-allowed disabled:opacity-50",
                     chip.selected ? "bg-primary text-primary-foreground" : "bg-muted text-secondary-foreground"
                   )}
                 >

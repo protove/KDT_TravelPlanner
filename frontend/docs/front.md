@@ -121,3 +121,4 @@ src/
 4. 모든 신규 컴포넌트는 생성과 동시에 스토리를 만든다 (`docs/storybook.md` 규칙).
 5. 접근성: 인터랙션 요소는 Radix primitive를 기반으로 하고, 포커스 링(`--ring-2`)을 제거하지 않는다.
 6. 삭제·방출·탈퇴 등 파괴 동작 버튼은 `destructive` variant + ConfirmDialog 필수.
+7. 활성화된 버튼·링크·탭·선택 항목·체크박스에는 `cursor-pointer`를 사용한다. 비활성 요소는 `cursor-not-allowed`, 텍스트 입력은 기본 텍스트 커서, 드래그 요소는 `cursor-grab`/`cursor-grabbing`을 사용한다.

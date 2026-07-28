@@ -16,7 +16,7 @@ export interface TripDetailHeaderProps {
 function TripDetailHeader({ title, start, end, onEditTitle, onEditDates, className }: TripDetailHeaderProps) {
   return (
     <div className={cn("flex flex-wrap items-center justify-between gap-3", className)}>
-      <button type="button" onClick={onEditTitle} className="group flex items-center gap-2">
+      <button type="button" onClick={onEditTitle} className="group flex cursor-pointer items-center gap-2">
         <h1 className="text-2xl font-bold text-foreground">{title}</h1>
         <Icon
           icon={Pencil}
@@ -29,7 +29,7 @@ function TripDetailHeader({ title, start, end, onEditTitle, onEditDates, classNa
       <button
         type="button"
         onClick={onEditDates}
-        className="flex items-center gap-2 rounded-full bg-card px-3 py-1.5 shadow-card"
+        className="flex cursor-pointer items-center gap-2 rounded-full bg-card px-3 py-1.5 shadow-card"
       >
         <DateRangeBadge start={start} end={end} />
         <Icon icon={Pencil} size="sm" aria-label="기간 수정" className="text-muted-foreground" />

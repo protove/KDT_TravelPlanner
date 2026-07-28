@@ -18,7 +18,6 @@ import { InviteDialog } from "@/components/organisms/InviteDialog";
 import { ParticipantManageDialog, type Participant } from "@/components/organisms/ParticipantManageDialog";
 import { DateRangeBadge } from "@/components/molecules/DateRangeBadge";
 import { ConfirmDialog } from "@/components/molecules/ConfirmDialog";
-import type { Permission } from "@/components/molecules/PermissionSelect";
 import { DetailLayout } from "@/components/templates/DetailLayout";
 import { useAuthStore } from "@/lib/stores/useAuthStore";
 import { toPermission, type TravelRole } from "@/lib/api/permission";
@@ -126,16 +125,14 @@ export default function TripDetailPage() {
 
   // 여행 기간을 편집해서 날짜 탭 개수가 줄어들면, 이미 골라둔 activeDay가 범위 밖으로
   // 밀려나 탭이 하나도 선택 안 된 것처럼 보이고 일정 목록도 텅 비는 문제가 있었다 —
-  // 탭 개수가 바뀔 때마다 activeDay가 아직 유효한 범위인지 확인해서, 아니면 첫 날로 되돌린다.
-  React.useEffect(() => {
-    if (Number(activeDay) >= dateTabs.length) setActiveDay("0");
-  }, [dateTabs, activeDay]);
+  // useEffect로 나중에 되돌리는 대신, 렌더링 시점에 바로 유효한 값으로 보정해서 쓴다.
+  const visibleActiveDay = Number(activeDay) < dateTabs.length ? activeDay : "0";
 
-  const activeDayNumber = Number(activeDay) + 1;
+  const activeDayNumber = Number(visibleActiveDay) + 1;
   const mapPoints = useMapPoints(accessToken, id, activeDayNumber, detail?.timelineItems);
 
 React.useEffect(() => {
-  if (!isInitializing && !isLoggedIn) router.replace("/landing");
+  if (!isInitializing && !isLoggedIn) router.replace("/");
 }, [isInitializing, isLoggedIn, router]);
 
 React.useEffect(() => {
@@ -189,7 +186,7 @@ React.useEffect(() => {
           <button
             type="button"
             onClick={() => router.push("/trips")}
-            className="self-start text-sm font-bold text-primary"
+            className="self-start cursor-pointer text-sm font-bold text-primary"
           >
             ← 여행일정 목록
           </button>
@@ -211,20 +208,20 @@ React.useEffect(() => {
                   <>
                     {isEditingInfo ? (
                       <>
-                        <button type="button" title="저장" className="text-primary" onClick={saveEditInfo}>
+                        <button type="button" title="저장" className="cursor-pointer text-primary" onClick={saveEditInfo}>
                           <Icon icon={Check} size="sm" aria-label="저장" />
                         </button>
-                        <button type="button" title="취소" className="text-muted-foreground" onClick={cancelEditInfo}>
+                        <button type="button" title="취소" className="cursor-pointer text-muted-foreground" onClick={cancelEditInfo}>
                           <Icon icon={X} size="sm" aria-label="취소" />
                         </button>
                       </>
                     ) : (
                       <>
-                        <button type="button" title="정보 수정" className="text-muted-foreground" onClick={startEditInfo}>
+                        <button type="button" title="정보 수정" className="cursor-pointer text-muted-foreground" onClick={startEditInfo}>
                           <Icon icon={Pencil} size="sm" aria-label="정보 수정" />
                         </button>
                         {isOwner && (
-                          <button type="button" title="여행일정 삭제" className="text-destructive" onClick={() => setShowDeleteConfirm(true)}>
+                          <button type="button" title="여행일정 삭제" className="cursor-pointer text-destructive" onClick={() => setShowDeleteConfirm(true)}>
                             <Icon icon={Trash2} size="sm" aria-label="여행일정 삭제" />
                           </button>
                         )}
@@ -303,7 +300,7 @@ React.useEffect(() => {
               <button
                 type="button"
                 onClick={() => setShowCalendar((v) => !v)}
-                className="flex items-center gap-2 rounded-full px-3.5 py-2 text-sm font-bold text-foreground hover:bg-muted"
+                className="flex cursor-pointer items-center gap-2 rounded-full px-3.5 py-2 text-sm font-bold text-foreground hover:bg-muted"
               >
                 📅 <DateRangeBadge start={dateRange.start} end={dateRange.end} />
               </button>
@@ -354,7 +351,7 @@ React.useEffect(() => {
           <div className="text-lg font-bold text-foreground">여행계획</div>
           <ScheduleBoard
             days={dateTabs}
-            activeDay={activeDay}
+            activeDay={visibleActiveDay}
             onDayChange={setActiveDay}
             items={activeDayItems}
             unassigned={unassignedPlaces}
