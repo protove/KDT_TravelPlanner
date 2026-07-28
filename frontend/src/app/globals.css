@@ -152,3 +152,16 @@ body {
   color: var(--foreground);
   font-family: var(--font-sans);
 }
+
+/* 네이티브 상호작용 요소도 공통 Atom과 동일한 커서 피드백을 제공한다. */
+button:not(:disabled),
+a[href],
+select:not(:disabled),
+summary {
+  cursor: pointer;
+}
+
+button:disabled,
+select:disabled {
+  cursor: not-allowed;
+}

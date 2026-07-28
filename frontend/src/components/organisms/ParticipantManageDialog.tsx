@@ -58,7 +58,7 @@ function ParticipantManageDialog({
                   type="button"
                   title="내보내기"
                   onClick={() => setRemoveTarget(participant)}
-                  className="flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-destructive"
+                  className="flex h-8 w-8 cursor-pointer items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-destructive"
                 >
                   <Icon icon={X} size="sm" aria-label="내보내기" />
                 </button>

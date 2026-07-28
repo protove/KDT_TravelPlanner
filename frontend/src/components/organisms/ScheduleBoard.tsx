@@ -107,7 +107,7 @@ function ScheduleBoard({
                     <button
                       type="button"
                       onClick={() => onAssignPlace?.(place.id)}
-                      className="flex-1 text-left"
+                      className="flex flex-1 cursor-pointer text-left"
                     >
                       <div className="text-sm font-semibold text-foreground">{place.name}</div>
                       {place.note && <div className="mt-0.5 text-xs text-muted-foreground">{place.note}</div>}
@@ -117,7 +117,7 @@ function ScheduleBoard({
                         type="button"
                         title="수정"
                         onClick={() => onAssignPlace?.(place.id)}
-                        className="flex h-[26px] w-[26px] items-center justify-center rounded-md text-muted-foreground hover:bg-muted"
+                        className="flex h-[26px] w-[26px] cursor-pointer items-center justify-center rounded-md text-muted-foreground hover:bg-muted"
                       >
                         <Icon icon={Pencil} size="sm" aria-label="수정" />
                       </button>
@@ -125,7 +125,7 @@ function ScheduleBoard({
                         type="button"
                         title="완전 삭제"
                         onClick={() => onDeleteItem?.(place.id)}
-                        className="flex h-[26px] w-[26px] items-center justify-center rounded-md text-destructive hover:bg-muted"
+                        className="flex h-[26px] w-[26px] cursor-pointer items-center justify-center rounded-md text-destructive hover:bg-muted"
                       >
                         <Icon icon={Trash2} size="sm" aria-label="완전 삭제" />
                       </button>

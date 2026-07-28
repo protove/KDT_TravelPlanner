@@ -39,7 +39,7 @@ function MapPanel({ markers = [], onMarkerClick, onOptimizeRoute, className }: M
           title={marker.name}
           onClick={() => onMarkerClick?.(marker.id)}
           style={{ left: `${marker.x}%`, top: `${marker.y}%` }}
-          className="absolute -translate-x-1/2 -translate-y-full text-primary hover:text-primary/80"
+          className="absolute -translate-x-1/2 -translate-y-full cursor-pointer text-primary hover:text-primary/80"
         >
           <Icon icon={MapPin} size="lg" aria-label={marker.name} />
         </button>
