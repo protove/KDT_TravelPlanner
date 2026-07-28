@@ -121,7 +121,7 @@ export default function TripDetailPage() {
   });
 
 React.useEffect(() => {
-  if (!isInitializing && !isLoggedIn) router.replace("/landing");
+  if (!isInitializing && !isLoggedIn) router.replace("/");
 }, [isInitializing, isLoggedIn, router]);
 
 React.useEffect(() => {
