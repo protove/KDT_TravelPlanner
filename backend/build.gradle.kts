@@ -34,6 +34,8 @@ dependencies {
 	implementation("org.jetbrains.kotlin:kotlin-reflect")
 	implementation(platform("software.amazon.awssdk:bom:2.47.3"))
 	implementation("software.amazon.awssdk:s3")
+	implementation("software.amazon.awssdk:sso")
+	implementation("software.amazon.awssdk:ssooidc")
 	developmentOnly("org.springframework.boot:spring-boot-devtools")
 	runtimeOnly("io.micrometer:micrometer-registry-prometheus")
 	runtimeOnly("org.postgresql:postgresql")
