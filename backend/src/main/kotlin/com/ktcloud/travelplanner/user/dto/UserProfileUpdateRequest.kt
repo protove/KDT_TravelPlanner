@@ -30,6 +30,11 @@ class UserProfileUpdateValidator : ConstraintValidator<ValidUserProfileUpdate, U
 		context: ConstraintValidatorContext,
 	): Boolean {
 		val violations = buildList {
+			val profileImageUrl = (request.profileImageUrl as? PatchField.Present)?.value
+			if (profileImageUrl != null) {
+				add("profileImageUrl" to "프로필 이미지 업로드 완료 API를 사용해야 합니다.")
+			}
+
 			val nickname = (request.nickname as? PatchField.Present)?.value
 			if (nickname != null && nickname.isBlank()) {
 				add("nickname" to "비어 있을 수 없습니다.")
