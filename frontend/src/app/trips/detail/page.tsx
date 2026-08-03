@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { useRouter, useParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { Pencil, Trash2, Check, X } from "lucide-react";
 import { Button } from "@/components/atoms/Button";
 import { Input } from "@/components/atoms/Input";
@@ -28,8 +28,17 @@ import { usePlaceEditor } from "./usePlaceEditor";
 import { useMapPoints } from "./useMapPoints";
 
 export default function TripDetailPage() {
+  return (
+    <React.Suspense fallback={null}>
+      <TripDetailContent />
+    </React.Suspense>
+  );
+}
+
+function TripDetailContent() {
   const router = useRouter();
-  const { id } = useParams<{ id: string }>();
+  const searchParams = useSearchParams();
+  const id = searchParams.get("id") ?? undefined;
   const isLoggedIn = useAuthStore((s) => s.isLoggedIn);
   const isInitializing = useAuthStore((s) => s.isInitializing);
   const user = useAuthStore((s) => s.user);
@@ -136,7 +145,7 @@ React.useEffect(() => {
 }, [isInitializing, isLoggedIn, router]);
 
 React.useEffect(() => {
-  if (id && !UUID_PATTERN.test(id)) router.replace("/403");
+    if (!id || !UUID_PATTERN.test(id)) router.replace("/403");
 }, [id, router]);
 
   if (isInitializing || !isLoggedIn || !user || !detail) return null;

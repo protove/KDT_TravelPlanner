@@ -18,10 +18,8 @@ export function useMapPoints(
   const [points, setPoints] = React.useState<TravelMapPoint[]>([]);
 
   React.useEffect(() => {
-    if (!accessToken || !travelId) {
-      setPoints([]);
-      return;
-    }
+    if (!accessToken || !travelId) return;
+
     let cancelled = false;
     fetchTravelMapPoints(accessToken, travelId, dayNumber)
       .then((res) => {
@@ -33,8 +31,7 @@ export function useMapPoints(
     return () => {
       cancelled = true;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [accessToken, travelId, dayNumber, refreshKey]);
 
-  return points;
+  return accessToken && travelId ? points : [];
 }

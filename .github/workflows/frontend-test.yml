@@ -1,0 +1,46 @@
+name: Frontend Verification
+
+on:
+  pull_request:
+    branches:
+      - develop-front
+    paths:
+      - "frontend/**"
+      - ".github/workflows/frontend-test.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: frontend-verification-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Lint, Storybook, and Build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      DEV_IMAGE: travel-planner-frontend-dev:${{ github.sha }}
+      BUILDER_IMAGE: travel-planner-frontend-builder:${{ github.sha }}
+
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v6
+
+      - name: Build frontend dev image
+        run: docker build --target dev --tag "${DEV_IMAGE}" ./frontend
+
+      - name: Run ESLint
+        run: docker run --rm "${DEV_IMAGE}" npm run lint
+
+      - name: Build Storybook
+        run: docker run --rm "${DEV_IMAGE}" npm run build-storybook
+
+      - name: Build production bundle (type-check + next build)
+        run: |
+          docker build --target builder \
+            --tag "${BUILDER_IMAGE}" \
+            --build-arg NEXT_PUBLIC_API_BASE_URL=http://localhost:8080 \
+            --build-arg NEXT_PUBLIC_GOOGLE_MAPS_API_KEY=ci-placeholder-key \
+            ./frontend
