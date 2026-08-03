@@ -1,4 +1,4 @@
-import { NextResponse, type NextRequest } from "next/server";
+import { NextResponse } from "next/server";
 
 /**
  * 예전엔 여기서 `logged_in` 쿠키(클라이언트가 직접 세팅, 최대 7일)를 보고
@@ -10,6 +10,6 @@ import { NextResponse, type NextRequest } from "next/server";
  * isLoggedIn 값(세션 복구 결과)으로 자체적으로 리다이렉트하고 있으므로,
  * 여기서는 권한 검사를 하지 않고 그대로 통과시킨다.
  */
-export function middleware(_request: NextRequest) {
+export function middleware() {
   return NextResponse.next();
 }
