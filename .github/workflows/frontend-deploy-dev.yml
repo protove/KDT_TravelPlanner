@@ -4,10 +4,20 @@ name: Frontend Deploy (Dev, Temporary)
 # 팀장 부재 중 CI/CD 파이프라인 자체를 먼저 검증하기 위해 개인 AWS 계정의
 # S3 버킷 + CloudFront 배포를 대상으로 만든 임시 배포입니다.
 # 팀장 복귀 후 아래 GitHub Secrets(AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY,
-# S3_BUCKET_NAME, CLOUDFRONT_DISTRIBUTION_ID)를 팀 계정 값으로 교체하고,
-# 필요 시 트리거를 workflow_dispatch에서 push/PR 기반으로 바꿔야 합니다.
+# S3_BUCKET_NAME, CLOUDFRONT_DISTRIBUTION_ID)를 팀 계정 값으로 교체해야 합니다.
+#
+# 트리거를 develop-front로의 PR로 잡은 이유: workflow_dispatch는 GitHub 특성상
+# 기본 브랜치(main)에 이 파일이 있어야만 수동 실행 UI에 노출된다. pull_request
+# 트리거는 이 제약이 없어서, 이 브랜치에서 PR을 여는 즉시 실제 배포 파이프라인이
+# 그대로 실행되어 CI/CD 자체를 검증할 수 있다.
 
 on:
+  pull_request:
+    branches:
+      - develop-front
+    paths:
+      - "frontend/**"
+      - ".github/workflows/frontend-deploy-dev.yml"
   workflow_dispatch:
 
 permissions:
