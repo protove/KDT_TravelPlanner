@@ -1,0 +1,63 @@
+name: Frontend Deploy (Dev, Temporary)
+
+# ⚠️ 임시 워크플로입니다.
+# 팀장 부재 중 CI/CD 파이프라인 자체를 먼저 검증하기 위해 개인 AWS 계정의
+# S3 버킷 + CloudFront 배포를 대상으로 만든 임시 배포입니다.
+# 팀장 복귀 후 아래 GitHub Secrets(AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY,
+# S3_BUCKET_NAME, CLOUDFRONT_DISTRIBUTION_ID)를 팀 계정 값으로 교체하고,
+# 필요 시 트리거를 workflow_dispatch에서 push/PR 기반으로 바꿔야 합니다.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: frontend-deploy-dev
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    name: Build and Deploy Static Export
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24.17.0"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Build static export
+        working-directory: frontend
+        env:
+          NEXT_PUBLIC_API_BASE_URL: ${{ secrets.DEV_NEXT_PUBLIC_API_BASE_URL }}
+          NEXT_PUBLIC_GOOGLE_MAPS_API_KEY: ${{ secrets.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY }}
+        run: npm run build
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ap-northeast-2
+
+      - name: Sync to S3
+        run: |
+          aws s3 sync frontend/out "s3://${{ secrets.S3_BUCKET_NAME }}" --delete
+
+      - name: Invalidate CloudFront cache
+        run: |
+          aws cloudfront create-invalidation \
+            --distribution-id "${{ secrets.CLOUDFRONT_DISTRIBUTION_ID }}" \
+            --paths "/*"
