@@ -87,21 +87,6 @@ export function useTripEditor(id: string | undefined, accessToken: string | null
     fetchCitiesByCountry(accessToken, selectedCountryId).then(setCities).catch(() => {});
   }, [accessToken, selectedCountryId]);
 
-  /**
-   * "정보 수정" 중에 달력에서 여행 기간을 바꾸면, 예전엔 이 화면에 아무 반응이 없다가
-   * "저장"을 눌러야만(saveEditInfo) 배정된 일정이 조용히 재정리됐다 — 그래서 사용자
-   * 입장에선 날짜를 바꿔도 일정이 예전 날짜에 그대로 붙어있는 것처럼 보여 "저장해도
-   * 안 바뀐다"는 오해를 샀다. 이제 기간이 바뀌는 즉시 draftTimelineItems를 새 기간
-   * 기준으로 재정리해서, 화면(일차 탭/미배정 목록)에 바로 반영되게 한다.
-   * 실제 저장 시점의 재정리(saveEditInfo 안 reconcileForDateRange)는 그대로 두는데,
-   * 이미 정리된 값을 다시 정리하는 거라 안전하다(그대로 유지).
-   */
-  React.useEffect(() => {
-    setDraftTimelineItems((prev) =>
-      prev ? normalizeVisitOrders(reconcileForDateRange(prev, dateRange.start, dateRange.end)) : prev,
-    );
-  }, [dateRange]);
-
   const refreshMembers = React.useCallback(() => {
     if (!accessToken || !id || !UUID_PATTERN.test(id)) return;
     fetchTravelMembers(accessToken, id).then(setTravelMembers).catch(() => {});

@@ -11,7 +11,7 @@ App Router는 별도 설정 파일이나 라우팅 라이브러리 없이 `src/a
 ```
 src/app/trips/page.tsx        →  /trips
 src/app/mypage/page.tsx       →  /mypage
-src/app/trips/[id]/page.tsx   →  /trips/1
+src/app/trips/detail/page.tsx →  /trips/detail?id=<여행 UUID>
 ```
 
 React 단독 프로젝트에서 쓰는 `react-router-dom`은 설치하지 않습니다. 라우팅이 이미 내장되어 있어 중복이며 서버 컴포넌트와 충돌합니다.
@@ -20,19 +20,19 @@ React 단독 프로젝트에서 쓰는 `react-router-dom`은 설치하지 않습
 
 ```mermaid
 flowchart TD
-    A["브라우저가 /trips/1 요청"] --> B{"미들웨어 검사 대상인가"}
+    A["브라우저가 /trips/detail?id=여행UUID 요청"] --> B{"미들웨어 검사 대상인가"}
     B -->|예| C{"로그인 상태인가"}
     C -->|아니오| D["/auth 로 이동"]
     C -->|예| E{"app/trips 폴더가 있나"}
     B -->|아니오| E
     E -->|없음| F["not-found.tsx 실행"]
-    E -->|있음| G{"1 에 해당하는 폴더가 있나"}
-    G -->|"[id] 폴더가 받음"| H["trips/[id]/page.tsx 실행"]
+    E -->|있음| G{"detail 폴더가 있나"}
+    G -->|"있음"| H["trips/detail/page.tsx 실행"]
     G -->|없음| F
-    H --> I["id 값에 1이 담긴다"]
+    H --> I["useSearchParams로 id 값을 읽음"]
 ```
 
-미들웨어가 먼저 실행되고 그다음 폴더를 찾습니다. `[id]`처럼 대괄호를 쓴 폴더는 어떤 값이 와도 받아내므로 `/trips/1`과 `/trips/42`를 파일 하나가 처리합니다.
+미들웨어가 먼저 실행되고 그다음 폴더를 찾습니다. 여행 상세는 CloudFront 정적 전환을 위해 고정 경로인 `/trips/detail`을 사용하고, 여행 ID는 `?id=...` 쿼리스트링으로 전달합니다.
 
 ## 3. 이름이 정해져 있는 파일들
 
@@ -64,7 +64,7 @@ src/
 │   ├── auth/               /auth            로그인
 │   ├── trips/
 │   │   ├── page.tsx        /trips           여행 목록
-│   │   └── [id]/page.tsx   /trips/1         여행 상세
+│   │   └── detail/page.tsx /trips/detail?id=<UUID> 여행 상세
 │   ├── mypage/             /mypage
 │   ├── community/          /community       공개된 여행 일정
 │   ├── notifications/      /notifications
@@ -287,7 +287,7 @@ flowchart TD
 import Link from "next/link";
 
 <Link href="/trips">내 여행</Link>
-<Link href={`/trips/${trip.id}`}>{trip.title}</Link>
+<Link href={`/trips/detail?id=${encodeURIComponent(trip.id)}`}>{trip.title}</Link>
 ```
 
 `<a>` 태그를 쓰면 페이지 전체가 새로고침되어 화면이 깜빡이고 상태가 사라집니다.
@@ -315,9 +315,9 @@ import 경로는 `next/router`가 아니라 `next/navigation`입니다.
 | 헤더 로고 (랜딩) | `/landing` | `AppHeader` `onLogoClick` |
 | 헤더 프로필 아이콘 | `/mypage` | `AppHeader` `onProfileClick` |
 | 헤더 종 아이콘 | `/notifications` | `AppHeader` `onNotificationClick` |
-| 여행 카드 | `/trips/[id]` | `trips/page.tsx` |
+| 여행 카드 | `/trips/detail?id=<UUID>` | `trips/page.tsx` |
 | 랜딩 로그인 버튼 | `/auth` | `AppHeader` `onLoginClick` |
-| 상세 화면 목록 버튼 | `/trips` | `trips/[id]/page.tsx` |
+| 상세 화면 목록 버튼 | `/trips` | `trips/detail/page.tsx` |
 
 랜딩 화면의 로고만 `/landing`을 가리킵니다. 비로그인 화면이라 `/trips`로 보내면 미들웨어가 다시 `/auth`로 되돌려보내기 때문입니다.
 

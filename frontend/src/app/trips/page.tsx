@@ -225,7 +225,7 @@ export default function TripsPage() {
       <TripList
         trips={filtered.map((t, index) => ({
           ...toTripListItem(t, index),
-          onClick: () => router.push(`/trips/${t.travelId}`),
+          onClick: () => router.push(`/trips/detail?id=${encodeURIComponent(t.travelId)}`),
         }))}
         isLoading={isLoading}
         isLoadingMore={loadingMore}
