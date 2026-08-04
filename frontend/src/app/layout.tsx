@@ -3,8 +3,8 @@ import "./globals.css";
 import { AuthProvider } from "@/components/providers/AuthProvider";
 
 export const metadata: Metadata = {
-  title: "Travel Diary",
-  description: "Travel Diary development environment status",
+  title: "TripPlanner",
+  description: "TripPlanner development environment status",
 };
 
 export default function RootLayout({
