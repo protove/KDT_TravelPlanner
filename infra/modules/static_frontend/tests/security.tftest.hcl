@@ -108,6 +108,14 @@ run "static_frontend_security_and_cache_controls" {
   }
 
   assert {
+    condition = (
+      aws_cloudfront_cache_policy.html.parameters_in_cache_key_and_forwarded_to_origin[0].enable_accept_encoding_brotli == false &&
+      aws_cloudfront_cache_policy.html.parameters_in_cache_key_and_forwarded_to_origin[0].enable_accept_encoding_gzip == false
+    )
+    error_message = "CloudFront does not allow Accept-Encoding cache keys when HTML caching is disabled."
+  }
+
+  assert {
     condition     = aws_cloudfront_cache_policy.static.default_ttl == 31536000 && aws_cloudfront_cache_policy.static.min_ttl == 31536000
     error_message = "Hashed static assets must use the one-year immutable cache policy."
   }
