@@ -11,3 +11,15 @@ misconfigurations:
       - "modules/terraform_state_backend/main.tf"
     statement: "SSE-S3 AES-256 is the approved encryption baseline for the current dev scope; customer-managed KMS keys require a separate cost and key-administration decision."
     expired_at: 2027-01-31
+
+  - id: AVD-AWS-0053
+    paths:
+      - "modules/backend_service/main.tf"
+    statement: "The internet-facing ALB is the approved public API entry point; backend instances, RDS, and Redis remain private and only HTTPS is exposed to clients."
+    expired_at: 2027-01-31
+
+  - id: AVD-AWS-0104
+    paths:
+      - "modules/runtime_security/main.tf"
+    statement: "Backend egress is restricted to TCP 443 but must reach Google/OAuth APIs and AWS public service endpoints through the single NAT; VPC endpoints or an egress proxy are a later cost/operations decision."
+    expired_at: 2027-01-31

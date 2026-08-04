@@ -1,0 +1,112 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+dnf install -y docker jq
+systemctl enable --now docker
+
+install -d -m 0755 /etc/travel-planner /var/log/travel-planner
+chown 10001:10001 /var/log/travel-planner
+
+cat > /usr/local/bin/render-travel-planner-env <<'SCRIPT'
+#!/usr/bin/env bash
+set -euo pipefail
+
+application_secret_json="$(aws secretsmanager get-secret-value --region '${aws_region}' --secret-id '${application_secret_arn}' --query SecretString --output text)"
+database_secret_json="$(aws secretsmanager get-secret-value --region '${aws_region}' --secret-id '${database_master_secret_arn}' --query SecretString --output text)"
+redis_secret_json="$(aws secretsmanager get-secret-value --region '${aws_region}' --secret-id '${redis_auth_secret_arn}' --query SecretString --output text)"
+
+jq -e '
+  has("JWT_SECRET") and
+  has("GOOGLE_OAUTH_CLIENT_ID") and
+  has("GOOGLE_OAUTH_CLIENT_SECRET") and
+  has("NAVER_OAUTH_CLIENT_ID") and
+  has("NAVER_OAUTH_CLIENT_SECRET") and
+  has("GOOGLE_MAPS_API_KEY")
+' >/dev/null <<<"$application_secret_json"
+jq -e 'has("username") and has("password")' >/dev/null <<<"$database_secret_json"
+jq -e 'has("password")' >/dev/null <<<"$redis_secret_json"
+
+umask 077
+{
+  printf 'SERVER_PORT=8080\n'
+  printf 'MANAGEMENT_SERVER_PORT=9091\n'
+  printf 'SPRING_PROFILES_ACTIVE=prod\n'
+  printf 'SPRING_DATASOURCE_URL=jdbc:postgresql://${database_address}:${database_port}/${database_name}\n'
+  printf 'SPRING_DATASOURCE_USERNAME=%s\n' "$(jq -r '.username' <<<"$database_secret_json")"
+  printf 'SPRING_DATASOURCE_PASSWORD=%s\n' "$(jq -r '.password' <<<"$database_secret_json")"
+  printf 'SPRING_DATA_REDIS_HOST=${redis_primary_endpoint}\n'
+  printf 'SPRING_DATA_REDIS_PORT=${redis_port}\n'
+  printf 'SPRING_DATA_REDIS_SSL_ENABLED=true\n'
+  printf 'SPRING_DATA_REDIS_PASSWORD=%s\n' "$(jq -r '.password' <<<"$redis_secret_json")"
+  printf 'CORS_ALLOWED_ORIGINS=${frontend_origin}\n'
+  printf 'OAUTH_ALLOWED_REDIRECT_ORIGINS=${frontend_origin}\n'
+  printf 'OAUTH_FRONTEND_REDIRECT_URL=${frontend_origin}/auth/callback/\n'
+  printf 'APP_AUTH_OAUTH_STATE_COOKIE_SECURE=true\n'
+  printf 'GOOGLE_OAUTH_REDIRECT_URI=${google_oauth_redirect_uri}\n'
+  printf 'NAVER_OAUTH_REDIRECT_URI=${naver_oauth_redirect_uri}\n'
+  printf 'OAUTH_HTTP_CONNECT_TIMEOUT=3s\n'
+  printf 'OAUTH_HTTP_READ_TIMEOUT=5s\n'
+  printf 'GOOGLE_PLACES_BASE_URL=https://places.googleapis.com\n'
+  printf 'GOOGLE_PLACES_CONNECT_TIMEOUT=2s\n'
+  printf 'GOOGLE_PLACES_READ_TIMEOUT=3s\n'
+  printf 'GOOGLE_ROUTES_BASE_URL=https://routes.googleapis.com\n'
+  printf 'GOOGLE_ROUTES_CONNECT_TIMEOUT=2s\n'
+  printf 'GOOGLE_ROUTES_READ_TIMEOUT=5s\n'
+  printf 'PROFILE_IMAGE_STORAGE_ENABLED=true\n'
+  printf 'PROFILE_IMAGE_STORAGE_REGION=${aws_region}\n'
+  printf 'PROFILE_IMAGE_STORAGE_BUCKET=${profile_image_bucket_name}\n'
+  printf 'PROFILE_IMAGE_PUBLIC_BASE_URL=${profile_image_public_base_url}\n'
+  printf 'PROFILE_IMAGE_STORAGE_PATH_STYLE_ACCESS_ENABLED=false\n'
+  printf 'PROFILE_IMAGE_UPLOAD_URL_TTL=10m\n'
+  printf 'REFRESH_TOKEN_COOKIE_SECURE=true\n'
+  printf 'JWT_SECRET=%s\n' "$(jq -r '.JWT_SECRET' <<<"$application_secret_json")"
+  printf 'GOOGLE_OAUTH_CLIENT_ID=%s\n' "$(jq -r '.GOOGLE_OAUTH_CLIENT_ID' <<<"$application_secret_json")"
+  printf 'GOOGLE_OAUTH_CLIENT_SECRET=%s\n' "$(jq -r '.GOOGLE_OAUTH_CLIENT_SECRET' <<<"$application_secret_json")"
+  printf 'NAVER_OAUTH_CLIENT_ID=%s\n' "$(jq -r '.NAVER_OAUTH_CLIENT_ID' <<<"$application_secret_json")"
+  printf 'NAVER_OAUTH_CLIENT_SECRET=%s\n' "$(jq -r '.NAVER_OAUTH_CLIENT_SECRET' <<<"$application_secret_json")"
+  printf 'GOOGLE_MAPS_API_KEY=%s\n' "$(jq -r '.GOOGLE_MAPS_API_KEY' <<<"$application_secret_json")"
+} > /etc/travel-planner/backend.env
+SCRIPT
+
+cat > /usr/local/bin/start-travel-planner-backend <<'SCRIPT'
+#!/usr/bin/env bash
+set -euo pipefail
+
+aws ecr get-login-password --region '${aws_region}' | docker login --username AWS --password-stdin '${ecr_registry_url}'
+docker pull '${backend_image_uri}'
+exec docker run \
+  --name travel-planner-backend \
+  --rm \
+  --env-file /etc/travel-planner/backend.env \
+  --publish 8080:8080 \
+  --publish 9091:9091 \
+  --volume /var/log/travel-planner:/var/log/travel-planner \
+  '${backend_image_uri}'
+SCRIPT
+
+chmod 0750 /usr/local/bin/render-travel-planner-env /usr/local/bin/start-travel-planner-backend
+
+cat > /etc/systemd/system/travel-planner-backend.service <<'UNIT'
+[Unit]
+Description=KDT TravelPlanner backend container
+After=docker.service network-online.target
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=simple
+ExecStartPre=/usr/local/bin/render-travel-planner-env
+ExecStartPre=-/usr/bin/docker rm -f travel-planner-backend
+ExecStart=/usr/local/bin/start-travel-planner-backend
+ExecStop=-/usr/bin/docker stop --time 60 travel-planner-backend
+Restart=always
+RestartSec=10
+TimeoutStartSec=0
+TimeoutStopSec=90
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+
+systemctl daemon-reload
+systemctl enable --now travel-planner-backend.service
