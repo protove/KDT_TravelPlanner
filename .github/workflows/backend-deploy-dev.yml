@@ -1,0 +1,96 @@
+name: Backend Publish (Dev)
+
+on:
+  workflow_call:
+    outputs:
+      digest:
+        description: "Pushed backend image digest (repository@sha256:...)"
+        value: ${{ jobs.publish-backend.outputs.digest }}
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: backend-publish-dev
+  cancel-in-progress: false
+
+jobs:
+  publish-backend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: dev
+    outputs:
+      digest: ${{ steps.digest.outputs.digest }}
+
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      # ── 기존 로컬/CI 테스트 계약 그대로 재사용 (Testcontainers 기반 통합 테스트 포함) ──
+      - name: Test backend
+        run: docker build --target builder --tag "backend-builder:${{ github.sha }}" ./backend
+
+      - name: Run backend checks
+        run: |
+          docker run --rm \
+            --add-host host.docker.internal:host-gateway \
+            --env SPRING_PROFILES_ACTIVE=test \
+            --env TESTCONTAINERS_HOST_OVERRIDE=host.docker.internal \
+            --volume /var/run/docker.sock:/var/run/docker.sock \
+            --volume "${GITHUB_WORKSPACE}/backend/docker:/app/docker:ro" \
+            "backend-builder:${{ github.sha }}" \
+            ./gradlew check --no-daemon
+
+      # ── OIDC로 ECR Push 전용 Role만 Assume (고정 키 없음, 1시간 이하 임시 세션) ──
+      - name: Configure AWS credentials with OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_BACKEND_ECR_PUBLISH_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+          role-session-name: backend-publish-${{ github.run_id }}
+
+      - name: Sign in to ECR
+        run: |
+          registry="${{ vars.BACKEND_ECR_REPOSITORY_URL }}"
+          registry="${registry%%/*}"
+          aws ecr get-login-password --region "${{ vars.AWS_REGION }}" \
+            | docker login --username AWS --password-stdin \
+                "${registry}"
+
+      # ── Buildx 설정 (레이어 캐시 재사용으로 빌드 속도 개선) ──────────
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # ── 태깅: commit SHA만 사용, latest는 배포 식별자로 쓰지 않음 ──
+      - name: Build and push immutable image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./backend
+          target: runner
+          platforms: linux/amd64
+          push: true
+          tags: ${{ vars.BACKEND_ECR_REPOSITORY_URL }}:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # ── 실제 배포 식별자는 ECR에서 조회한 digest (repository@sha256:...) ──
+      # buildx 결과가 아니라, ECR(레지스트리)에 직접 물어봐서 확인 —
+      # "실제로 ECR에 올라간 것"을 신뢰 기준으로 삼기 위함
+      # GITHUB_OUTPUT으로 노출해, 이후 배포 job에서
+      # needs.publish-backend.outputs.digest 로 그대로 재사용 가능
+      - name: Resolve deployment digest
+        id: digest
+        run: |
+          repository_name="${{ vars.BACKEND_ECR_REPOSITORY_URL }}"
+          repository_name="${repository_name##*/}"
+          image_digest="$(aws ecr describe-images \
+            --region "${{ vars.AWS_REGION }}" \
+            --repository-name "${repository_name}" \
+            --image-ids imageTag="${{ github.sha }}" \
+            --query 'imageDetails[0].imageDigest' \
+            --output text)"
+          test "${image_digest}" != "None"
+          echo "digest=${image_digest}" >> "${GITHUB_OUTPUT}"
+          echo "### Backend image" >> "${GITHUB_STEP_SUMMARY}"
+          echo '${{ vars.BACKEND_ECR_REPOSITORY_URL }}@'"${image_digest}" >> "${GITHUB_STEP_SUMMARY}"
