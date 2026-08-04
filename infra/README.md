@@ -165,7 +165,7 @@ Trivy의 WAF(`AVD-AWS-0011`)와 고객 관리 KMS key(`AVD-AWS-0132`) 권고는 
 
 자세한 최초 구성과 인증 구조는 다음 로컬 Reference를 참고한다.
 
-- `reference/infrastructure/TERRAFORM_AWS_INITIAL_SETUP.md`
-- `reference/infrastructure/TERRAFORM_CI_VERIFICATION.md`
-- `reference/storage/AWS_SSO_LOCAL_AND_RUNTIME_CREDENTIALS.md`
-- `reference/storage/PROFILE_IMAGE_AWS_BACKEND_RUNTIME_SETUP.md`
+- `reference/infrastructure/terraform/TERRAFORM_AWS_INITIAL_SETUP.md`
+- `reference/infrastructure/terraform/TERRAFORM_CI_VERIFICATION.md`
+- `reference/storage/aws-access/AWS_SSO_LOCAL_AND_RUNTIME_CREDENTIALS.md`
+- `reference/storage/profile-image/PROFILE_IMAGE_AWS_BACKEND_RUNTIME_SETUP.md`
