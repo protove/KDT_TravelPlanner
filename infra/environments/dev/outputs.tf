@@ -105,6 +105,16 @@ output "github_ecr_publisher_subject" {
   value       = module.github_ecr_publisher.github_oidc_subject
 }
 
+output "github_frontend_deployer_role_arn" {
+  description = "Role ARN for the GitHub Actions dev Environment static frontend deployment job."
+  value       = module.github_frontend_deployer.deployer_role_arn
+}
+
+output "github_frontend_deployer_subject" {
+  description = "Exact GitHub OIDC subject enforced by the frontend deployment role."
+  value       = module.github_frontend_deployer.github_oidc_subject
+}
+
 output "github_oidc_provider_arn" {
   description = "GitHub Actions OIDC provider managed by the persistent dev State."
   value       = module.github_ecr_publisher.github_oidc_provider_arn

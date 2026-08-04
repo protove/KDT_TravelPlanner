@@ -18,6 +18,7 @@ infra/
     ├── network/                       # 2AZ VPC와 public/app/data subnet
     ├── container_registry/            # ECR immutable image repository
     ├── github_ecr_publisher/          # GitHub OIDC와 ECR Push 전용 Role
+    ├── github_frontend_deployer/      # GitHub OIDC와 Frontend S3 배포 전용 Role
     ├── runtime_security/              # ALB/backend/data Security Group
     ├── backend_data/                  # RDS PostgreSQL과 Redis
     └── backend_service/               # ALB, Launch Template와 EC2 ASG
@@ -48,6 +49,7 @@ AWS 인증은 `AWS_PROFILE` 또는 AWS SDK 기본 자격증명 체인으로만 �
 - 프로필 이미지는 공개 CloudFront URL로 제공된다. UUID key는 접근 제어가 아니며 민감한 이미지를 저장하지 않는다.
 - GitHub Actions는 장기 Access Key 없이 OIDC로 `dev` Environment 전용 ECR Publisher Role을 Assume한다.
 - ECR Publisher Role은 backend ECR push와 digest 조회만 허용하며 Terraform State, ASG, EC2와 IAM 변경 권한을 갖지 않는다.
+- Frontend Deployer Role은 같은 OIDC Provider를 재사용하고 static frontend S3 sync와 지정 CloudFront invalidation만 허용한다. ECR, Terraform State와 인프라 설정 변경 권한은 갖지 않는다.
 
 ## 사전 조건
 
@@ -145,6 +147,8 @@ AWS_PROFILE=kdt-travel-terraform \
 | `backend_ecr_repository_url` | GitHub Actions Push 대상과 digest 고정 Runtime image 기준 |
 | `github_ecr_publisher_role_arn` | GitHub `dev` Environment의 `role-to-assume` |
 | `github_ecr_publisher_subject` | AWS trust와 Workflow Environment 일치 검증 |
+| `github_frontend_deployer_role_arn` | GitHub `dev` Environment Frontend 배포 Job의 `role-to-assume` |
+| `github_frontend_deployer_subject` | Frontend Deploy Role의 정확한 GitHub OIDC subject |
 | `frontend_bucket_name` | Frontend 정적 산출물 업로드 대상 |
 | `frontend_cloudfront_distribution_id` | 배포 후 제한된 CloudFront invalidation 대상 |
 | `frontend_cloudflare_cname_target` | Cloudflare DNS-only CNAME 대상 |
@@ -182,6 +186,7 @@ terraform -chdir=infra/modules/terraform_state_backend test
 terraform -chdir=infra/modules/profile_image test
 terraform -chdir=infra/modules/static_frontend test
 terraform -chdir=infra/modules/github_ecr_publisher test
+terraform -chdir=infra/modules/github_frontend_deployer test
 ```
 
 CI는 실제 AWS 자격증명을 전달받지 않으며 AWS plan/apply를 실행하지 않는다.

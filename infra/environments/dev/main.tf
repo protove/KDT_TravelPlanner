@@ -64,6 +64,19 @@ module "github_ecr_publisher" {
   tags                = local.common_tags
 }
 
+module "github_frontend_deployer" {
+  source = "../../modules/github_frontend_deployer"
+
+  cloudfront_distribution_arn = module.static_frontend.cloudfront_distribution_arn
+  environment                 = local.environment
+  frontend_bucket_arn         = module.static_frontend.bucket_arn
+  github_oidc_provider_arn    = module.github_ecr_publisher.github_oidc_provider_arn
+  github_organization         = var.github_organization
+  github_repository           = var.github_repository
+  project_name                = var.project_name
+  tags                        = local.common_tags
+}
+
 resource "aws_acm_certificate" "api" {
   domain_name       = var.api_domain_name
   validation_method = "DNS"
