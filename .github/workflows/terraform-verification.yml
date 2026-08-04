@@ -52,6 +52,7 @@ jobs:
           - infra/modules/profile_image
           - infra/modules/network
           - infra/modules/container_registry
+          - infra/modules/github_ecr_publisher
           - infra/modules/runtime_security
           - infra/modules/backend_data
           - infra/modules/backend_service
@@ -84,6 +85,7 @@ jobs:
           - infra/modules/profile_image
           - infra/modules/network
           - infra/modules/container_registry
+          - infra/modules/github_ecr_publisher
           - infra/modules/runtime_security
           - infra/modules/backend_data
           - infra/modules/backend_service
@@ -133,6 +135,7 @@ jobs:
             infra/modules/profile_image \
             infra/modules/network \
             infra/modules/container_registry \
+            infra/modules/github_ecr_publisher \
             infra/modules/runtime_security \
             infra/modules/backend_data \
             infra/modules/backend_service

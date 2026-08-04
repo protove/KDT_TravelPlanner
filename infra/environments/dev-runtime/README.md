@@ -70,4 +70,4 @@ apply 후 `alb_dns_name`을 `api.kdt-travelplanner.protove.net`의 Cloudflare DN
 - JSON 애플리케이션 로그: `/var/log/travel-planner`
 - ALB readiness: `9091/actuator/health/readiness`
 
-실패한 Instance Refresh는 자동 rollback하지 않는다. 실험 기록을 남긴 뒤 AWS Instance Refresh rollback 또는 이전 Launch Template version으로 새 refresh를 명시적으로 실행한다.
+실패한 Instance Refresh는 자동 rollback하지 않는다. 현재 ASG가 Launch Template `$Latest`를 사용하므로 AWS `rollback-instance-refresh` 명령은 지원되지 않는다. 실험 기록을 남긴 뒤 이전 정상 `backend_image_uri` digest를 Terraform에 다시 입력하고 새 Launch Template version과 새 refresh를 명시적으로 실행한다.

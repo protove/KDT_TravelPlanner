@@ -59,6 +59,21 @@ output "backend_ecr_repository_url" {
   value       = module.container_registry.repository_url
 }
 
+output "github_ecr_publisher_role_arn" {
+  description = "Role ARN for the GitHub Actions dev Environment ECR publisher job."
+  value       = module.github_ecr_publisher.publisher_role_arn
+}
+
+output "github_ecr_publisher_subject" {
+  description = "Exact GitHub OIDC subject enforced by the publisher role."
+  value       = module.github_ecr_publisher.github_oidc_subject
+}
+
+output "github_oidc_provider_arn" {
+  description = "GitHub Actions OIDC provider managed by the persistent dev State."
+  value       = module.github_ecr_publisher.github_oidc_provider_arn
+}
+
 output "data_subnet_ids" {
   description = "Isolated RDS and Redis subnet IDs."
   value       = module.network.data_subnet_ids

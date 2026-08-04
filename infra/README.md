@@ -9,10 +9,17 @@ infra/
 ├── bootstrap/                         # State S3 최초 생성 전용 Root
 ├── environments/
 │   ├── dev/                           # 개발 환경 Root
+│   ├── dev-runtime/                   # 실험 시에만 생성하는 유료 Runtime Root
 │   └── prod/                          # 운영 환경 Root
 └── modules/
     ├── terraform_state_backend/       # State S3와 최소 State 접근 정책
-    └── profile_image/                 # 이미지 S3, CloudFront OAC, Runtime Policy
+    ├── profile_image/                 # 이미지 S3, CloudFront OAC, Runtime Policy
+    ├── network/                       # 2AZ VPC와 public/app/data subnet
+    ├── container_registry/            # ECR immutable image repository
+    ├── github_ecr_publisher/          # GitHub OIDC와 ECR Push 전용 Role
+    ├── runtime_security/              # ALB/backend/data Security Group
+    ├── backend_data/                  # RDS PostgreSQL과 Redis
+    └── backend_service/               # ALB, Launch Template와 EC2 ASG
 ```
 
 모듈은 AWS Provider를 설정하지 않는다. 각 Root의 `providers.tf`가 Region, 허용 AWS Account ID와 공통 태그를 설정한다.
@@ -38,6 +45,8 @@ AWS 인증은 `AWS_PROFILE` 또는 AWS SDK 기본 자격증명 체인으로만 �
 - Bootstrap 관리 권한, 일상 Terraform 실행 권한과 애플리케이션 Runtime 권한을 분리한다.
 - Provider의 `allowed_account_ids`가 로그인한 AWS 계정이 예상 계정과 다르면 실행을 중단한다.
 - 프로필 이미지는 공개 CloudFront URL로 제공된다. UUID key는 접근 제어가 아니며 민감한 이미지를 저장하지 않는다.
+- GitHub Actions는 장기 Access Key 없이 OIDC로 `dev` Environment 전용 ECR Publisher Role을 Assume한다.
+- ECR Publisher Role은 backend ECR push와 digest 조회만 허용하며 Terraform State, ASG, EC2와 IAM 변경 권한을 갖지 않는다.
 
 ## 사전 조건
 
@@ -110,14 +119,15 @@ AWS_PROFILE=kdt-travel-terraform \
 
 AWS_PROFILE=kdt-travel-terraform \
   terraform -chdir=infra/environments/dev plan \
-  -var-file=terraform.tfvars
+  -var-file=terraform.tfvars \
+  -out=dev.tfplan
 ```
 
-Plan에서 교체·삭제가 없고 예상 리소스만 생성되는지 검토한 뒤 저장된 plan을 적용한다.
+Plan에서 교체·삭제가 없고 예상 리소스만 생성되는지 검토한다. GitHub OIDC 도입 후 최초 plan은 기존 23 add에 OIDC Provider, ECR Publisher Role과 inline policy가 추가된 총 26 add가 기준이다. AWS 계정에 `token.actions.githubusercontent.com` Provider가 이미 있으면 중복 생성하지 말고 `dev` State로 import한 뒤 다시 plan하며, 이 경우 Provider는 no-op이므로 총 25 add가 기준이다.
 
 ```bash
 AWS_PROFILE=kdt-travel-terraform \
-  terraform -chdir=infra/environments/dev apply dev-profile-image.tfplan
+  terraform -chdir=infra/environments/dev apply dev.tfplan
 ```
 
 현재 dev 이미지 S3, CloudFront와 Runtime Policy는 적용되어 있으며 `terraform plan` 결과가 `No changes`임을 확인했다. prod는 별도 승인 전까지 정적 검증만 수행한다.
@@ -131,6 +141,9 @@ AWS_PROFILE=kdt-travel-terraform \
 | `profile_image_bucket_name` | `PROFILE_IMAGE_STORAGE_BUCKET` |
 | `profile_image_public_base_url` | `PROFILE_IMAGE_PUBLIC_BASE_URL` |
 | `profile_image_runtime_policy_arn` | 개발 SSO Permission Set 또는 운영 Runtime Role 연결 |
+| `backend_ecr_repository_url` | GitHub Actions Push 대상과 digest 고정 Runtime image 기준 |
+| `github_ecr_publisher_role_arn` | GitHub `dev` Environment의 `role-to-assume` |
+| `github_ecr_publisher_subject` | AWS trust와 Workflow Environment 일치 검증 |
 
 AWS S3에서는 `PROFILE_IMAGE_STORAGE_PATH_STYLE_ACCESS_ENABLED=false`를 사용한다.
 
@@ -144,6 +157,8 @@ AWS S3에서는 `PROFILE_IMAGE_STORAGE_PATH_STYLE_ACCESS_ENABLED=false`를 사�
 - 다른 AWS Account에서 `allowed_account_ids`를 변경해 우회하지 않는다.
 - 실행 중인 작업 확인 없이 `terraform force-unlock`을 사용하지 않는다.
 - 공개 CDN URL을 인증 또는 권한 확인 수단으로 사용하지 않는다.
+- ECR Publisher Role에 Terraform State, EC2, ASG, IAM 변경 권한을 추가하지 않는다.
+- Terraform이 관리하는 Launch Template을 GitHub Actions의 AWS CLI로 직접 수정하지 않는다.
 
 ## 로컬·CI 검증
 
@@ -153,10 +168,13 @@ terraform -chdir=infra/bootstrap init -backend=false
 terraform -chdir=infra/bootstrap validate
 terraform -chdir=infra/environments/dev init -backend=false
 terraform -chdir=infra/environments/dev validate
+terraform -chdir=infra/environments/dev-runtime init -backend=false
+terraform -chdir=infra/environments/dev-runtime validate
 terraform -chdir=infra/environments/prod init -backend=false
 terraform -chdir=infra/environments/prod validate
 terraform -chdir=infra/modules/terraform_state_backend test
 terraform -chdir=infra/modules/profile_image test
+terraform -chdir=infra/modules/github_ecr_publisher test
 ```
 
 CI는 실제 AWS 자격증명을 전달받지 않으며 AWS plan/apply를 실행하지 않는다.
@@ -167,5 +185,6 @@ Trivy의 WAF(`AVD-AWS-0011`)와 고객 관리 KMS key(`AVD-AWS-0132`) 권고는 
 
 - `reference/infrastructure/terraform/TERRAFORM_AWS_INITIAL_SETUP.md`
 - `reference/infrastructure/terraform/TERRAFORM_CI_VERIFICATION.md`
+- `reference/strategy/ci-cd/github-oidc-ecr-asg-cd-plan.md`
 - `reference/storage/aws-access/AWS_SSO_LOCAL_AND_RUNTIME_CREDENTIALS.md`
 - `reference/storage/profile-image/PROFILE_IMAGE_AWS_BACKEND_RUNTIME_SETUP.md`

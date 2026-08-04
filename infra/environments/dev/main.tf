@@ -39,6 +39,17 @@ module "container_registry" {
   tags         = local.common_tags
 }
 
+module "github_ecr_publisher" {
+  source = "../../modules/github_ecr_publisher"
+
+  ecr_repository_arn  = module.container_registry.repository_arn
+  environment         = local.environment
+  github_organization = var.github_organization
+  github_repository   = var.github_repository
+  project_name        = var.project_name
+  tags                = local.common_tags
+}
+
 resource "aws_acm_certificate" "api" {
   domain_name       = var.api_domain_name
   validation_method = "DNS"

@@ -57,6 +57,18 @@ variable "custom_domain_name" {
   nullable    = true
 }
 
+variable "github_organization" {
+  type        = string
+  description = "GitHub organization trusted to publish the backend image through OIDC."
+  default     = "protove"
+}
+
+variable "github_repository" {
+  type        = string
+  description = "GitHub repository whose dev Environment may publish the backend image."
+  default     = "KDT_TravelPlanner"
+}
+
 variable "data_subnet_cidrs" {
   type        = list(string)
   description = "Isolated data subnet CIDRs."
