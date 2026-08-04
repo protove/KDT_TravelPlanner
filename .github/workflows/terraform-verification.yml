@@ -50,6 +50,7 @@ jobs:
           - infra/environments/prod
           - infra/modules/terraform_state_backend
           - infra/modules/profile_image
+          - infra/modules/static_frontend
           - infra/modules/network
           - infra/modules/container_registry
           - infra/modules/github_ecr_publisher
@@ -83,6 +84,7 @@ jobs:
         directory:
           - infra/modules/terraform_state_backend
           - infra/modules/profile_image
+          - infra/modules/static_frontend
           - infra/modules/network
           - infra/modules/container_registry
           - infra/modules/github_ecr_publisher
@@ -133,6 +135,7 @@ jobs:
             infra/environments/prod \
             infra/modules/terraform_state_backend \
             infra/modules/profile_image \
+            infra/modules/static_frontend \
             infra/modules/network \
             infra/modules/container_registry \
             infra/modules/github_ecr_publisher \

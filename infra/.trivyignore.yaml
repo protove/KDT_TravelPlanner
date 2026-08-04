@@ -2,12 +2,14 @@ misconfigurations:
   - id: AVD-AWS-0011
     paths:
       - "modules/profile_image/main.tf"
-    statement: "WAF and cost controls are an explicitly deferred follow-up; the distribution only serves public jpg/png/webp profile images through a private OAC origin."
+      - "modules/static_frontend/main.tf"
+    statement: "WAF and cost controls are an explicitly deferred follow-up; both distributions use private OAC origins and only expose public application or profile-image content."
     expired_at: 2027-01-31
 
   - id: AVD-AWS-0132
     paths:
       - "modules/profile_image/main.tf"
+      - "modules/static_frontend/main.tf"
       - "modules/terraform_state_backend/main.tf"
     statement: "SSE-S3 AES-256 is the approved encryption baseline for the current dev scope; customer-managed KMS keys require a separate cost and key-administration decision."
     expired_at: 2027-01-31

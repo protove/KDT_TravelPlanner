@@ -18,6 +18,42 @@ output "profile_image_runtime_policy_arn" {
   value       = module.profile_image.runtime_policy_arn
 }
 
+output "frontend_bucket_name" {
+  description = "Private S3 bucket used by the static frontend deployment pipeline."
+  value       = module.static_frontend.bucket_name
+}
+
+output "frontend_certificate_arn" {
+  description = "us-east-1 ACM certificate ARN for the frontend CloudFront alias."
+  value       = aws_acm_certificate.frontend.arn
+}
+
+output "frontend_certificate_dns_validation_records" {
+  description = "CNAME records that an operator must add to Cloudflare with proxy disabled."
+  value = {
+    for option in aws_acm_certificate.frontend.domain_validation_options : option.domain_name => {
+      name  = option.resource_record_name
+      type  = option.resource_record_type
+      value = option.resource_record_value
+    }
+  }
+}
+
+output "frontend_cloudflare_cname_target" {
+  description = "DNS-only Cloudflare CNAME target for the frontend custom domain."
+  value       = module.static_frontend.cloudfront_domain_name
+}
+
+output "frontend_cloudfront_distribution_id" {
+  description = "CloudFront distribution ID used by the frontend release pipeline."
+  value       = module.static_frontend.cloudfront_distribution_id
+}
+
+output "frontend_public_base_url" {
+  description = "Current frontend URL; CloudFront default domain until the custom alias is enabled."
+  value       = module.static_frontend.public_base_url
+}
+
 output "api_certificate_arn" {
   description = "Regional ACM certificate ARN. Use it only after Cloudflare DNS validation completes."
   value       = aws_acm_certificate.api.arn

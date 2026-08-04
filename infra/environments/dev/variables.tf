@@ -57,6 +57,45 @@ variable "custom_domain_name" {
   nullable    = true
 }
 
+variable "frontend_custom_domain_enabled" {
+  type        = bool
+  description = "Enable the CloudFront custom alias only after the us-east-1 ACM certificate is issued."
+  default     = false
+}
+
+variable "frontend_domain_name" {
+  type        = string
+  description = "Static frontend domain managed as a DNS-only record in Cloudflare."
+  default     = "kdt-travelplanner.protove.net"
+
+  validation {
+    condition     = can(regex("^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$", var.frontend_domain_name))
+    error_message = "frontend_domain_name must be a valid lowercase DNS name."
+  }
+}
+
+variable "frontend_html_cache_ttl_seconds" {
+  type        = number
+  description = "CloudFront TTL for frontend HTML and route documents."
+  default     = 0
+
+  validation {
+    condition     = var.frontend_html_cache_ttl_seconds >= 0 && var.frontend_html_cache_ttl_seconds <= 3600
+    error_message = "frontend_html_cache_ttl_seconds must be between 0 and 3600 seconds."
+  }
+}
+
+variable "frontend_static_cache_ttl_seconds" {
+  type        = number
+  description = "CloudFront TTL for immutable Next.js assets."
+  default     = 31536000
+
+  validation {
+    condition     = var.frontend_static_cache_ttl_seconds >= 86400 && var.frontend_static_cache_ttl_seconds <= 31536000
+    error_message = "frontend_static_cache_ttl_seconds must be between one day and one year."
+  }
+}
+
 variable "github_organization" {
   type        = string
   description = "GitHub organization trusted to publish the backend image through OIDC."

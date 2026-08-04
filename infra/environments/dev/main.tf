@@ -1,11 +1,25 @@
 locals {
-  environment = "dev"
-  bucket_name = "${var.project_name}-${local.environment}-profile-images-${var.aws_account_id}"
+  environment          = "dev"
+  bucket_name          = "${var.project_name}-${local.environment}-profile-images-${var.aws_account_id}"
+  frontend_bucket_name = "${var.project_name}-${local.environment}-frontend-${var.aws_account_id}"
   common_tags = {
     Environment = local.environment
     Phase       = "ec2-baseline"
     Project     = var.project_name
   }
+}
+
+module "static_frontend" {
+  source = "../../modules/static_frontend"
+
+  acm_certificate_arn      = var.frontend_custom_domain_enabled ? aws_acm_certificate.frontend.arn : null
+  bucket_name              = local.frontend_bucket_name
+  custom_domain_name       = var.frontend_custom_domain_enabled ? var.frontend_domain_name : null
+  environment              = local.environment
+  html_cache_ttl_seconds   = var.frontend_html_cache_ttl_seconds
+  project_name             = var.project_name
+  static_cache_ttl_seconds = var.frontend_static_cache_ttl_seconds
+  tags                     = local.common_tags
 }
 
 module "profile_image" {
@@ -52,6 +66,19 @@ module "github_ecr_publisher" {
 
 resource "aws_acm_certificate" "api" {
   domain_name       = var.api_domain_name
+  validation_method = "DNS"
+  tags              = local.common_tags
+
+  lifecycle {
+    create_before_destroy = true
+    prevent_destroy       = true
+  }
+}
+
+resource "aws_acm_certificate" "frontend" {
+  provider = aws.us_east_1
+
+  domain_name       = var.frontend_domain_name
   validation_method = "DNS"
   tags              = local.common_tags
 

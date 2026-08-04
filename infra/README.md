@@ -14,6 +14,7 @@ infra/
 └── modules/
     ├── terraform_state_backend/       # State S3와 최소 State 접근 정책
     ├── profile_image/                 # 이미지 S3, CloudFront OAC, Runtime Policy
+    ├── static_frontend/               # 정적 Frontend S3, CloudFront OAC, Cache/Rewrite
     ├── network/                       # 2AZ VPC와 public/app/data subnet
     ├── container_registry/            # ECR immutable image repository
     ├── github_ecr_publisher/          # GitHub OIDC와 ECR Push 전용 Role
@@ -130,7 +131,7 @@ AWS_PROFILE=kdt-travel-terraform \
   terraform -chdir=infra/environments/dev apply dev.tfplan
 ```
 
-현재 dev 이미지 S3, CloudFront와 Runtime Policy는 적용되어 있으며 `terraform plan` 결과가 `No changes`임을 확인했다. prod는 별도 승인 전까지 정적 검증만 수행한다.
+`dev` State는 프로필 이미지 인프라와 Backend/OIDC 기반뿐 아니라 정적 Frontend의 Private S3, CloudFront/OAC, `us-east-1` ACM 요청도 지속 관리한다. 첫 Frontend apply에서는 `frontend_custom_domain_enabled=false`를 유지해 CloudFront 기본 도메인을 사용한다. Cloudflare에 `frontend_certificate_dns_validation_records`를 DNS only로 등록하고 인증서가 `ISSUED`가 된 뒤 이 값을 `true`로 바꿔 custom alias를 활성화한다. prod는 별도 승인 전까지 정적 검증만 수행한다.
 
 ## 애플리케이션 연결 출력
 
@@ -144,6 +145,11 @@ AWS_PROFILE=kdt-travel-terraform \
 | `backend_ecr_repository_url` | GitHub Actions Push 대상과 digest 고정 Runtime image 기준 |
 | `github_ecr_publisher_role_arn` | GitHub `dev` Environment의 `role-to-assume` |
 | `github_ecr_publisher_subject` | AWS trust와 Workflow Environment 일치 검증 |
+| `frontend_bucket_name` | Frontend 정적 산출물 업로드 대상 |
+| `frontend_cloudfront_distribution_id` | 배포 후 제한된 CloudFront invalidation 대상 |
+| `frontend_cloudflare_cname_target` | Cloudflare DNS-only CNAME 대상 |
+
+Frontend Terraform은 S3 객체를 관리하지 않는다. Frontend 배포 파이프라인이 검증된 `out/` release를 업로드하고, HTML 경로만 제한적으로 invalidation하며, S3 Versioning 또는 release 단위 배포 기록으로 rollback한다.
 
 AWS S3에서는 `PROFILE_IMAGE_STORAGE_PATH_STYLE_ACCESS_ENABLED=false`를 사용한다.
 
@@ -174,6 +180,7 @@ terraform -chdir=infra/environments/prod init -backend=false
 terraform -chdir=infra/environments/prod validate
 terraform -chdir=infra/modules/terraform_state_backend test
 terraform -chdir=infra/modules/profile_image test
+terraform -chdir=infra/modules/static_frontend test
 terraform -chdir=infra/modules/github_ecr_publisher test
 ```
 
