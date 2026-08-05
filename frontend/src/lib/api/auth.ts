@@ -10,30 +10,37 @@ interface AccessTokenResponse {
   };
 }
 
-interface UserProfileResponse {
+export interface UserProfileResponse {
   data: {
+    userId: string;
     provider: "GOOGLE" | "NAVER";
+    email: string | null;
     name: string | null;
     nickname: string | null;
+    profileImageUrl: string | null;
     gender: "MALE" | "FEMALE" | "OTHER" | "UNSPECIFIED" | null;
     birthYear: number | null;
+    isProfileCompleted: boolean;
   };
 }
 
 function mapGender(gender: UserProfileResponse["data"]["gender"]): Gender {
   if (gender === "MALE") return "male";
   if (gender === "FEMALE") return "female";
-  return "unspecified";
+  return "other";
 }
 
-function mapProfile(profile: UserProfileResponse["data"]): AuthUser {
+export function mapProfile(profile: UserProfileResponse["data"]): AuthUser {
   const nickname = profile.nickname ?? profile.name ?? "여행자";
   return {
+    provider: profile.provider.toLowerCase() as AuthUser["provider"],
+    name: profile.name,
     nickname,
     initial: nickname.slice(0, 1) || "여",
     avatarColor: profile.provider === "GOOGLE" ? "#3b82f6" : "#03c75a",
+    profileImageUrl: profile.profileImageUrl,
     gender: mapGender(profile.gender),
-    age: profile.birthYear ? new Date().getFullYear() - profile.birthYear + 1 : "",
+    birthYear: profile.birthYear ?? "",
   };
 }
 
@@ -80,13 +87,14 @@ export async function fetchAuthUser(accessToken: string): Promise<AuthUser> {
 }
 
 /** 서버의 refresh token을 폐기한다. 실패해도 클라이언트 로그아웃은 계속 진행되도록 에러를 삼킨다. */
-export async function requestLogout(): Promise<void> {
-  try {
-    await fetch(`${API_BASE_URL}/api/v1/auth/logout`, {
-      method: "POST",
-      credentials: "include",
-    });
-  } catch {
-    // 서버 로그아웃 실패해도 클라이언트 상태는 초기화해야 하므로 무시한다.
+export async function requestLogout(accessToken: string): Promise<void> {
+  const response = await fetch(`${API_BASE_URL}/api/v1/auth/logout`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${accessToken}` },
+    credentials: "include",
+  });
+
+  if (!response.ok) {
+    throw new Error("로그아웃 요청에 실패했어요.");
   }
 }

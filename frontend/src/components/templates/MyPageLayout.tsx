@@ -29,7 +29,7 @@ function MyPageLayout({ header, tabs, activeTab, onTabChange, children, classNam
               onClick={() => onTabChange(tab.key)}
               aria-current={tab.key === activeTab}
               className={cn(
-                "rounded-lg px-3 py-2 text-left text-sm font-medium",
+                "cursor-pointer rounded-lg px-3 py-2 text-left text-sm font-medium",
                 tab.key === activeTab
                   ? "bg-muted text-foreground"
                   : "text-muted-foreground hover:bg-muted"

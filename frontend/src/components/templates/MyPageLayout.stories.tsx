@@ -23,7 +23,7 @@ const tabs = [
 function Demo() {
   const [activeTab, setActiveTab] = React.useState("profile");
   const [nickname, setNickname] = React.useState("김지민");
-  const [gender, setGender] = React.useState<Gender>("unspecified");
+  const [gender, setGender] = React.useState<Gender>("female");
   const [age, setAge] = React.useState<number | "">(28);
 
   return (
@@ -36,7 +36,7 @@ function Demo() {
           onGenderChange={setGender}
           age={age}
           onAgeChange={(v) => setAge(v === "" ? "" : Number(v))}
-          avatarColor="#3b82f6"
+          avatarColor="var(--brand-600)"
           onSave={() => {}}
         />
       ) : (
