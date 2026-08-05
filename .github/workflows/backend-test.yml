@@ -8,7 +8,8 @@ on:
       - "backend/**"
       - "compose.yml"
       - ".github/workflows/backend-test.yml"
-
+  workflow_call:
+  
 permissions:
   contents: read
 
