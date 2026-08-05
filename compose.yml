@@ -32,6 +32,12 @@ services:
       GOOGLE_ROUTES_BASE_URL: ${GOOGLE_ROUTES_BASE_URL:-https://routes.googleapis.com}
       GOOGLE_ROUTES_CONNECT_TIMEOUT: ${GOOGLE_ROUTES_CONNECT_TIMEOUT:-2s}
       GOOGLE_ROUTES_READ_TIMEOUT: ${GOOGLE_ROUTES_READ_TIMEOUT:-5s}
+      PROFILE_IMAGE_STORAGE_ENABLED: ${PROFILE_IMAGE_STORAGE_ENABLED:-false}
+      PROFILE_IMAGE_STORAGE_REGION: ${PROFILE_IMAGE_STORAGE_REGION:-ap-northeast-2}
+      PROFILE_IMAGE_STORAGE_BUCKET: ${PROFILE_IMAGE_STORAGE_BUCKET:-}
+      PROFILE_IMAGE_PUBLIC_BASE_URL: ${PROFILE_IMAGE_PUBLIC_BASE_URL:-}
+      PROFILE_IMAGE_STORAGE_PATH_STYLE_ACCESS_ENABLED: ${PROFILE_IMAGE_STORAGE_PATH_STYLE_ACCESS_ENABLED:-false}
+      PROFILE_IMAGE_UPLOAD_URL_TTL: ${PROFILE_IMAGE_UPLOAD_URL_TTL:-10m}
     depends_on:
       postgres:
         condition: service_healthy
@@ -44,11 +50,7 @@ services:
     networks:
       - app-network
     healthcheck:
-      test:
-        [
-          "CMD-SHELL",
-          "wget -q -O /dev/null http://127.0.0.1:9091/actuator/health || exit 1",
-        ]
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:9091/actuator/health/readiness || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 12
@@ -65,7 +67,7 @@ services:
     networks:
       - app-network
     healthcheck:
-      test: ["CMD-SHELL", 'pg_isready -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"']
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -84,7 +86,7 @@ services:
     networks:
       - app-network
     healthcheck:
-      test: ["CMD-SHELL", 'redis-cli -a "$$REDIS_PASSWORD" ping | grep -q PONG']
+      test: ["CMD-SHELL", "redis-cli -a \"$$REDIS_PASSWORD\" ping | grep -q PONG"]
       interval: 5s
       timeout: 5s
       retries: 10
