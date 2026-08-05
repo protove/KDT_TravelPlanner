@@ -26,6 +26,7 @@ UI 컴포넌트는 **shadcn 컴포넌트를 우선 사용**하고, 스타일은 
 | `--brand-700` | #1d4ed8 |
 | `--accent-violet` | #9747ff |
 | `--red-500` (destructive) | #ef4444 |
+| `--red-600` (destructive text) | #dc2626 |
 | `--white` / `--black` | #ffffff / #000000 |
 
 ### 2.2 색상 — Semantic (컴포넌트는 반드시 이 계층만 사용)
@@ -45,6 +46,7 @@ UI 컴포넌트는 **shadcn 컴포넌트를 우선 사용**하고, 스타일은 
 | `--border-strong` | slate-300 | 강조 테두리 |
 | `--ring-focus` | black | 포커스 링 |
 | `--destructive` | red-500 | 삭제·위험 동작 |
+| `--destructive-text` | red-600 | 흰 배경 위 오류·위험 안내 텍스트 |
 
 ### 2.3 타이포그래피
 
@@ -94,9 +96,9 @@ src/
 | 레벨 | 규칙 | 이번 프로젝트 인벤토리 |
 |---|---|---|
 | atoms | 비즈니스 로직 금지, props로만 제어 | Button, Input, Badge, Avatar, Tabs, Checkbox, Select, Textarea, Dialog(shell), Tooltip, Icon |
-| molecules | atoms 조합, 도메인 무관 | SearchBar, FormField, ConfirmDialog, UserChip(아바타+닉네임), PermissionSelect(읽기/읽기쓰기), DateRangeBadge, PurposeTagSelect(여행목적 다중선택 태그), CommentRow, CommentInput, SocialLoginButton(구글/네이버 공식 로그인 버튼) |
-| organisms | 도메인 데이터 소비 | GNB/Header, TripCard, TripList, TripDetailHeader(제목·기간 수정), ScheduleBoard(일자별 계획+미배정 목록), MapPanel(지도·경로 최적화), InviteDialog, ParticipantManageDialog, NotificationList, ProfileSection, CalendarPopover(기간 선택), PlaceModal(마커노트/목적지 추가) |
-| templates | 슬롯만 배치 | AuthLayout, ListLayout, DetailLayout(2-pane: 일정+지도), MyPageLayout, LandingLayout |
+| molecules | atoms 조합, 도메인 무관 | SearchBar, FormField, ConfirmDialog, UserChip(아바타+닉네임), PermissionSelect(읽기/읽기쓰기), DateRangeBadge, CommentRow, CommentInput, SocialLoginButton(구글/네이버 공식 로그인 버튼) |
+| organisms | 도메인 데이터 소비 | GNB/Header, TripCard, TripList, TripDetailHeader(제목·기간 수정), ScheduleBoard(날짜 탭 → map 슬롯(지도) → 일정 목록 → 미배정 목록, 초안 순서 그대로), MapPanel(Google Maps JS SDK, @react-google-maps/api·useJsApiLoader, 서버가 조회한 실제 위도/경도로 마커·경로 최적화), InviteDialog, ParticipantManageDialog, NotificationList, ProfileSection, CalendarPopover(기간 선택), PlaceModal(마커노트/목적지 추가) |
+| templates | 슬롯만 배치 | AuthLayout, ListLayout, DetailLayout(1단 세로: 헤더+일정, 지도는 ScheduleBoard 내부 인라인), MyPageLayout, LandingLayout |
 | pages | IA의 [화면] 항목과 1:1 | 비로그인 랜딩, 로그인/회원가입, 여행일정 목록, 여행일정 상세, 마이페이지(알림 포함), 403 |
 
 동행 선택은 새 컴포넌트를 만들지 않고 기존 `Select` atom을 그대로 사용한다(단일 선택이라 커스텀 드롭다운이 불필요).
@@ -119,3 +121,4 @@ src/
 4. 모든 신규 컴포넌트는 생성과 동시에 스토리를 만든다 (`docs/storybook.md` 규칙).
 5. 접근성: 인터랙션 요소는 Radix primitive를 기반으로 하고, 포커스 링(`--ring-2`)을 제거하지 않는다.
 6. 삭제·방출·탈퇴 등 파괴 동작 버튼은 `destructive` variant + ConfirmDialog 필수.
+7. 활성화된 버튼·링크·탭·선택 항목·체크박스에는 `cursor-pointer`를 사용한다. 비활성 요소는 `cursor-not-allowed`, 텍스트 입력은 기본 텍스트 커서, 드래그 요소는 `cursor-grab`/`cursor-grabbing`을 사용한다.

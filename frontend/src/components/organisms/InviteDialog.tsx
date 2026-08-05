@@ -2,6 +2,7 @@
 
 import * as React from "react";
 import { Button } from "@/components/atoms/Button";
+import { Input } from "@/components/atoms/Input";
 import {
   Dialog,
   DialogContent,
@@ -9,66 +10,51 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/atoms/Dialog";
-import { SearchBar } from "@/components/molecules/SearchBar";
-import { UserChip } from "@/components/molecules/UserChip";
 import { PermissionSelect, type Permission } from "@/components/molecules/PermissionSelect";
-
-export interface InviteCandidate {
-  id: string;
-  name: string;
-  avatarColor?: string;
-  permission: Permission;
-}
 
 export interface InviteDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  query: string;
-  onQueryChange: (value: string) => void;
-  results: InviteCandidate[];
-  onPermissionChange: (id: string, permission: Permission) => void;
-  onInvite: (id: string) => void;
+  nickname: string;
+  onNicknameChange: (value: string) => void;
+  permission: Permission;
+  onPermissionChange: (value: Permission) => void;
+  onInvite: () => void;
+  /** 정확한 닉네임을 찾지 못했을 때 등, 초대 실패 사유를 보여준다. */
+  error?: string | null;
 }
 
 function InviteDialog({
   open,
   onOpenChange,
-  query,
-  onQueryChange,
-  results,
+  nickname,
+  onNicknameChange,
+  permission,
   onPermissionChange,
   onInvite,
+  error,
 }: InviteDialogProps) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
         <DialogHeader>
           <DialogTitle>참여자 초대</DialogTitle>
-          <DialogDescription>닉네임으로 검색해 초대하고 권한을 부여하세요.</DialogDescription>
+          <DialogDescription>정확한 닉네임을 입력해 초대하고 권한을 부여하세요.</DialogDescription>
         </DialogHeader>
 
-        <SearchBar
-          placeholder="닉네임 검색"
-          value={query}
-          onChange={(e) => onQueryChange(e.target.value)}
-        />
-
-        <div className="flex flex-col gap-2">
-          {results.map((candidate) => (
-            <div key={candidate.id} className="flex items-center gap-2.5 rounded-xl bg-card p-2.5 shadow-card">
-              <UserChip name={candidate.name} avatarColor={candidate.avatarColor} className="flex-1" />
-              <PermissionSelect
-                value={candidate.permission}
-                onChange={(value) => onPermissionChange(candidate.id, value)}
-              />
-              <Button size="sm" onClick={() => onInvite(candidate.id)}>
-                초대
-              </Button>
-            </div>
-          ))}
-          {results.length === 0 && (
-            <p className="py-6 text-center text-sm text-muted-foreground">검색 결과가 없어요.</p>
-          )}
+        <div className="flex flex-col gap-3">
+          <Input
+            placeholder="닉네임 입력"
+            value={nickname}
+            onChange={(e) => onNicknameChange(e.target.value)}
+          />
+          {error && <p className="text-sm text-destructive">{error}</p>}
+          <div className="flex items-center justify-between gap-2">
+            <PermissionSelect value={permission} onChange={onPermissionChange} />
+            <Button size="sm" disabled={!nickname.trim()} onClick={onInvite}>
+              초대
+            </Button>
+          </div>
         </div>
       </DialogContent>
     </Dialog>

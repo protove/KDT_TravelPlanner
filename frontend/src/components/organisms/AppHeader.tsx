@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import { Bell } from "lucide-react";
-import { Avatar, AvatarFallback } from "@/components/atoms/Avatar";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/atoms/Avatar";
 import { Button } from "@/components/atoms/Button";
 import { Icon } from "@/components/atoms/Icon";
 import { cn } from "@/lib/utils";
@@ -11,6 +11,7 @@ export interface AppHeaderProps {
   loggedIn: boolean;
   userInitial?: string;
   avatarColor?: string;
+  avatarSrc?: string;
   onLogoClick?: () => void;
   onNotificationClick?: () => void;
   onProfileClick?: () => void;
@@ -22,6 +23,7 @@ function AppHeader({
   loggedIn,
   userInitial = "지",
   avatarColor = "var(--brand-500)",
+  avatarSrc,
   onLogoClick,
   onNotificationClick,
   onProfileClick,
@@ -38,7 +40,7 @@ function AppHeader({
       <button
         type="button"
         onClick={onLogoClick}
-        className="flex items-center gap-2.5 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        className="flex cursor-pointer items-center gap-2.5 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       >
         <span className="flex h-[30px] w-[30px] items-center justify-center rounded-md bg-primary text-sm font-bold text-primary-foreground">
           T
@@ -52,16 +54,17 @@ function AppHeader({
             type="button"
             onClick={onNotificationClick}
             title="알림"
-            className="flex h-[34px] w-[34px] items-center justify-center rounded-md text-fg-secondary hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            className="flex h-[34px] w-[34px] cursor-pointer items-center justify-center rounded-md text-fg-secondary hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
             <Icon icon={Bell} size="sm" aria-label="알림" />
           </button>
           <button
             type="button"
             onClick={onProfileClick}
-            className="rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            className="cursor-pointer rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
             <Avatar className="h-8 w-8">
+              {avatarSrc && <AvatarImage src={avatarSrc} alt={`${userInitial} 프로필`} />}
               <AvatarFallback className="text-white" style={{ background: avatarColor }}>
                 {userInitial}
               </AvatarFallback>

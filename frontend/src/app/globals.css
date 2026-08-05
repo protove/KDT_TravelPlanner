@@ -25,6 +25,7 @@
   --brand-700: #1d4ed8;
   --accent-violet: #9747ff;
   --red-500: #ef4444;
+  --red-600: #dc2626;
   --white: #ffffff;
   --black: #000000;
 
@@ -45,6 +46,7 @@
   --accent-foreground: var(--brand-700);
   --destructive: var(--red-500);
   --destructive-foreground: var(--white);
+  --destructive-text: var(--red-600);
   --border: var(--slate-200);            /* border-default */
   --border-strong: var(--slate-300);
   --input: var(--slate-200);
@@ -120,6 +122,7 @@
   --color-accent-foreground: var(--accent-foreground);
   --color-destructive: var(--destructive);
   --color-destructive-foreground: var(--destructive-foreground);
+  --color-destructive-text: var(--destructive-text);
   --color-border: var(--border);
   --color-border-strong: var(--border-strong);
   --color-input: var(--input);
@@ -148,4 +151,17 @@ body {
   background: var(--background);
   color: var(--foreground);
   font-family: var(--font-sans);
+}
+
+/* 네이티브 상호작용 요소도 공통 Atom과 동일한 커서 피드백을 제공한다. */
+button:not(:disabled),
+a[href],
+select:not(:disabled),
+summary {
+  cursor: pointer;
+}
+
+button:disabled,
+select:disabled {
+  cursor: not-allowed;
 }

@@ -18,6 +18,8 @@ CMD ["npm", "run", "dev", "--", "--hostname", "0.0.0.0"]
 FROM base AS builder
 ARG NEXT_PUBLIC_API_BASE_URL
 ENV NEXT_PUBLIC_API_BASE_URL=${NEXT_PUBLIC_API_BASE_URL}
+ARG NEXT_PUBLIC_GOOGLE_MAPS_API_KEY
+ENV NEXT_PUBLIC_GOOGLE_MAPS_API_KEY=${NEXT_PUBLIC_GOOGLE_MAPS_API_KEY}
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 RUN npm run build

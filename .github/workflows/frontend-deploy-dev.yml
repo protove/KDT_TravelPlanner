@@ -1,0 +1,66 @@
+name: Frontend Deploy (Dev)
+
+# 공통 Release workflow가 main의 전체 검증을 통과한 뒤 호출합니다.
+# AWS Access Key를 저장하지 않고 GitHub Actions OIDC로 일시적인 IAM Role을 받습니다.
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: frontend-deploy-dev
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Build and Deploy Static Export
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: dev
+
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24.17.0"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Build static export
+        working-directory: frontend
+        env:
+          NEXT_PUBLIC_API_BASE_URL: ${{ vars.DEV_NEXT_PUBLIC_API_BASE_URL }}
+          NEXT_PUBLIC_GOOGLE_MAPS_API_KEY: ${{ secrets.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY }}
+        run: npm run build
+
+      - name: Confirm static output
+        run: test -f frontend/out/index.html
+
+      - name: Configure AWS credentials with OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_FRONTEND_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+          role-session-name: frontend-deploy-${{ github.run_id }}
+
+      - name: Sync to S3
+        run: aws s3 sync frontend/out "s3://${{ vars.S3_BUCKET_NAME }}" --delete
+
+      - name: Invalidate CloudFront cache
+        run: |
+          aws cloudfront create-invalidation \
+            --distribution-id "${{ vars.CLOUDFRONT_DISTRIBUTION_ID }}" \
+            --paths "/*"
+
+      - name: Verify deployed frontend
+        run: curl --fail --show-error --silent "${{ vars.FRONTEND_BASE_URL }}/" > /dev/null
