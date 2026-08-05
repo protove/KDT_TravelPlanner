@@ -49,6 +49,22 @@ class UserProfileService(
 		}
 	}
 
+	@Transactional
+	fun updateProfileImage(
+		userId: UUID,
+		profileImageUrl: String,
+	): UserProfileResponse {
+		val user = userRepository.findById(userId)
+			.orElseThrow(::UserNotFoundException)
+		user.updateProfile(
+			nickname = user.nickname,
+			profileImageUrl = profileImageUrl,
+			gender = user.gender,
+			birthYear = user.birthYear?.toInt(),
+		)
+		return UserProfileResponse.from(userRepository.saveAndFlush(user))
+	}
+
 	private fun <T> PatchField<T>.resolve(currentValue: T?): T? = when (this) {
 		PatchField.Absent -> currentValue
 		is PatchField.Present -> value

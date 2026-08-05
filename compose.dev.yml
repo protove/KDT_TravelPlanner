@@ -31,12 +31,14 @@ services:
       target: dev
     environment:
       LOGGING_FILE_NAME: /var/log/travel-planner/travel-planner.log
+      AWS_PROFILE: kdt-travel-runtime
     ports:
       - "127.0.0.1:${MANAGEMENT_PORT:-9091}:9091"
     volumes:
       - ./backend:/app
       - backend_gradle:/root/.gradle
       - backend_build:/app/build
+      - ~/.aws:/root/.aws:ro
 
 volumes:
   frontend_node_modules:

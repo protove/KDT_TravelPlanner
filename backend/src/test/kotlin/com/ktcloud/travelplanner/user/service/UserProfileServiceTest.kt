@@ -130,6 +130,29 @@ class UserProfileServiceTest {
 	}
 
 	@Test
+	fun `updates only the profile image from a verified upload`() {
+		val user = mockUser(
+			nickname = "existingNickname",
+			profileImageUrl = "https://images.example/before.png",
+			gender = Gender.FEMALE,
+			birthYear = 1999,
+			isProfileCompleted = true,
+		)
+		`when`(userRepository.findById(TestFixtures.USER_ID)).thenReturn(Optional.of(user))
+		`when`(userRepository.saveAndFlush(user)).thenReturn(user)
+
+		service.updateProfileImage(TestFixtures.USER_ID, "https://images.example/after.png")
+
+		verify(user).updateProfile(
+			nickname = "existingNickname",
+			profileImageUrl = "https://images.example/after.png",
+			gender = Gender.FEMALE,
+			birthYear = 1999,
+		)
+		verify(userRepository).saveAndFlush(user)
+	}
+
+	@Test
 	fun `rejects nickname used by another user`() {
 		val user = mockUser(nickname = "beforeNickname")
 		`when`(userRepository.findById(TestFixtures.USER_ID)).thenReturn(Optional.of(user))

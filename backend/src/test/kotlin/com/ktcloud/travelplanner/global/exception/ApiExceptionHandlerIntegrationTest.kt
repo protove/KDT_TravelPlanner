@@ -4,17 +4,18 @@ import ch.qos.logback.classic.Level
 import ch.qos.logback.classic.Logger
 import ch.qos.logback.classic.spi.ILoggingEvent
 import ch.qos.logback.core.read.ListAppender
+import com.fasterxml.jackson.databind.ObjectMapper
+import com.ktcloud.travelplanner.global.logging.ApplicationLogger
 import com.ktcloud.travelplanner.global.logging.RequestIdGenerator
 import com.ktcloud.travelplanner.global.logging.RequestLoggingFilter
 import com.ktcloud.travelplanner.global.response.ApiResponse
 import jakarta.validation.Valid
 import jakarta.validation.constraints.NotBlank
-import org.hamcrest.Matchers.containsString
-import org.hamcrest.Matchers.equalTo
-import org.hamcrest.Matchers.not
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
-import org.junit.jupiter.api.Assertions.assertNotNull
+import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertNotEquals
+import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
@@ -36,6 +37,7 @@ import org.springframework.web.bind.annotation.PostMapping
 import org.springframework.web.bind.annotation.RequestBody
 import org.springframework.web.bind.annotation.RequestMapping
 import org.springframework.web.bind.annotation.RestController
+import java.util.UUID
 
 @ActiveProfiles("test")
 @WebMvcTest(ApiExceptionTestController::class)
@@ -46,97 +48,139 @@ import org.springframework.web.bind.annotation.RestController
 )
 class ApiExceptionHandlerIntegrationTest(
 	@Autowired private val mockMvc: MockMvc,
+	@Autowired private val objectMapper: ObjectMapper,
 ) {
-	private val exceptionLogger = LoggerFactory.getLogger(ApiExceptionHandler::class.java) as Logger
+	private val applicationLogger = LoggerFactory.getLogger(ApplicationLogger::class.java) as Logger
 	private val logAppender = ListAppender<ILoggingEvent>()
 	private var previousLevel: Level? = null
 
 	@BeforeEach
 	fun attachLogAppender() {
-		previousLevel = exceptionLogger.level
-		exceptionLogger.level = Level.ERROR
+		previousLevel = applicationLogger.level
+		applicationLogger.level = Level.TRACE
 		logAppender.start()
-		exceptionLogger.addAppender(logAppender)
+		applicationLogger.addAppender(logAppender)
 	}
 
 	@AfterEach
 	fun detachLogAppender() {
-		exceptionLogger.detachAppender(logAppender)
-		exceptionLogger.level = previousLevel
+		applicationLogger.detachAppender(logAppender)
+		applicationLogger.level = previousLevel
 		logAppender.stop()
 	}
 
 	@Test
-	fun `validation errors are sorted and include matching request id`() {
-		mockMvc.post("/test/errors/validation") {
-			header(RequestIdGenerator.HEADER_NAME, "validation-request")
+	fun `validation errors are sorted and use the server request id`() {
+		val response = mockMvc.post("/test/errors/validation") {
+			header(RequestIdGenerator.HEADER_NAME, "validation-client-id")
 			contentType = MediaType.APPLICATION_JSON
 			content = """{"title":"","city":""}"""
 		}
 			.andExpect {
 				status { isBadRequest() }
-				header { string(RequestIdGenerator.HEADER_NAME, "validation-request") }
-				jsonPath("$.code", equalTo("VALIDATION_ERROR"))
-				jsonPath("$.message", equalTo("요청값이 올바르지 않습니다."))
-				jsonPath("$.requestId", equalTo("validation-request"))
-				jsonPath("$.fieldErrors[0].field", equalTo("city"))
-				jsonPath("$.fieldErrors[1].field", equalTo("title"))
 			}
+			.andReturn()
+			.response
 
-		assertTrue(logAppender.list.isEmpty())
+		val responseRequestId = response.getHeader(RequestIdGenerator.HEADER_NAME)
+		UUID.fromString(responseRequestId)
+		assertNotEquals("validation-client-id", responseRequestId)
+		val responseBody = objectMapper.readTree(response.contentAsString)
+		assertEquals("VALIDATION_ERROR", responseBody.path("code").asText())
+		assertEquals("요청값이 올바르지 않습니다.", responseBody.path("message").asText())
+		assertEquals(responseRequestId, responseBody.path("requestId").asText())
+		assertEquals("city", responseBody.path("fieldErrors").path(0).path("field").asText())
+		assertEquals("title", responseBody.path("fieldErrors").path(1).path("field").asText())
+
+		val completionLog = logAppender.list.single()
+		assertEquals(Level.INFO, completionLog.level)
+		assertEquals("VALIDATION_ERROR", completionLog.keyValues()["errorCode"])
+		assertEquals(responseRequestId, completionLog.mdcPropertyMap[RequestIdGenerator.MDC_KEY])
 	}
 
 	@Test
-	fun `malformed JSON uses the common error contract`() {
-		mockMvc.post("/test/errors/validation") {
-			header(RequestIdGenerator.HEADER_NAME, "json-request")
+	fun `malformed JSON uses the common error and safe log contract`() {
+		val response = mockMvc.post("/test/errors/validation") {
+			header(RequestIdGenerator.HEADER_NAME, "json-client-id")
 			contentType = MediaType.APPLICATION_JSON
 			content = """{"title":"broken""""
 		}
 			.andExpect {
 				status { isBadRequest() }
-				jsonPath("$.code", equalTo("MALFORMED_JSON"))
-				jsonPath("$.requestId", equalTo("json-request"))
-				jsonPath("$.fieldErrors") { doesNotExist() }
 			}
+			.andReturn()
+			.response
+
+		val responseRequestId = response.getHeader(RequestIdGenerator.HEADER_NAME)
+		val responseBody = objectMapper.readTree(response.contentAsString)
+		assertEquals("MALFORMED_JSON", responseBody.path("code").asText())
+		assertEquals(responseRequestId, responseBody.path("requestId").asText())
+		assertFalse(responseBody.has("fieldErrors"))
+		assertEquals("MALFORMED_JSON", logAppender.list.single().keyValues()["errorCode"])
 	}
 
 	@Test
-	fun `domain not found and conflict errors map without stack traces`() {
+	fun `domain not found and conflict errors log at info without failure details`() {
 		mockMvc.get("/test/errors/not-found")
 			.andExpect {
 				status { isNotFound() }
-				jsonPath("$.code", equalTo("RESOURCE_NOT_FOUND"))
 			}
 
 		mockMvc.get("/test/errors/conflict")
 			.andExpect {
 				status { isConflict() }
-				jsonPath("$.code", equalTo("CONFLICT"))
 			}
 
-		assertTrue(logAppender.list.isEmpty())
+		assertEquals(2, logAppender.list.size)
+		assertTrue(logAppender.list.all { it.level == Level.INFO })
+		assertEquals(
+			setOf("RESOURCE_NOT_FOUND", "CONFLICT"),
+			logAppender.list.map { it.keyValues()["errorCode"] }.toSet(),
+		)
+		assertTrue(logAppender.list.all { it.keyValues()["event"] == "HTTP_REQUEST_COMPLETED" })
 	}
 
 	@Test
-	fun `unexpected error hides internals and logs one stack trace with request id`() {
-		mockMvc.get("/test/errors/unexpected") {
-			header(RequestIdGenerator.HEADER_NAME, "error-request")
+	fun `unexpected error preserves the response contract and logs only safe failure fields`() {
+		val response = mockMvc.get("/test/errors/unexpected") {
+			header(RequestIdGenerator.HEADER_NAME, "unexpected-client-id")
 		}
 			.andExpect {
 				status { isInternalServerError() }
-				header { string(RequestIdGenerator.HEADER_NAME, "error-request") }
-				jsonPath("$.code", equalTo("INTERNAL_SERVER_ERROR"))
-				jsonPath("$.message", equalTo("서버 내부 오류가 발생했습니다."))
-				jsonPath("$.requestId", equalTo("error-request"))
-				content { string(not(containsString("database-password"))) }
 			}
+			.andReturn()
+			.response
 
-		val errorLog = logAppender.list.single()
-		assertEquals("error-request", errorLog.mdcPropertyMap[RequestIdGenerator.MDC_KEY])
-		assertNotNull(errorLog.throwableProxy)
+		val responseRequestId = response.getHeader(RequestIdGenerator.HEADER_NAME)
+		UUID.fromString(responseRequestId)
+		assertNotEquals("unexpected-client-id", responseRequestId)
+		val responseBody = objectMapper.readTree(response.contentAsString)
+		assertEquals("INTERNAL_SERVER_ERROR", responseBody.path("code").asText())
+		assertEquals("서버 내부 오류가 발생했습니다.", responseBody.path("message").asText())
+		assertEquals(responseRequestId, responseBody.path("requestId").asText())
+		assertFalse(response.contentAsString.contains("database-password"))
+
+		assertEquals(2, logAppender.list.size)
+		val failureLog = logAppender.list.single { it.keyValues()["event"] == "UNEXPECTED_REQUEST_FAILURE" }
+		val completionLog = logAppender.list.single { it.keyValues()["event"] == "HTTP_REQUEST_COMPLETED" }
+		val failureValues = failureLog.keyValues()
+		val allLoggedValues = logAppender.list.joinToString { "${it.formattedMessage} ${it.keyValues()}" }
+
+		assertEquals(responseRequestId, failureLog.mdcPropertyMap[RequestIdGenerator.MDC_KEY])
+		assertEquals(IllegalStateException::class.java.name, failureValues["errorType"])
+		assertTrue((failureValues["errorFingerprint"] as String).matches(Regex("^[0-9a-f]{64}$")))
+		assertTrue((failureValues["errorFrames"] as List<*>).size <= 5)
+		assertNull(failureLog.throwableProxy)
+		assertEquals(responseRequestId, completionLog.mdcPropertyMap[RequestIdGenerator.MDC_KEY])
+		assertEquals("/test/errors/unexpected", completionLog.keyValues()["route"])
+		assertEquals("INTERNAL_SERVER_ERROR", completionLog.keyValues()["errorCode"])
+		assertNull(completionLog.throwableProxy)
+		assertFalse(allLoggedValues.contains("database-password"))
+		assertFalse(allLoggedValues.contains("unexpected-client-id"))
 	}
 
+	private fun ILoggingEvent.keyValues(): Map<String, Any> =
+		keyValuePairs.associate { it.key to it.value }
 }
 
 @RestController

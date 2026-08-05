@@ -87,12 +87,12 @@ class UserProfileControllerIntegrationTest(
 		mockMvc.patch("/api/v1/users/me/profile") {
 			header(HttpHeaders.AUTHORIZATION, "Bearer $accessToken")
 			contentType = MediaType.APPLICATION_JSON
-			content = """{"nickname":"updatedTraveler","profileImageUrl":"https://images.example/updated.png"}"""
+			content = """{"nickname":"updatedTraveler"}"""
 		}
 			.andExpect {
 				status { isOk() }
 				jsonPath("$.data.nickname", equalTo("updatedTraveler"))
-				jsonPath("$.data.profileImageUrl", equalTo("https://images.example/updated.png"))
+				jsonPath("$.data.profileImageUrl", equalTo("https://images.example/profile.png"))
 				jsonPath("$.data.gender", equalTo("OTHER"))
 				jsonPath("$.data.birthYear", equalTo(2001))
 				jsonPath("$.data.isProfileCompleted", equalTo(true))
@@ -104,6 +104,29 @@ class UserProfileControllerIntegrationTest(
 		kotlin.test.assertEquals("updatedTraveler", updatedUser.nickname)
 		kotlin.test.assertEquals(Gender.OTHER, updatedUser.gender)
 		kotlin.test.assertEquals(2001.toShort(), updatedUser.birthYear)
+	}
+
+	@Test
+	fun `non-null profile image URL is rejected without changing profile`() {
+		val user = saveCompletedUser()
+		val accessToken = jwtTokenService.issueAccessToken(requireNotNull(user.id)).value
+
+		mockMvc.patch("/api/v1/users/me/profile") {
+			header(HttpHeaders.AUTHORIZATION, "Bearer $accessToken")
+			contentType = MediaType.APPLICATION_JSON
+			content = """{"profileImageUrl":"https://unverified.example/image.png"}"""
+		}
+			.andExpect {
+				status { isBadRequest() }
+				jsonPath("$.code", equalTo("VALIDATION_ERROR"))
+				jsonPath("$.fieldErrors[0].field", equalTo("profileImageUrl"))
+			}
+
+		entityManager.clear()
+		kotlin.test.assertEquals(
+			"https://images.example/profile.png",
+			userRepository.findById(requireNotNull(user.id)).orElseThrow().profileImageUrl,
+		)
 	}
 
 	@Test

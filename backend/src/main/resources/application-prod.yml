@@ -3,7 +3,6 @@ logging:
     name: ${LOGGING_FILE_NAME:/var/log/travel-planner/travel-planner.log}
   structured:
     format:
-      console: ecs
       file: ecs
     ecs:
       service:
@@ -12,10 +11,12 @@ logging:
     rollingpolicy:
       file-name-pattern: ${logging.file.name}.%d{yyyy-MM-dd}.%i.gz
       max-file-size: 20MB
-      max-history: 14
-      total-size-cap: 1GB
+      max-history: 7
+      total-size-cap: 500MB
 
 app:
+  logging:
+    error-frame-limit: 5
   auth:
     refresh-token:
       cookie-secure: ${REFRESH_TOKEN_COOKIE_SECURE:true}
@@ -24,3 +25,9 @@ app:
   security:
     jwt:
       secret: ${JWT_SECRET}
+
+springdoc:
+  api-docs:
+    enabled: false
+  swagger-ui:
+    enabled: false

@@ -11,6 +11,7 @@ data class ProfileImageStorageProperties(
 	val accessKey: String = "",
 	val secretKey: String = "",
 	val bucket: String = "",
+	val publicBaseUrl: String = "",
 	val pathStyleAccessEnabled: Boolean = true,
 	val uploadUrlTtl: Duration = Duration.ofMinutes(10),
 )

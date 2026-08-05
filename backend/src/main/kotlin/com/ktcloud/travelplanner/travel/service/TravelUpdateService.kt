@@ -13,7 +13,10 @@ import com.ktcloud.travelplanner.timeline.model.TimelineItem
 import com.ktcloud.travelplanner.timeline.repository.TimelineItemRepository
 import com.ktcloud.travelplanner.travel.dto.TravelDetailResponse
 import com.ktcloud.travelplanner.travel.dto.TravelUpdateRequest
+import com.ktcloud.travelplanner.travel.model.PlannerPurpose
 import com.ktcloud.travelplanner.travel.model.Travel
+import com.ktcloud.travelplanner.travel.model.TravelPurpose
+import com.ktcloud.travelplanner.travel.repository.PlannerPurposeRepository
 import com.ktcloud.travelplanner.travel.repository.TravelRepository
 import com.ktcloud.travelplanner.user.dto.PatchField
 import org.springframework.dao.OptimisticLockingFailureException
@@ -30,6 +33,7 @@ class TravelUpdateService(
         private val countryRepository: CountryRepository,
         private val cityRepository: CityRepository,
         private val timelineItemRepository: TimelineItemRepository,
+        private val plannerPurposeRepository: PlannerPurposeRepository,
 ) {
         @Transactional
         fun updateTravel(
@@ -62,7 +66,22 @@ class TravelUpdateService(
                                 comment = request.comment.resolveNullable(travel.comment),
                         )
                         val savedTravel = travelRepository.saveAndFlush(travel)
-                        return TravelDetailResponse.from(savedTravel, permission, timelineItems)
+
+                        // purposes는 Travel과 별개 Entity라 여기서 직접 갱신 (지정된 경우에만 전체 교체)
+                        val purposes = if (request.purposes is PatchField.Present) {
+                                val newPurposes = request.purposes.value
+                                        ?: throw InvalidTravelUpdateException()
+                                plannerPurposeRepository.deleteAllByTravelId(travelId)
+                                plannerPurposeRepository.flush()
+                                plannerPurposeRepository.saveAll(
+                                        newPurposes.map { PlannerPurpose(travel = savedTravel, purpose = it) },
+                                )
+                                newPurposes
+                        } else {
+                                plannerPurposeRepository.findAllByTravelId(travelId).map { it.purpose }.toSet()
+                        }
+
+                        return TravelDetailResponse.from(savedTravel, permission, timelineItems, purposes)
                 } catch (_: IllegalArgumentException) {
                         throw InvalidTravelUpdateException()
                 } catch (_: OptimisticLockingFailureException) {
