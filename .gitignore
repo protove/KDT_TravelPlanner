@@ -11,3 +11,9 @@ CLAUDE.md
 *.iml
 
 reference/
+
+# Local generated presentation artifacts
+/output/
+/presentation/
+
+/tmp

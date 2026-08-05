@@ -46,9 +46,18 @@ jobs:
         directory:
           - infra/bootstrap
           - infra/environments/dev
+          - infra/environments/dev-runtime
           - infra/environments/prod
           - infra/modules/terraform_state_backend
           - infra/modules/profile_image
+          - infra/modules/static_frontend
+          - infra/modules/network
+          - infra/modules/container_registry
+          - infra/modules/github_ecr_publisher
+          - infra/modules/github_frontend_deployer
+          - infra/modules/runtime_security
+          - infra/modules/backend_data
+          - infra/modules/backend_service
     steps:
       - name: Check out repository
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -76,6 +85,14 @@ jobs:
         directory:
           - infra/modules/terraform_state_backend
           - infra/modules/profile_image
+          - infra/modules/static_frontend
+          - infra/modules/network
+          - infra/modules/container_registry
+          - infra/modules/github_ecr_publisher
+          - infra/modules/github_frontend_deployer
+          - infra/modules/runtime_security
+          - infra/modules/backend_data
+          - infra/modules/backend_service
     steps:
       - name: Check out repository
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -116,9 +133,18 @@ jobs:
           for directory in \
             infra/bootstrap \
             infra/environments/dev \
+            infra/environments/dev-runtime \
             infra/environments/prod \
             infra/modules/terraform_state_backend \
-            infra/modules/profile_image
+            infra/modules/profile_image \
+            infra/modules/static_frontend \
+            infra/modules/network \
+            infra/modules/container_registry \
+            infra/modules/github_ecr_publisher \
+            infra/modules/github_frontend_deployer \
+            infra/modules/runtime_security \
+            infra/modules/backend_data \
+            infra/modules/backend_service
           do
             tflint \
               --config="${GITHUB_WORKSPACE}/infra/.tflint.hcl" \
