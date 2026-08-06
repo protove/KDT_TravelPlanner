@@ -36,11 +36,21 @@ jobs:
         working-directory: frontend
         run: npm ci
 
+      - name: Validate frontend build inputs
+        env:
+          NEXT_PUBLIC_API_BASE_URL: ${{ vars.DEV_NEXT_PUBLIC_API_BASE_URL }}
+          NEXT_PUBLIC_GOOGLE_MAPS_API_KEY: ${{ vars.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY }}
+        run: |
+          test -n "$NEXT_PUBLIC_API_BASE_URL"
+          test -n "$NEXT_PUBLIC_GOOGLE_MAPS_API_KEY"
+
       - name: Build static export
         working-directory: frontend
         env:
           NEXT_PUBLIC_API_BASE_URL: ${{ vars.DEV_NEXT_PUBLIC_API_BASE_URL }}
-          NEXT_PUBLIC_GOOGLE_MAPS_API_KEY: ${{ secrets.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY }}
+          # NEXT_PUBLIC values are embedded in the browser bundle. Restrict this key
+          # by HTTP referrer and API in Google Cloud rather than treating it as a server secret.
+          NEXT_PUBLIC_GOOGLE_MAPS_API_KEY: ${{ vars.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY }}
         run: npm run build
 
       - name: Confirm static output
