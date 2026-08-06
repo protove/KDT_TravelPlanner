@@ -1,0 +1,12 @@
+services:
+  prometheus:
+    ports:
+      - "127.0.0.1:${PROMETHEUS_PORT:-9090}:9090"
+
+  loki:
+    ports:
+      - "127.0.0.1:${LOKI_PORT:-3100}:3100"
+
+  alloy:
+    ports:
+      - "127.0.0.1:${ALLOY_PORT:-12345}:12345"

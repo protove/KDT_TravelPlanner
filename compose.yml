@@ -1,0 +1,102 @@
+services:
+  backend:
+    build:
+      context: ./backend
+      target: runner
+    environment:
+      SERVER_PORT: "8080"
+      MANAGEMENT_SERVER_PORT: "9091"
+      SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE}
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB}
+      SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER}
+      SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD}
+      SPRING_DATA_REDIS_HOST: redis
+      SPRING_DATA_REDIS_PORT: "6379"
+      SPRING_DATA_REDIS_PASSWORD: ${REDIS_PASSWORD}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS}
+      JWT_SECRET: ${JWT_SECRET:-}
+      OAUTH_ALLOWED_REDIRECT_ORIGINS: ${OAUTH_ALLOWED_REDIRECT_ORIGINS:-http://localhost:3000}
+      OAUTH_FRONTEND_REDIRECT_URL: ${OAUTH_FRONTEND_REDIRECT_URL:-http://localhost:3000/auth/callback}
+      OAUTH_HTTP_CONNECT_TIMEOUT: ${OAUTH_HTTP_CONNECT_TIMEOUT:-3s}
+      OAUTH_HTTP_READ_TIMEOUT: ${OAUTH_HTTP_READ_TIMEOUT:-5s}
+      GOOGLE_OAUTH_CLIENT_ID: ${GOOGLE_OAUTH_CLIENT_ID:-}
+      GOOGLE_OAUTH_CLIENT_SECRET: ${GOOGLE_OAUTH_CLIENT_SECRET:-}
+      GOOGLE_OAUTH_REDIRECT_URI: ${GOOGLE_OAUTH_REDIRECT_URI:-http://localhost:8080/api/v1/auth/oauth2/google/callback}
+      NAVER_OAUTH_CLIENT_ID: ${NAVER_OAUTH_CLIENT_ID:-}
+      NAVER_OAUTH_CLIENT_SECRET: ${NAVER_OAUTH_CLIENT_SECRET:-}
+      NAVER_OAUTH_REDIRECT_URI: ${NAVER_OAUTH_REDIRECT_URI:-http://localhost:8080/api/v1/auth/oauth2/naver/callback}
+      GOOGLE_MAPS_API_KEY: ${GOOGLE_MAPS_API_KEY:-}
+      GOOGLE_PLACES_BASE_URL: ${GOOGLE_PLACES_BASE_URL:-https://places.googleapis.com}
+      GOOGLE_PLACES_CONNECT_TIMEOUT: ${GOOGLE_PLACES_CONNECT_TIMEOUT:-2s}
+      GOOGLE_PLACES_READ_TIMEOUT: ${GOOGLE_PLACES_READ_TIMEOUT:-3s}
+      GOOGLE_ROUTES_BASE_URL: ${GOOGLE_ROUTES_BASE_URL:-https://routes.googleapis.com}
+      GOOGLE_ROUTES_CONNECT_TIMEOUT: ${GOOGLE_ROUTES_CONNECT_TIMEOUT:-2s}
+      GOOGLE_ROUTES_READ_TIMEOUT: ${GOOGLE_ROUTES_READ_TIMEOUT:-5s}
+      PROFILE_IMAGE_STORAGE_ENABLED: ${PROFILE_IMAGE_STORAGE_ENABLED:-false}
+      PROFILE_IMAGE_STORAGE_REGION: ${PROFILE_IMAGE_STORAGE_REGION:-ap-northeast-2}
+      PROFILE_IMAGE_STORAGE_BUCKET: ${PROFILE_IMAGE_STORAGE_BUCKET:-}
+      PROFILE_IMAGE_PUBLIC_BASE_URL: ${PROFILE_IMAGE_PUBLIC_BASE_URL:-}
+      PROFILE_IMAGE_STORAGE_PATH_STYLE_ACCESS_ENABLED: ${PROFILE_IMAGE_STORAGE_PATH_STYLE_ACCESS_ENABLED:-false}
+      PROFILE_IMAGE_UPLOAD_URL_TTL: ${PROFILE_IMAGE_UPLOAD_URL_TTL:-10m}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${BACKEND_PORT}:8080"
+    volumes:
+      - backend_logs:/var/log/travel-planner
+    networks:
+      - app-network
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:9091/actuator/health/readiness || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 40s
+
+  postgres:
+    image: postgres:17.10-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - app-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  redis:
+    image: redis:7.4.9-alpine
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+    command:
+      - sh
+      - -c
+      - exec redis-server --appendonly yes --requirepass "$$REDIS_PASSWORD"
+    volumes:
+      - redis_data:/data
+    networks:
+      - app-network
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$$REDIS_PASSWORD\" ping | grep -q PONG"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+
+networks:
+  app-network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  redis_data:
+  backend_logs:

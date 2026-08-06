@@ -1,0 +1,55 @@
+name: Main Release
+on:
+  push:
+    branches:
+      - main
+permissions:
+  contents: read
+  id-token: write
+jobs:
+  # ── 프론트 검증 ────────────────────────────────────────────
+  # 기존 frontend-test.yml을 workflow_call로 재사용
+  # (ESLint, Storybook 빌드, production 빌드 검증)
+  verify-frontend:
+    name: Verify Frontend
+    uses: ./.github/workflows/frontend-test.yml
+
+  # ── 백엔드 검증 ────────────────────────────────────────────
+  # 기존 backend-test.yml을 workflow_call로 재사용
+  # (Testcontainers 기반 단위/통합 테스트 + 이미지 빌드 검증)
+  verify-backend:
+    name: Verify Backend
+    uses: ./.github/workflows/backend-test.yml
+
+  # ── 통합(Compose) 검증 ────────────────────────────────────
+  # 기존 compose-build.yml을 workflow_call로 재사용
+  # (실제 컨테이너 기동, readiness/CORS/Flyway/Redis 연결 검증 — #195)
+  verify-compose:
+    name: Verify Compose Integration
+    uses: ./.github/workflows/compose-build.yml
+
+  # ── 프론트 배포 ────────────────────────────────────────────
+  # 검증 3개(프론트/백엔드/통합)가 모두 통과해야만 실행됨
+  deploy-frontend:
+    name: Deploy Frontend
+    needs:
+      - verify-frontend
+      - verify-backend
+      - verify-compose
+    uses: ./.github/workflows/frontend-deploy-dev.yml
+    permissions:
+      contents: read
+      id-token: write
+
+  # ── 백엔드 배포 ────────────────────────────────────────────
+  # 검증 3개(프론트/백엔드/통합)가 모두 통과해야만 실행됨
+  deploy-backend:
+    name: Deploy Backend
+    needs:
+      - verify-frontend
+      - verify-backend
+      - verify-compose
+    uses: ./.github/workflows/backend-deploy-dev.yml
+    permissions:
+      contents: read
+      id-token: write

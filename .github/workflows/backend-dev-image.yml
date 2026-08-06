@@ -1,0 +1,59 @@
+name: Backend Development Image
+
+on:
+  pull_request:
+    branches:
+      - develop-backend
+    paths:
+      - "backend/Dockerfile"
+      - "backend/docker/**"
+      - "compose.yml"
+      - "compose.dev.yml"
+      - "compose.test.yml"
+      - ".env.dev.example"
+      - ".github/workflows/backend-dev-image.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: backend-development-image-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Development Compose and Image Build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v6
+
+      - name: Validate development Compose configuration
+        run: |
+          docker compose --env-file .env.dev.example \
+            -f compose.yml -f compose.dev.yml config --quiet
+
+      - name: Validate test Compose configuration
+        run: |
+          docker compose --env-file .env.dev.example \
+            -f compose.yml -f compose.test.yml config --quiet
+
+      - name: Verify backend external service environment keys
+        run: |
+          required_keys='["OAUTH_ALLOWED_REDIRECT_ORIGINS","OAUTH_FRONTEND_REDIRECT_URL","OAUTH_HTTP_CONNECT_TIMEOUT","OAUTH_HTTP_READ_TIMEOUT","GOOGLE_OAUTH_CLIENT_ID","GOOGLE_OAUTH_CLIENT_SECRET","GOOGLE_OAUTH_REDIRECT_URI","NAVER_OAUTH_CLIENT_ID","NAVER_OAUTH_CLIENT_SECRET","NAVER_OAUTH_REDIRECT_URI","GOOGLE_MAPS_API_KEY","GOOGLE_PLACES_BASE_URL","GOOGLE_PLACES_CONNECT_TIMEOUT","GOOGLE_PLACES_READ_TIMEOUT","GOOGLE_ROUTES_BASE_URL","GOOGLE_ROUTES_CONNECT_TIMEOUT","GOOGLE_ROUTES_READ_TIMEOUT"]'
+          docker compose --env-file .env.dev.example \
+            -f compose.yml -f compose.dev.yml config --format json \
+            | jq --exit-status --argjson required_keys "${required_keys}" '
+                .services.backend.environment as $environment
+                | [$required_keys[] as $key | select(($environment | has($key)) | not) | $key] as $missing
+                | if ($missing | length) == 0 then true
+                  else error("Missing backend external service environment keys: " + ($missing | join(", ")))
+                  end
+              ' >/dev/null
+
+      - name: Build backend development image
+        run: |
+          docker compose --env-file .env.dev.example \
+            -f compose.yml -f compose.dev.yml build backend

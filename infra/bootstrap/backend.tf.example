@@ -1,0 +1,5 @@
+# Rename this file to backend.tf only after the State bucket has been applied
+# from local State and the local terraform.tfstate has been backed up.
+terraform {
+  backend "s3" {}
+}

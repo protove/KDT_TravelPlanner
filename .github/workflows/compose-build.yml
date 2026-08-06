@@ -1,0 +1,151 @@
+name: Backend Compose Integration
+
+on:
+  pull_request:
+    branches:
+      - develop-backend
+      - develop
+      - main
+    paths:
+      - "backend/**"
+      - "compose.yml"
+      - "compose.dev.yml"
+      - "compose.test.yml"
+      - "compose.monitoring.yml"
+      - "compose.monitoring.dev.yml"
+      - ".env.dev.example"
+      - ".env.prod.example"
+      - ".github/workflows/compose-build.yml"
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: backend-compose-integration-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Runtime Packaging and Connections
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      BACKEND_PORT: "18080"
+      COMPOSE_PROJECT_NAME: travel-planner-ci-${{ github.run_id }}-${{ github.run_attempt }}
+
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v6
+
+      - name: Validate production Compose configuration
+        run: docker compose --env-file .env.prod.example -f compose.yml config --quiet
+
+      - name: Validate development Compose configuration
+        run: |
+          docker compose --env-file .env.dev.example \
+            -f compose.yml -f compose.dev.yml \
+            config --quiet
+
+      - name: Validate test Compose configuration
+        run: |
+          docker compose --env-file .env.dev.example \
+            -f compose.yml -f compose.test.yml \
+            config --quiet
+
+      - name: Validate monitoring Compose configurations
+        run: |
+          docker compose --env-file .env.prod.example \
+            -f compose.yml -f compose.monitoring.yml \
+            config --quiet
+          docker compose --env-file .env.dev.example \
+            -f compose.yml -f compose.dev.yml \
+            -f compose.monitoring.yml -f compose.monitoring.dev.yml \
+            config --quiet
+
+      - name: Build backend runtime image
+        run: docker compose --env-file .env.prod.example -f compose.yml build backend
+
+      - name: Start backend runtime stack
+        run: |
+          docker compose --env-file .env.prod.example -f compose.yml up \
+            --detach \
+            --wait \
+            --wait-timeout 180 \
+            postgres redis backend
+
+      - name: Verify readiness and public ping
+        run: |
+          docker compose --env-file .env.prod.example -f compose.yml exec -T backend \
+            wget -q -O - http://127.0.0.1:9091/actuator/health/readiness \
+            | jq --exit-status '.status == "UP"' >/dev/null
+
+          curl --fail --show-error --silent http://127.0.0.1:18080/api/ping \
+            | jq --exit-status \
+                '.status == "ok" and .application == "travel-planner-backend" and .profile == "prod"' \
+                >/dev/null
+
+      - name: Verify authentication and CORS boundaries
+        run: |
+          protected_status="$(curl --silent --output /dev/null --write-out '%{http_code}' \
+            http://127.0.0.1:18080/api/v1/users/me/profile)"
+          test "${protected_status}" = "401"
+
+          headers_file="${RUNNER_TEMP}/cors-headers.txt"
+          curl --fail --show-error --silent \
+            --dump-header "${headers_file}" \
+            --output /dev/null \
+            --request OPTIONS \
+            --header 'Origin: http://localhost:3000' \
+            --header 'Access-Control-Request-Method: GET' \
+            http://127.0.0.1:18080/api/ping
+          grep --ignore-case --quiet \
+            '^access-control-allow-origin: http://localhost:3000' \
+            "${headers_file}"
+
+      - name: Verify Flyway and Redis connections
+        run: |
+          migration_count="$(docker compose --env-file .env.prod.example -f compose.yml \
+            exec -T postgres sh -c \
+              'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc \
+                "SELECT count(*) FROM flyway_schema_history WHERE success = true;"')"
+          test "${migration_count}" -gt 0
+
+          redis_response="$(docker compose --env-file .env.prod.example -f compose.yml \
+            exec -T redis sh -c \
+              'redis-cli --no-auth-warning -a "$REDIS_PASSWORD" ping')"
+          test "${redis_response}" = "PONG"
+
+      - name: Verify containers did not restart
+        run: |
+          for service in postgres redis backend; do
+            container_id="$(docker compose --env-file .env.prod.example -f compose.yml ps -q "${service}")"
+            test -n "${container_id}"
+            test "$(docker inspect --format '{{.RestartCount}}' "${container_id}")" = "0"
+          done
+
+      - name: Collect Compose diagnostics
+        if: always()
+        run: |
+          docker compose --env-file .env.prod.example -f compose.yml ps \
+            > "${RUNNER_TEMP}/compose-ps.txt" 2>&1 || true
+          docker compose --env-file .env.prod.example -f compose.yml logs --no-color \
+            > "${RUNNER_TEMP}/compose-integration.log" 2>&1 || true
+
+      - name: Upload Compose diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-compose-diagnostics
+          path: |
+            ${{ runner.temp }}/compose-ps.txt
+            ${{ runner.temp }}/compose-integration.log
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Stop backend runtime stack
+        if: always()
+        run: |
+          docker compose --env-file .env.prod.example -f compose.yml down \
+            --volumes \
+            --remove-orphans

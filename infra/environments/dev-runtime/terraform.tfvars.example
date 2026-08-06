@@ -1,0 +1,10 @@
+aws_account_id         = "123456789012"
+aws_region             = "ap-northeast-2"
+project_name           = "kdt-travelplanner"
+persistent_state_bucket = "kdt-travelplanner-tfstate-123456789012-ap-northeast-2"
+
+# Query the latest PostgreSQL 17 patch in ap-northeast-2 immediately before the operator plan.
+postgres_engine_version = "17.8"
+
+# Tags are rejected. Replace this example digest with an image that exists in the persistent dev ECR repository.
+backend_image_uri = "123456789012.dkr.ecr.ap-northeast-2.amazonaws.com/kdt-travelplanner-dev-backend@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
