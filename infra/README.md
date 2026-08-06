@@ -47,7 +47,7 @@ AWS 인증은 `AWS_PROFILE` 또는 AWS SDK 기본 자격증명 체인으로만 �
 - Bootstrap 관리 권한, 일상 Terraform 실행 권한과 애플리케이션 Runtime 권한을 분리한다.
 - Provider의 `allowed_account_ids`가 로그인한 AWS 계정이 예상 계정과 다르면 실행을 중단한다.
 - 프로필 이미지는 공개 CloudFront URL로 제공된다. UUID key는 접근 제어가 아니며 민감한 이미지를 저장하지 않는다.
-- GitHub Actions는 장기 Access Key 없이 OIDC로 `dev` Environment 전용 ECR Publisher Role을 Assume한다.
+- GitHub Actions는 장기 Access Key 없이 OIDC로 `dev` Environment 전용 ECR Publisher Role을 Assume한다. Role trust는 저장소 rename에도 재사용되지 않는 GitHub owner/repository numeric ID 기반 immutable subject를 요구한다.
 - ECR Publisher Role은 backend ECR push와 digest 조회만 허용하며 Terraform State, ASG, EC2와 IAM 변경 권한을 갖지 않는다.
 - Frontend Deployer Role은 같은 OIDC Provider를 재사용하고 static frontend S3 sync와 지정 CloudFront invalidation만 허용한다. ECR, Terraform State와 인프라 설정 변경 권한은 갖지 않는다.
 

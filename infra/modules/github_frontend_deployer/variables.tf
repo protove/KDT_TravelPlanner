@@ -48,6 +48,16 @@ variable "github_organization" {
   }
 }
 
+variable "github_owner_id" {
+  type        = number
+  description = "Immutable numeric ID of the GitHub account that owns the trusted repository."
+
+  validation {
+    condition     = var.github_owner_id > 0 && floor(var.github_owner_id) == var.github_owner_id
+    error_message = "github_owner_id must be a positive integer."
+  }
+}
+
 variable "github_repository" {
   type        = string
   description = "GitHub repository whose Environment may assume the frontend deployer role."
@@ -55,6 +65,16 @@ variable "github_repository" {
   validation {
     condition     = can(regex("^[A-Za-z0-9_.-]+$", var.github_repository))
     error_message = "github_repository must be a valid GitHub repository name."
+  }
+}
+
+variable "github_repository_id" {
+  type        = number
+  description = "Immutable numeric ID of the GitHub repository trusted by the frontend deployer role."
+
+  validation {
+    condition     = var.github_repository_id > 0 && floor(var.github_repository_id) == var.github_repository_id
+    error_message = "github_repository_id must be a positive integer."
   }
 }
 
