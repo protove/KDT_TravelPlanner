@@ -44,7 +44,9 @@ jobs:
         run: npm run build
 
       - name: Confirm static output
-        run: test -f frontend/out/index.html
+        run: |
+          test -f frontend/out/index.html
+          test -f frontend/out/auth/callback/index.html
 
       - name: Configure AWS credentials with OIDC
         uses: aws-actions/configure-aws-credentials@v4
