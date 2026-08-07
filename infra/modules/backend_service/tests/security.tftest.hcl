@@ -26,31 +26,31 @@ mock_provider "aws" {
 }
 
 variables {
-  alb_security_group_id            = "sg-alb"
-  app_subnet_ids                   = ["subnet-app-a", "subnet-app-c"]
-  aws_region                       = "ap-northeast-2"
-  backend_application_secret_arn   = "arn:aws:secretsmanager:ap-northeast-2:123456789012:secret:app"
-  backend_image_uri                = "123456789012.dkr.ecr.ap-northeast-2.amazonaws.com/kdt-travelplanner-dev-backend@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-  backend_security_group_id        = "sg-backend"
-  certificate_arn                  = "arn:aws:acm:ap-northeast-2:123456789012:certificate/12345678-1234-1234-1234-123456789012"
-  database_address                 = "database.internal"
-  database_master_secret_arn       = "arn:aws:secretsmanager:ap-northeast-2:123456789012:secret:rds"
-  database_name                    = "travel_diary_dev"
-  ecr_repository_arn               = "arn:aws:ecr:ap-northeast-2:123456789012:repository/kdt-travelplanner-dev-backend"
-  ecr_repository_url               = "123456789012.dkr.ecr.ap-northeast-2.amazonaws.com/kdt-travelplanner-dev-backend"
-  environment                      = "dev"
-  frontend_origin                  = "https://kdt-travelplanner.protove.net"
-  google_oauth_redirect_uri        = "https://api.kdt-travelplanner.protove.net/api/v1/auth/oauth2/google/callback"
+  alb_security_group_id              = "sg-alb"
+  app_subnet_ids                     = ["subnet-app-a", "subnet-app-c"]
+  aws_region                         = "ap-northeast-2"
+  backend_application_secret_arn     = "arn:aws:secretsmanager:ap-northeast-2:123456789012:secret:app"
+  backend_image_uri                  = "123456789012.dkr.ecr.ap-northeast-2.amazonaws.com/kdt-travelplanner-dev-backend@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  backend_security_group_id          = "sg-backend"
+  certificate_arn                    = "arn:aws:acm:ap-northeast-2:123456789012:certificate/12345678-1234-1234-1234-123456789012"
+  database_address                   = "database.internal"
+  database_master_secret_arn         = "arn:aws:secretsmanager:ap-northeast-2:123456789012:secret:rds"
+  database_name                      = "travel_diary_dev"
+  ecr_repository_arn                 = "arn:aws:ecr:ap-northeast-2:123456789012:repository/kdt-travelplanner-dev-backend"
+  ecr_repository_url                 = "123456789012.dkr.ecr.ap-northeast-2.amazonaws.com/kdt-travelplanner-dev-backend"
+  environment                        = "dev"
+  frontend_origin                    = "https://kdt-travelplanner.protove.net"
+  google_oauth_redirect_uri          = "https://api.kdt-travelplanner.protove.net/api/v1/auth/oauth2/google/callback"
   monitoring_endpoint_parameter_name = "/kdt-travelplanner/dev/monitoring-endpoint"
-  naver_oauth_redirect_uri         = "https://api.kdt-travelplanner.protove.net/api/v1/auth/oauth2/naver/callback"
-  profile_image_bucket_name        = "kdt-travelplanner-dev-profile-images-123456789012"
-  profile_image_public_base_url    = "https://images.example.com"
-  profile_image_runtime_policy_arn = "arn:aws:iam::123456789012:policy/profile-image"
-  project_name                     = "kdt-travelplanner"
-  public_subnet_ids                = ["subnet-public-a", "subnet-public-c"]
-  redis_auth_secret_arn            = "arn:aws:secretsmanager:ap-northeast-2:123456789012:secret:redis"
-  redis_primary_endpoint           = "redis.internal"
-  vpc_id                           = "vpc-12345678"
+  naver_oauth_redirect_uri           = "https://api.kdt-travelplanner.protove.net/api/v1/auth/oauth2/naver/callback"
+  profile_image_bucket_name          = "kdt-travelplanner-dev-profile-images-123456789012"
+  profile_image_public_base_url      = "https://images.example.com"
+  profile_image_runtime_policy_arn   = "arn:aws:iam::123456789012:policy/profile-image"
+  project_name                       = "kdt-travelplanner"
+  public_subnet_ids                  = ["subnet-public-a", "subnet-public-c"]
+  redis_auth_secret_arn              = "arn:aws:secretsmanager:ap-northeast-2:123456789012:secret:redis"
+  redis_primary_endpoint             = "redis.internal"
+  vpc_id                             = "vpc-12345678"
 }
 
 run "backend_is_private_and_rolls_without_capacity_loss" {
