@@ -11,6 +11,7 @@ misconfigurations:
       - "modules/profile_image/main.tf"
       - "modules/static_frontend/main.tf"
       - "modules/terraform_state_backend/main.tf"
+      - "modules/monitoring_ec2/main.tf"
     statement: "SSE-S3 AES-256 is the approved encryption baseline for the current dev scope; customer-managed KMS keys require a separate cost and key-administration decision."
     expired_at: 2027-01-31
 
