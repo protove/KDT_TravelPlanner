@@ -203,6 +203,13 @@ docker compose --env-file .env.dev -f compose.yml -f compose.dev.yml \
   run --rm --no-deps backend ./gradlew test --no-daemon
 ```
 
+## Compose 부하·복구 리허설
+
+production-like Compose에서 합성 데이터 시드, k6 Smoke/Baseline, Backend 재기동과
+T1→T6 회복 판정을 반복하려면 [load-tests/README.md](./load-tests/README.md)를
+참조하세요. 리허설은 고유 Compose project와 임시 볼륨을 사용하며 AWS 성능 기준선을
+대신하지 않습니다.
+
 ## 향후 운영 방향
 
 - Nginx를 추가하면 Nginx만 호스트에 공개하고 `/`는 frontend, `/api`는 backend로 전달합니다.
