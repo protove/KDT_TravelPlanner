@@ -230,8 +230,10 @@ resource "aws_autoscaling_group" "backend" {
   target_group_arns         = [aws_lb_target_group.backend.arn]
 
   launch_template {
-    id      = aws_launch_template.backend.id
-    version = "$Latest"
+    id = aws_launch_template.backend.id
+    # A concrete version makes digest/user-data changes visible on the ASG
+    # and lets the instance_refresh block roll the existing instances.
+    version = aws_launch_template.backend.latest_version
   }
 
   instance_refresh {

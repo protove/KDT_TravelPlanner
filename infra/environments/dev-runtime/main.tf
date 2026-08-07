@@ -139,6 +139,5 @@ module "backend_service" {
   depends_on = [
     aws_route.app_default,
     module.monitoring_ec2,
-    terraform_data.backend_image_contract,
   ]
 }

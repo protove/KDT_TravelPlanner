@@ -1,4 +1,6 @@
 mock_provider "aws" {
+  override_during = plan
+
   mock_data "aws_iam_policy_document" {
     defaults = {
       json = "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Action\":\"sts:AssumeRole\",\"Principal\":{\"Service\":\"ec2.amazonaws.com\"}}]}"
@@ -21,6 +23,13 @@ mock_provider "aws" {
   mock_resource "aws_lb_target_group" {
     defaults = {
       arn = "arn:aws:elasticloadbalancing:ap-northeast-2:123456789012:targetgroup/test/123"
+    }
+  }
+
+  mock_resource "aws_launch_template" {
+    defaults = {
+      id             = "lt-0123456789abcdef0"
+      latest_version = 7
     }
   }
 }
@@ -85,6 +94,14 @@ run "backend_is_private_and_rolls_without_capacity_loss" {
       !aws_autoscaling_group.backend.instance_refresh[0].preferences[0].auto_rollback
     )
     error_message = "The EC2 baseline must use 2-to-4 capacity and manual 100/200 Instance Refresh."
+  }
+
+  assert {
+    condition = (
+      aws_autoscaling_group.backend.launch_template[0].version ==
+      tostring(aws_launch_template.backend.latest_version)
+    )
+    error_message = "The ASG must reference the concrete Launch Template version so image changes trigger Instance Refresh."
   }
 
   assert {
