@@ -16,14 +16,16 @@ mock_provider "aws" {
 }
 
 variables {
-  ecr_repository_arn  = "arn:aws:ecr:ap-northeast-2:123456789012:repository/kdt-travelplanner-dev-backend"
-  environment         = "dev"
-  github_organization = "protove"
-  github_repository   = "KDT_TravelPlanner"
-  project_name        = "kdt-travelplanner"
+  ecr_repository_arn   = "arn:aws:ecr:ap-northeast-2:123456789012:repository/kdt-travelplanner-dev-backend"
+  environment          = "dev"
+  github_organization  = "protove"
+  github_owner_id      = 114971169
+  github_repository    = "KDT_TravelPlanner"
+  github_repository_id = 1298812222
+  project_name         = "kdt-travelplanner"
 }
 
-run "trusts_only_the_dev_environment" {
+run "trusts_only_the_immutable_dev_environment" {
   command = plan
 
   assert {
@@ -37,16 +39,30 @@ run "trusts_only_the_dev_environment" {
   assert {
     condition = (
       jsondecode(aws_iam_role.publisher.assume_role_policy).Statement[0].Action == ["sts:AssumeRoleWithWebIdentity"] &&
-      jsondecode(aws_iam_role.publisher.assume_role_policy).Statement[0].Condition.StringEquals["token.actions.githubusercontent.com:sub"] == "repo:protove/KDT_TravelPlanner:environment:dev" &&
+      jsondecode(aws_iam_role.publisher.assume_role_policy).Statement[0].Condition.StringEquals["token.actions.githubusercontent.com:sub"] == "repo:protove@114971169/KDT_TravelPlanner@1298812222:environment:dev" &&
       jsondecode(aws_iam_role.publisher.assume_role_policy).Statement[0].Condition.StringEquals["token.actions.githubusercontent.com:aud"] == "sts.amazonaws.com"
     )
-    error_message = "The publisher trust must require the exact repository, dev Environment and STS audience."
+    error_message = "The publisher trust must require the immutable repository identity, dev Environment and STS audience."
   }
 
   assert {
     condition     = aws_iam_role.publisher.max_session_duration == 3600
     error_message = "The GitHub publisher session must be limited to one hour."
   }
+}
+
+run "invalid_github_ids_are_rejected" {
+  command = plan
+
+  variables {
+    github_owner_id      = 0
+    github_repository_id = -1
+  }
+
+  expect_failures = [
+    var.github_owner_id,
+    var.github_repository_id,
+  ]
 }
 
 run "push_is_scoped_to_one_repository" {
