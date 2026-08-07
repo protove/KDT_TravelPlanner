@@ -41,6 +41,7 @@ variables {
   environment                      = "dev"
   frontend_origin                  = "https://kdt-travelplanner.protove.net"
   google_oauth_redirect_uri        = "https://api.kdt-travelplanner.protove.net/api/v1/auth/oauth2/google/callback"
+  monitoring_endpoint_parameter_name = "/kdt-travelplanner/dev/monitoring-endpoint"
   naver_oauth_redirect_uri         = "https://api.kdt-travelplanner.protove.net/api/v1/auth/oauth2/naver/callback"
   profile_image_bucket_name        = "kdt-travelplanner-dev-profile-images-123456789012"
   profile_image_public_base_url    = "https://images.example.com"
