@@ -7,6 +7,10 @@ import { NEW_ITEM_PREFIX, formatIsoDate, computeNextVisitOrder, type getDateTabs
 
 type DateTab = ReturnType<typeof getDateTabs>[number];
 
+// 나라 미선택 시 장소 검색(Google Places)에 대신 쓸 기본 국가 코드.
+// 결과가 이 나라로 편향(bias)되니 완벽하진 않지만, 나라를 안 골랐다고 검색 자체가 막히는 것보단 낫다.
+const DEFAULT_COUNTRY_CODE = "KR";
+
 interface UsePlaceEditorParams {
   accessToken: string | null;
   countries: Country[];
@@ -47,8 +51,8 @@ export function usePlaceEditor({
   const [draftPlaceCoords, setDraftPlaceCoords] = React.useState<Record<string, { lat: number; lng: number }>>({});
 
   React.useEffect(() => {
-    const countryCode = countries.find((c) => c.countryId === selectedCountryId)?.code;
-    if (!accessToken || !placeQuery.trim() || !countryCode) return;
+    const countryCode = countries.find((c) => c.countryId === selectedCountryId)?.code ?? DEFAULT_COUNTRY_CODE;
+    if (!accessToken || !placeQuery.trim()) return;
     const handle = setTimeout(() => {
       searchPlaces(accessToken, placeQuery.trim(), countryCode).then(setPlaceResults).catch(() => {});
     }, 300);
