@@ -1,13 +1,16 @@
 locals {
-  environment     = "dev"
-  frontend_origin = "https://kdt-travelplanner.protove.net"
-  api_origin      = "https://api.kdt-travelplanner.protove.net"
+  environment                        = "dev"
+  frontend_origin                    = "https://kdt-travelplanner.protove.net"
+  api_origin                         = "https://api.kdt-travelplanner.protove.net"
+  monitoring_endpoint_parameter_name = "/kdt-travelplanner/dev/monitoring-endpoint"
   common_tags = {
     Environment = local.environment
     Phase       = "ec2-baseline"
     Project     = var.project_name
   }
 }
+
+data "aws_caller_identity" "current" {}
 
 data "terraform_remote_state" "persistent" {
   backend = "s3"
@@ -61,6 +64,23 @@ module "runtime_security" {
   vpc_id       = data.terraform_remote_state.persistent.outputs.vpc_id
 }
 
+module "monitoring_ec2" {
+  source = "../../modules/monitoring_ec2"
+
+  app_subnet_id                      = data.terraform_remote_state.persistent.outputs.app_subnet_ids[0]
+  aws_region                         = var.aws_region
+  environment                        = local.environment
+  monitoring_bucket_name             = "${var.project_name}-${local.environment}-monitoring-config-${data.aws_caller_identity.current.account_id}"
+  monitoring_endpoint_parameter_name = local.monitoring_endpoint_parameter_name
+  monitoring_security_group_id       = module.runtime_security.monitoring_security_group_id
+  project_name                       = var.project_name
+  tags                               = local.common_tags
+
+  depends_on = [
+    aws_route.app_default,
+  ]
+}
+
 module "backend_data" {
   source = "../../modules/backend_data"
 
@@ -81,42 +101,44 @@ module "backend_data" {
 module "backend_service" {
   source = "../../modules/backend_service"
 
-  alb_security_group_id            = module.runtime_security.alb_security_group_id
-  app_subnet_ids                   = data.terraform_remote_state.persistent.outputs.app_subnet_ids
-  asg_desired_capacity             = 2
-  asg_max_size                     = 4
-  asg_min_size                     = 2
-  aws_region                       = var.aws_region
-  backend_application_secret_arn   = data.terraform_remote_state.persistent.outputs.backend_application_secret_arn
-  backend_image_uri                = var.backend_image_uri
-  backend_security_group_id        = module.runtime_security.backend_security_group_id
-  certificate_arn                  = data.terraform_remote_state.persistent.outputs.api_certificate_arn
-  database_address                 = module.backend_data.database_address
-  database_master_secret_arn       = module.backend_data.database_master_secret_arn
-  database_name                    = module.backend_data.database_name
-  database_port                    = module.backend_data.database_port
-  ecr_repository_arn               = data.terraform_remote_state.persistent.outputs.backend_ecr_repository_arn
-  ecr_repository_url               = data.terraform_remote_state.persistent.outputs.backend_ecr_repository_url
-  environment                      = local.environment
-  frontend_origin                  = local.frontend_origin
-  google_oauth_redirect_uri        = "${local.api_origin}/api/v1/auth/oauth2/google/callback"
-  instance_type                    = "t3.small"
-  instance_warmup_seconds          = 180
-  naver_oauth_redirect_uri         = "${local.api_origin}/api/v1/auth/oauth2/naver/callback"
-  profile_image_bucket_name        = data.terraform_remote_state.persistent.outputs.profile_image_bucket_name
-  profile_image_public_base_url    = data.terraform_remote_state.persistent.outputs.profile_image_public_base_url
-  profile_image_runtime_policy_arn = data.terraform_remote_state.persistent.outputs.profile_image_runtime_policy_arn
-  project_name                     = var.project_name
-  public_subnet_ids                = data.terraform_remote_state.persistent.outputs.public_subnet_ids
-  redis_auth_secret_arn            = module.backend_data.redis_auth_secret_arn
-  redis_port                       = module.backend_data.redis_port
-  redis_primary_endpoint           = module.backend_data.redis_primary_endpoint
-  tags                             = local.common_tags
-  target_cpu_utilization           = 60
-  vpc_id                           = data.terraform_remote_state.persistent.outputs.vpc_id
+  alb_security_group_id              = module.runtime_security.alb_security_group_id
+  app_subnet_ids                     = data.terraform_remote_state.persistent.outputs.app_subnet_ids
+  asg_desired_capacity               = 2
+  asg_max_size                       = 4
+  asg_min_size                       = 2
+  aws_region                         = var.aws_region
+  backend_application_secret_arn     = data.terraform_remote_state.persistent.outputs.backend_application_secret_arn
+  backend_image_uri                  = var.backend_image_uri
+  backend_security_group_id          = module.runtime_security.backend_security_group_id
+  certificate_arn                    = data.terraform_remote_state.persistent.outputs.api_certificate_arn
+  database_address                   = module.backend_data.database_address
+  database_master_secret_arn         = module.backend_data.database_master_secret_arn
+  database_name                      = module.backend_data.database_name
+  database_port                      = module.backend_data.database_port
+  ecr_repository_arn                 = data.terraform_remote_state.persistent.outputs.backend_ecr_repository_arn
+  ecr_repository_url                 = data.terraform_remote_state.persistent.outputs.backend_ecr_repository_url
+  environment                        = local.environment
+  frontend_origin                    = local.frontend_origin
+  google_oauth_redirect_uri          = "${local.api_origin}/api/v1/auth/oauth2/google/callback"
+  instance_type                      = "t3.small"
+  instance_warmup_seconds            = 180
+  monitoring_endpoint_parameter_name = local.monitoring_endpoint_parameter_name
+  naver_oauth_redirect_uri           = "${local.api_origin}/api/v1/auth/oauth2/naver/callback"
+  profile_image_bucket_name          = data.terraform_remote_state.persistent.outputs.profile_image_bucket_name
+  profile_image_public_base_url      = data.terraform_remote_state.persistent.outputs.profile_image_public_base_url
+  profile_image_runtime_policy_arn   = data.terraform_remote_state.persistent.outputs.profile_image_runtime_policy_arn
+  project_name                       = var.project_name
+  public_subnet_ids                  = data.terraform_remote_state.persistent.outputs.public_subnet_ids
+  redis_auth_secret_arn              = module.backend_data.redis_auth_secret_arn
+  redis_port                         = module.backend_data.redis_port
+  redis_primary_endpoint             = module.backend_data.redis_primary_endpoint
+  tags                               = local.common_tags
+  target_cpu_utilization             = 60
+  vpc_id                             = data.terraform_remote_state.persistent.outputs.vpc_id
 
   depends_on = [
     aws_route.app_default,
+    module.monitoring_ec2,
     terraform_data.backend_image_contract,
   ]
 }
