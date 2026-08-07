@@ -84,7 +84,14 @@ export function useTripEditor(id: string | undefined, accessToken: string | null
 
   React.useEffect(() => {
     if (!accessToken || selectedCountryId == null) return;
-    fetchCitiesByCountry(accessToken, selectedCountryId).then(setCities).catch(() => {});
+    fetchCitiesByCountry(accessToken, selectedCountryId)
+      .then((list) => {
+        setCities(list);
+        // 도시가 아직 안 골라진 상태(나라를 새로 바꿨거나, 도시 없이 저장된 여행)면
+        // 목록 1순위 도시(display_order 기준 대표 도시)를 기본값으로 잡아준다.
+        setSelectedCityId((prev) => prev ?? list[0]?.cityId ?? null);
+      })
+      .catch(() => {});
   }, [accessToken, selectedCountryId]);
 
   const refreshMembers = React.useCallback(() => {
