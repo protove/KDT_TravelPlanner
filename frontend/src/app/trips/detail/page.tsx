@@ -9,7 +9,6 @@ import { Textarea } from "@/components/atoms/Textarea";
 import { Icon } from "@/components/atoms/Icon";
 import { Avatar, AvatarImage, AvatarFallback } from "@/components/atoms/Avatar";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/atoms/Select";
-import { AppHeader } from "@/components/organisms/AppHeader";
 import { CalendarPopover } from "@/components/organisms/CalendarPopover";
 import { MapPanel } from "@/components/organisms/MapPanel";
 import { ScheduleBoard } from "@/components/organisms/ScheduleBoard";
@@ -19,6 +18,7 @@ import { ParticipantManageDialog, type Participant } from "@/components/organism
 import { DateRangeBadge } from "@/components/molecules/DateRangeBadge";
 import { ConfirmDialog } from "@/components/molecules/ConfirmDialog";
 import { DetailLayout } from "@/components/templates/DetailLayout";
+import { TripDetailPageSkeleton } from "@/components/templates/TripDetailPageSkeleton";
 import { useAuthStore } from "@/lib/stores/useAuthStore";
 import { toPermission, type TravelRole } from "@/lib/api/permission";
 
@@ -148,7 +148,8 @@ React.useEffect(() => {
     if (!id || !UUID_PATTERN.test(id)) router.replace("/403");
 }, [id, router]);
 
-  if (isInitializing || !isLoggedIn || !user || !detail) return null;
+  if (isInitializing || !isLoggedIn || !user) return null;
+  if (!detail) return <TripDetailPageSkeleton />;
 
   // 일정(할일) 관련 조작도 상단 "정보 수정"(연필) 모드일 때만 가능하다 — 페이지 전체가 하나의 조회/수정 스위치를 공유한다.
   const canEditSchedule = canEditInfo && isEditingInfo;
@@ -189,7 +190,6 @@ React.useEffect(() => {
   return (
     <>
       <DetailLayout
-      header={<AppHeader loggedIn userInitial={user.initial} avatarColor={user.avatarColor} onLogoClick={() => router.push("/trips")} onProfileClick={() => router.push("/mypage")} onNotificationClick={() => router.push("/notifications")} />}
       detailHeader={
         <div className="flex flex-col gap-5">
           <button
