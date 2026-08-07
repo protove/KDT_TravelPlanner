@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import "./globals.css";
 import { AuthProvider } from "@/components/providers/AuthProvider";
+import { HeaderLayout } from "@/components/providers/HeaderLayout";
 
 export const metadata: Metadata = {
   title: "TripPlanner",
@@ -15,7 +16,9 @@ export default function RootLayout({
   return (
     <html lang="ko" className="h-full antialiased">
       <body className="flex min-h-full flex-col">
-        <AuthProvider>{children}</AuthProvider>
+        <AuthProvider>
+          <HeaderLayout>{children}</HeaderLayout>
+        </AuthProvider>
       </body>
     </html>
   );
