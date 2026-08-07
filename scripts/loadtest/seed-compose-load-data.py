@@ -79,7 +79,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--users", type=int, default=20)
     parser.add_argument("--tokens-only", action="store_true")
     parser.add_argument("--env-file", type=Path, default=DEFAULT_ENV_FILE)
-    parser.add_argument("--compose-file", type=Path, default=DEFAULT_COMPOSE_FILE)
+    parser.add_argument("--compose-file", dest="compose_files", type=Path, action="append")
     parser.add_argument("--project-name", default=os.environ.get("COMPOSE_PROJECT_NAME"))
     parser.add_argument("--base-url", default=os.environ.get("BASE_URL", "http://127.0.0.1:8080"))
     parser.add_argument("--data-file", type=Path, default=DEFAULT_DATA_FILE)
@@ -95,7 +95,7 @@ class ComposeSeed:
         if not project_name:
             raise SeedError("--project-name or COMPOSE_PROJECT_NAME is required")
         self.project_name = project_name
-        self.compose_file = args.compose_file.resolve()
+        self.compose_files = [path.resolve() for path in args.compose_files]
         self.env_file = args.env_file.resolve()
         self.base_url = args.base_url.rstrip("/")
         self.runtime_env = {**os.environ, **env_values}
@@ -109,8 +109,7 @@ class ComposeSeed:
             str(self.env_file),
             "--project-name",
             self.project_name,
-            "--file",
-            str(self.compose_file),
+            *[argument for path in self.compose_files for argument in ("--file", str(path))],
             *parts,
         ]
 
@@ -290,10 +289,12 @@ def main() -> int:
     if args.users < 1 or args.users > 200:
         raise SeedError("--users must be between 1 and 200")
     args.env_file = args.env_file.resolve()
-    args.compose_file = args.compose_file.resolve()
+    if not args.compose_files:
+        args.compose_files = [DEFAULT_COMPOSE_FILE]
+    args.compose_files = [path.resolve() for path in args.compose_files]
     args.data_file = args.data_file.resolve()
-    if not args.env_file.exists() or not args.compose_file.exists():
-        raise SeedError("env-file and compose-file must exist")
+    if not args.env_file.exists() or any(not path.exists() for path in args.compose_files):
+        raise SeedError("env-file and every compose-file must exist")
     env_values = parse_env_file(args.env_file)
     runtime = ComposeSeed(args, env_values)
     ttl_ms = parse_duration_ms(env_values.get("REFRESH_TOKEN_TTL"))

@@ -10,7 +10,7 @@ import re
 import statistics
 import sys
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 
@@ -28,6 +28,10 @@ def timestamp(value: str) -> float:
         value = f"{match.group(1)}{match.group(2)[:6].ljust(6, '0')}{match.group(3)}"
     normalized = value.replace("Z", "+00:00")
     return datetime.fromisoformat(normalized).timestamp()
+
+
+def iso_timestamp(value: float) -> str:
+    return datetime.fromtimestamp(value, tz=timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 
 def load_points(path: Path, bucket_seconds: int) -> tuple[dict, dict, dict, float | None]:
@@ -113,6 +117,18 @@ def read_events(path: Path) -> dict[str, float]:
     return events
 
 
+def append_event_if_missing(path: Path, event: str, event_timestamp: float, detail: str) -> None:
+    if event in read_events(path):
+        return
+    with path.open("a", encoding="utf-8") as output:
+        output.write(json.dumps({
+            "ts": iso_timestamp(event_timestamp),
+            "event": event,
+            "detail": detail,
+            "actor": "evaluator",
+        }, ensure_ascii=False) + "\n")
+
+
 def evaluate(args: argparse.Namespace) -> dict:
     points, unexpected_failures, contract_failures, first_timestamp = load_points(
         args.run_dir / "raw.json", args.bucket,
@@ -121,6 +137,12 @@ def evaluate(args: argparse.Namespace) -> dict:
         raise ValueError("raw.json contains no k6 Point data")
     events = read_events(args.run_dir / "operations.jsonl")
     warmup_end = first_timestamp + args.warmup_sec
+    append_event_if_missing(
+        args.run_dir / "operations.jsonl",
+        "T0",
+        warmup_end,
+        f"warm-up ended; normal baseline window starts ({args.warmup_sec}s)",
+    )
     intervention = events.get(args.recovery_event)
     base_buckets = [
         bucket for bucket in points["durations"]
@@ -157,6 +179,13 @@ def evaluate(args: argparse.Namespace) -> dict:
                 break
 
     recovery_seconds = round(t6 - intervention, 1) if t6 is not None and intervention is not None else None
+    if t6 is not None:
+        append_event_if_missing(
+            args.run_dir / "operations.jsonl",
+            "T6",
+            t6,
+            f"SLO window satisfied for {args.window_sec}s",
+        )
     capacity_values = [
         points["successes"].get(bucket, 0) / args.bucket / base_success_rps
         for bucket in points["durations"]
@@ -165,7 +194,9 @@ def evaluate(args: argparse.Namespace) -> dict:
     result = {
         "baseSuccessfulRpsMedian": round(base_success_rps, 2),
         "capacityFloorRatio": round(min(capacity_values), 3) if capacity_values else None,
+        "T0": warmup_end,
         "T1": events.get("T1"),
+        "T3": events.get("T3"),
         "T4": events.get("T4"),
         "T5": events.get("T5"),
         "T6": t6,

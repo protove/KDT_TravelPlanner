@@ -1,20 +1,21 @@
 export function makeSummaryHandler(scenarioName) {
   return function handleSummary(data) {
     const metrics = data.metrics || {};
+    const metricValues = (name, fallback = {}) => metrics[name]?.values || fallback;
     const summary = {
       scenario: scenarioName,
       runId: __ENV.RUN_ID || null,
       startedAtUtc: __ENV.RUN_STARTED_AT || null,
       sloVersion: 'v0.1-draft',
       metrics: {
-        http_reqs: metrics.http_reqs && metrics.http_reqs.values,
-        http_req_duration: metrics.http_req_duration && metrics.http_req_duration.values,
-        unexpected_errors: metrics.unexpected_errors && metrics.unexpected_errors.values,
-        contract_fail: metrics.contract_fail && metrics.contract_fail.values,
-        successful_requests: metrics.successful_requests && metrics.successful_requests.values,
-        expected_4xx: metrics.expected_4xx && metrics.expected_4xx.values,
-        dropped_iterations: metrics.dropped_iterations && metrics.dropped_iterations.values,
-        checks: metrics.checks && metrics.checks.values,
+        http_reqs: metricValues('http_reqs'),
+        http_req_duration: metricValues('http_req_duration'),
+        unexpected_errors: metricValues('unexpected_errors'),
+        contract_fail: metricValues('contract_fail'),
+        successful_requests: metricValues('successful_requests'),
+        expected_4xx: metricValues('expected_4xx', { count: 0, rate: 0 }),
+        dropped_iterations: metricValues('dropped_iterations', { count: 0, rate: 0 }),
+        checks: metricValues('checks'),
       },
       thresholds: Object.fromEntries(Object.entries(metrics)
         .filter(([, metric]) => metric.thresholds)

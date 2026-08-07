@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SCENARIO="${1:?usage: run-k6-scenario.sh <smoke|baseline|recovery-steady> <run-dir>}"
+SCENARIO="${1:?usage: run-k6-scenario.sh <smoke|baseline|recovery-steady|spike> <run-dir>}"
 RUN_DIR="${2:?usage: run-k6-scenario.sh <scenario> <run-dir>}"
 REPOSITORY_ROOT="${REPOSITORY_ROOT:?REPOSITORY_ROOT is required}"
 K6_DIR="$REPOSITORY_ROOT/load-tests/k6"
@@ -12,7 +12,7 @@ RATE="${RATE:-8}"
 DATA_FILE="$K6_DIR/data/data.json"
 
 case "$SCENARIO" in
-  smoke|baseline|recovery-steady) ;;
+  smoke|baseline|recovery-steady|spike) ;;
   *) echo "unsupported k6 scenario: $SCENARIO" >&2; exit 2 ;;
 esac
 if [[ "$K6_IMAGE" != *@sha256:* ]]; then
@@ -35,6 +35,7 @@ PY
 git_sha="$(git -C "$REPOSITORY_ROOT" rev-parse HEAD)"
 python3 - "$RUN_DIR/metadata.json" "$RUN_ID" "$SCENARIO" "$started_at" "$BASE_URL" "$git_sha" "$K6_IMAGE" "$RATE" "$seed_version" "${COMPOSE_PROJECT_NAME:-unknown}" <<'PY'
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -48,6 +49,8 @@ Path(output).write_text(json.dumps({
     "commitSha": commit_sha,
     "k6Image": image,
     "rate": int(rate),
+    "spikePeakRate": int(os.environ.get("SPIKE_PEAK_RATE") or 0),
+    "spikeHold": os.environ.get("SPIKE_HOLD") or None,
     "seedVersion": seed_version,
     "composeProject": project,
     "sloVersion": "v0.1-draft",
@@ -57,7 +60,9 @@ PY
 
 python3 "$REPOSITORY_ROOT/scripts/loadtest/record-rehearsal-event.py" "$RUN_DIR" RUN_START "k6 scenario $SCENARIO started"
 set +e
-docker run --rm -i \
+K6_CONTAINER_NAME="loadtest-k6-${RUN_ID//[^A-Za-z0-9_.-]/-}"
+: > "$RUN_DIR/runner-stats.jsonl"
+docker run --rm -i --name "$K6_CONTAINER_NAME" \
   -v "$K6_DIR:/scripts:ro" \
   -v "$RUN_DIR:/out" \
   -e BASE_URL="$BASE_URL" \
@@ -71,13 +76,26 @@ docker run --rm -i \
   -e WARMUP="${WARMUP:-}" \
   -e PREALLOCATED_VUS="${PREALLOCATED_VUS:-20}" \
   -e MAX_VUS="${MAX_VUS:-20}" \
+  -e SPIKE_PEAK_RATE="${SPIKE_PEAK_RATE:-}" \
+  -e SPIKE_HOLD="${SPIKE_HOLD:-}" \
   --add-host=host.docker.internal:host-gateway \
   "$K6_IMAGE" run \
   --out json=/out/raw.json \
   --summary-export=/out/k6-native-summary.json \
-  "/scripts/scenarios/$SCENARIO.js" | tee "$RUN_DIR/stdout.log"
-k6_status=${PIPESTATUS[0]}
+  "/scripts/scenarios/$SCENARIO.js" >"$RUN_DIR/stdout.log" 2>&1 &
+k6_pid=$!
+while kill -0 "$k6_pid" 2>/dev/null; do
+  stats="$(docker stats --no-stream --format '{{json .}}' "$K6_CONTAINER_NAME" 2>/dev/null || true)"
+  if [[ -n "$stats" ]]; then
+    now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    printf '{"ts":"%s","docker":%s}\n' "$now" "$stats" >> "$RUN_DIR/runner-stats.jsonl"
+  fi
+  sleep 5
+done
+wait "$k6_pid"
+k6_status=$?
 set -e
+cat "$RUN_DIR/stdout.log"
 
 python3 - "$RUN_DIR/run-status.json" "$k6_status" <<'PY'
 import json

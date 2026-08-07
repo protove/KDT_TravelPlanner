@@ -36,7 +36,7 @@ class EvaluateRecoveryTest(unittest.TestCase):
             (run_dir / "raw.json").write_text("\n".join(json.dumps(point) for point in points) + "\n", encoding="utf-8")
             event_time = (start + timedelta(seconds=40)).isoformat().replace("+00:00", "Z")
             (run_dir / "operations.jsonl").write_text(
-                json.dumps({"ts": event_time, "event": "T1", "detail": "test", "actor": "test"}) + "\n",
+                json.dumps({"ts": event_time, "event": "T4", "detail": "test", "actor": "test"}) + "\n",
                 encoding="utf-8",
             )
 
@@ -46,14 +46,17 @@ class EvaluateRecoveryTest(unittest.TestCase):
                 "window_sec": 120,
                 "budget_sec": 600,
                 "bucket": 10,
-                "recovery_event": "T1",
+                "recovery_event": "T4",
             })()
             result = MODULE.evaluate(args)
 
             self.assertTrue(result["withinBudget"])
-            self.assertEqual(result["recoveryEvent"], "T1")
+            self.assertEqual(result["recoveryEvent"], "T4")
             self.assertEqual(result["recoverySeconds"], 120.0)
             self.assertTrue((run_dir / "verdict.json").exists())
+            events = [json.loads(line)["event"] for line in (run_dir / "operations.jsonl").read_text().splitlines()]
+            self.assertIn("T0", events)
+            self.assertIn("T6", events)
 
     def test_empty_or_missing_point_stream_is_rejected(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -65,7 +68,7 @@ class EvaluateRecoveryTest(unittest.TestCase):
                 "window_sec": 120,
                 "budget_sec": 600,
                 "bucket": 10,
-                "recovery_event": "T1",
+                "recovery_event": "T4",
             })()
 
             with self.assertRaises(ValueError):

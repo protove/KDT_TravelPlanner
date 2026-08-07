@@ -6,21 +6,27 @@ MODE="${2:-restart}"
 REPOSITORY_ROOT="${REPOSITORY_ROOT:?REPOSITORY_ROOT is required}"
 COMPOSE_ENV_FILE="${COMPOSE_ENV_FILE:?COMPOSE_ENV_FILE is required}"
 COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:?COMPOSE_PROJECT_NAME is required}"
-COMPOSE_FILE="${COMPOSE_FILE:-$REPOSITORY_ROOT/compose.yml}"
 EVENT_RECORDER="$REPOSITORY_ROOT/scripts/loadtest/record-rehearsal-event.py"
 
-compose=(docker compose --env-file "$COMPOSE_ENV_FILE" --project-name "$COMPOSE_PROJECT_NAME" --file "$COMPOSE_FILE")
+compose=(docker compose --env-file "$COMPOSE_ENV_FILE" --project-name "$COMPOSE_PROJECT_NAME")
+compose_files_string="${COMPOSE_FILE_LIST:-${COMPOSE_FILES:-${COMPOSE_FILE:-$REPOSITORY_ROOT/compose.yml}}}"
+IFS=: read -r -a compose_files <<< "$compose_files_string"
+for compose_file in "${compose_files[@]}"; do
+  compose+=(--file "$compose_file")
+done
 record_event() {
   python3 "$EVENT_RECORDER" "$RUN_DIR" "$@"
 }
 
 record_event T1 "backend fault injection requested: $MODE"
 if [[ "$MODE" == "stop-start" ]]; then
-  record_event T2 "backend stop command issued"
   "${compose[@]}" stop backend
+  record_event T2 "backend stopped; first recovery target excluded"
+  record_event T4 "backend start command issued"
   "${compose[@]}" start backend
 elif [[ "$MODE" == "restart" ]]; then
   record_event T2 "backend restart command issued"
+  record_event T4 "backend restart command issued; T1/T4 are intentionally adjacent in restart mode"
   "${compose[@]}" restart backend
 else
   echo "unsupported restart mode: $MODE" >&2
