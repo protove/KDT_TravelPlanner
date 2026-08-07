@@ -56,12 +56,14 @@ module "container_registry" {
 module "github_ecr_publisher" {
   source = "../../modules/github_ecr_publisher"
 
-  ecr_repository_arn  = module.container_registry.repository_arn
-  environment         = local.environment
-  github_organization = var.github_organization
-  github_repository   = var.github_repository
-  project_name        = var.project_name
-  tags                = local.common_tags
+  ecr_repository_arn   = module.container_registry.repository_arn
+  environment          = local.environment
+  github_organization  = var.github_organization
+  github_owner_id      = var.github_owner_id
+  github_repository    = var.github_repository
+  github_repository_id = var.github_repository_id
+  project_name         = var.project_name
+  tags                 = local.common_tags
 }
 
 module "github_frontend_deployer" {
@@ -72,7 +74,9 @@ module "github_frontend_deployer" {
   frontend_bucket_arn         = module.static_frontend.bucket_arn
   github_oidc_provider_arn    = module.github_ecr_publisher.github_oidc_provider_arn
   github_organization         = var.github_organization
+  github_owner_id             = var.github_owner_id
   github_repository           = var.github_repository
+  github_repository_id        = var.github_repository_id
   project_name                = var.project_name
   tags                        = local.common_tags
 }

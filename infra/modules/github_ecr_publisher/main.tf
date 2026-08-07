@@ -1,7 +1,7 @@
 locals {
   github_oidc_audience = "sts.amazonaws.com"
   github_oidc_issuer   = "https://token.actions.githubusercontent.com"
-  github_oidc_subject  = "repo:${var.github_organization}/${var.github_repository}:environment:${var.environment}"
+  github_oidc_subject  = "repo:${var.github_organization}@${var.github_owner_id}/${var.github_repository}@${var.github_repository_id}:environment:${var.environment}"
   role_name            = "${var.project_name}-${var.environment}-github-ecr-publisher"
 
   github_assume_role_policy = {
