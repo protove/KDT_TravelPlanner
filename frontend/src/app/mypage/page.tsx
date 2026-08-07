@@ -3,7 +3,6 @@
 import * as React from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/atoms/Button";
-import { AppHeader } from "@/components/organisms/AppHeader";
 import { ProfileSection } from "@/components/organisms/ProfileSection";
 import { NotificationList } from "@/components/organisms/NotificationList";
 import { ConfirmDialog } from "@/components/molecules/ConfirmDialog";
@@ -320,7 +319,6 @@ export default function MypagePage() {
 
   return (
     <MyPageLayout
-      header={<AppHeader loggedIn userInitial={user.initial} avatarColor={user.avatarColor} avatarSrc={user.profileImageUrl ?? undefined} onLogoClick={() => router.push("/trips")} onProfileClick={() => router.push("/mypage")} onNotificationClick={() => router.push("/notifications")} />}
       tabs={TABS}
       activeTab={tab}
       onTabChange={(key) => setTab(key as MypageTab)}

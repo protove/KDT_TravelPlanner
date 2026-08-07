@@ -4,7 +4,6 @@ import * as React from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/atoms/Button";
 import { Tabs, TabsList, TabsTrigger } from "@/components/atoms/Tabs";
-import { AppHeader } from "@/components/organisms/AppHeader";
 import { TripList } from "@/components/organisms/TripList";
 import { NewTripModal } from "@/components/organisms/NewTripModal";
 import { SearchBar } from "@/components/molecules/SearchBar";
@@ -84,7 +83,6 @@ export default function TripsPage() {
   const router = useRouter();
   const isLoggedIn = useAuthStore((s) => s.isLoggedIn);
   const isInitializing = useAuthStore((s) => s.isInitializing);
-  const user = useAuthStore((s) => s.user);
   const accessToken = useAuthStore((s) => s.accessToken);
 
   const [tab, setTab] = React.useState<ListTab>("mine");
@@ -195,16 +193,6 @@ export default function TripsPage() {
 
   return (
     <ListLayout
-      header={
-        <AppHeader
-          loggedIn
-          userInitial={user?.initial ?? "여"}
-          avatarColor={user?.avatarColor}
-          onLogoClick={() => router.push("/trips")}
-          onProfileClick={() => router.push("/mypage")}
-          onNotificationClick={() => router.push("/notifications")}
-        />
-      }
       title={<h1 className="text-2xl font-bold text-foreground">여행일정</h1>}
       actions={<Button onClick={() => setShowNewTripModal(true)}>+ 새 여행 만들기</Button>}
     >

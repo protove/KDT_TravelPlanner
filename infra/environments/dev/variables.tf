@@ -102,10 +102,32 @@ variable "github_organization" {
   default     = "protove"
 }
 
+variable "github_owner_id" {
+  type        = number
+  description = "Immutable numeric ID of the GitHub account that owns the trusted repository."
+  default     = 114971169
+
+  validation {
+    condition     = var.github_owner_id > 0 && floor(var.github_owner_id) == var.github_owner_id
+    error_message = "github_owner_id must be a positive integer."
+  }
+}
+
 variable "github_repository" {
   type        = string
   description = "GitHub repository whose dev Environment may publish the backend image."
   default     = "KDT_TravelPlanner"
+}
+
+variable "github_repository_id" {
+  type        = number
+  description = "Immutable numeric ID of the GitHub repository trusted by the deployment roles."
+  default     = 1298812222
+
+  validation {
+    condition     = var.github_repository_id > 0 && floor(var.github_repository_id) == var.github_repository_id
+    error_message = "github_repository_id must be a positive integer."
+  }
 }
 
 variable "data_subnet_cidrs" {
