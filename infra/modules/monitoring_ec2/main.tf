@@ -54,8 +54,8 @@ resource "aws_s3_object" "loki_config" {
 resource "aws_s3_object" "grafana_datasources" {
   bucket = aws_s3_bucket.monitoring_config.id
   key    = "grafana/provisioning/datasources/datasources.yml"
-  source = "${path.module}/../../../monitoring/ec2/datasources/datasources.yml"
-  etag   = filemd5("${path.module}/../../../monitoring/ec2/datasources/datasources.yml")
+  source = "${path.module}/../../../monitoring/ec2/datasources.yml"
+  etag   = filemd5("${path.module}/../../../monitoring/ec2/datasources.yml")
 }
 
 resource "aws_s3_object" "grafana_dashboards_provisioning" {
