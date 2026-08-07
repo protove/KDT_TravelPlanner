@@ -17,6 +17,8 @@ data "aws_iam_policy_document" "instance_assume_role" {
   }
 }
 
+data "aws_caller_identity" "current" {}
+
 resource "aws_iam_role" "backend" {
   name               = "${local.name}-backend-runtime"
   assume_role_policy = data.aws_iam_policy_document.instance_assume_role.json
@@ -47,6 +49,14 @@ data "aws_iam_policy_document" "backend_runtime" {
       var.backend_application_secret_arn,
       var.database_master_secret_arn,
       var.redis_auth_secret_arn,
+    ]
+  }
+
+  statement {
+    sid     = "MonitoringEndpointParameter"
+    actions = ["ssm:GetParameter"]
+    resources = [
+      "arn:aws:ssm:${var.aws_region}:${data.aws_caller_identity.current.account_id}:parameter${var.monitoring_endpoint_parameter_name}"
     ]
   }
 }
@@ -173,22 +183,23 @@ resource "aws_launch_template" "backend" {
   }
 
   user_data = base64encode(templatefile("${path.module}/templates/backend-user-data.sh.tftpl", {
-    application_secret_arn        = var.backend_application_secret_arn
-    aws_region                    = var.aws_region
-    backend_image_uri             = var.backend_image_uri
-    database_address              = var.database_address
-    database_master_secret_arn    = var.database_master_secret_arn
-    database_name                 = var.database_name
-    database_port                 = var.database_port
-    ecr_registry_url              = split("/", var.ecr_repository_url)[0]
-    frontend_origin               = var.frontend_origin
-    google_oauth_redirect_uri     = var.google_oauth_redirect_uri
-    naver_oauth_redirect_uri      = var.naver_oauth_redirect_uri
-    profile_image_bucket_name     = var.profile_image_bucket_name
-    profile_image_public_base_url = var.profile_image_public_base_url
-    redis_auth_secret_arn         = var.redis_auth_secret_arn
-    redis_port                    = var.redis_port
-    redis_primary_endpoint        = var.redis_primary_endpoint
+    application_secret_arn             = var.backend_application_secret_arn
+    aws_region                         = var.aws_region
+    backend_image_uri                  = var.backend_image_uri
+    database_address                   = var.database_address
+    database_master_secret_arn         = var.database_master_secret_arn
+    database_name                      = var.database_name
+    database_port                      = var.database_port
+    ecr_registry_url                   = split("/", var.ecr_repository_url)[0]
+    frontend_origin                    = var.frontend_origin
+    google_oauth_redirect_uri          = var.google_oauth_redirect_uri
+    monitoring_endpoint_parameter_name = var.monitoring_endpoint_parameter_name
+    naver_oauth_redirect_uri           = var.naver_oauth_redirect_uri
+    profile_image_bucket_name          = var.profile_image_bucket_name
+    profile_image_public_base_url      = var.profile_image_public_base_url
+    redis_auth_secret_arn              = var.redis_auth_secret_arn
+    redis_port                         = var.redis_port
+    redis_primary_endpoint             = var.redis_primary_endpoint
   }))
 
   tag_specifications {

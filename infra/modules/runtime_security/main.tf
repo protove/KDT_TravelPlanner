@@ -150,3 +150,74 @@ resource "aws_vpc_security_group_ingress_rule" "cache_backend" {
   to_port                      = 6379
   description                  = "Redis from backend instances only"
 }
+
+resource "aws_security_group" "monitoring" {
+  name_prefix            = "${local.name}-monitoring-"
+  description            = "Private Prometheus, Loki and Grafana for the monitoring EC2"
+  vpc_id                 = var.vpc_id
+  revoke_rules_on_delete = true
+  tags                   = merge(var.tags, { Name = "${local.name}-monitoring-sg" })
+}
+
+resource "aws_vpc_security_group_egress_rule" "backend_monitoring_loki" {
+  security_group_id            = aws_security_group.backend.id
+  referenced_security_group_id = aws_security_group.monitoring.id
+  from_port                    = 3100
+  ip_protocol                  = "tcp"
+  to_port                      = 3100
+  description                  = "Alloy pushes logs to the central Loki"
+}
+
+resource "aws_vpc_security_group_ingress_rule" "backend_monitoring_scrape" {
+  security_group_id            = aws_security_group.backend.id
+  referenced_security_group_id = aws_security_group.monitoring.id
+  from_port                    = 9091
+  ip_protocol                  = "tcp"
+  to_port                      = 9091
+  description                  = "Prometheus scrapes backend actuator metrics"
+}
+
+resource "aws_vpc_security_group_ingress_rule" "monitoring_loki" {
+  security_group_id            = aws_security_group.monitoring.id
+  referenced_security_group_id = aws_security_group.backend.id
+  from_port                    = 3100
+  ip_protocol                  = "tcp"
+  to_port                      = 3100
+  description                  = "Receive log pushes from backend Alloy instances only"
+}
+
+resource "aws_vpc_security_group_egress_rule" "monitoring_scrape" {
+  security_group_id            = aws_security_group.monitoring.id
+  referenced_security_group_id = aws_security_group.backend.id
+  from_port                    = 9091
+  ip_protocol                  = "tcp"
+  to_port                      = 9091
+  description                  = "Scrape backend actuator metrics"
+}
+
+resource "aws_vpc_security_group_egress_rule" "monitoring_https" {
+  security_group_id = aws_security_group.monitoring.id
+  cidr_ipv4         = "0.0.0.0/0"
+  from_port         = 443
+  ip_protocol       = "tcp"
+  to_port           = 443
+  description       = "CloudWatch API, SSM and other AWS endpoints"
+}
+
+resource "aws_vpc_security_group_egress_rule" "monitoring_dns_udp" {
+  security_group_id = aws_security_group.monitoring.id
+  cidr_ipv4         = "${cidrhost(var.vpc_cidr, 2)}/32"
+  from_port         = 53
+  ip_protocol       = "udp"
+  to_port           = 53
+  description       = "DNS resolution"
+}
+
+resource "aws_vpc_security_group_egress_rule" "monitoring_dns_tcp" {
+  security_group_id = aws_security_group.monitoring.id
+  cidr_ipv4         = "${cidrhost(var.vpc_cidr, 2)}/32"
+  from_port         = 53
+  ip_protocol       = "tcp"
+  to_port           = 53
+  description       = "DNS fallback"
+}

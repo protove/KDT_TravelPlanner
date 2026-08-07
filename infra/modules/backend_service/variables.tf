@@ -124,6 +124,16 @@ variable "instance_warmup_seconds" {
   default     = 180
 }
 
+variable "monitoring_endpoint_parameter_name" {
+  type        = string
+  description = "SSM Parameter Store name holding the Monitoring EC2 private address for Alloy log shipping."
+
+  validation {
+    condition     = can(regex("^/[a-zA-Z0-9_.\\-/]+$", var.monitoring_endpoint_parameter_name))
+    error_message = "monitoring_endpoint_parameter_name must be an absolute SSM parameter path starting with /."
+  }
+}
+
 variable "naver_oauth_redirect_uri" {
   type        = string
   description = "Naver OAuth callback URI on the public API domain."
