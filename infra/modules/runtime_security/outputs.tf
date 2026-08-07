@@ -17,3 +17,8 @@ output "database_security_group_id" {
   description = "Private PostgreSQL security group ID."
   value       = aws_security_group.database.id
 }
+
+output "monitoring_security_group_id" {
+  description = "Monitoring EC2 (Prometheus/Loki/Grafana) security group ID."
+  value       = aws_security_group.monitoring.id
+}
