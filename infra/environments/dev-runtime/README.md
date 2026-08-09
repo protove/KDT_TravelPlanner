@@ -51,6 +51,7 @@ plan 검토 시 다음을 모두 확인한다.
 - backend EC2 network interface에 public IP가 없다.
 - `backend_image_uri`가 persistent `dev` ECR의 `repository@sha256:<digest>`다.
 - ASG는 min/desired/max `2/2/4`, Instance Refresh는 `100/200`, warm-up은 180초다.
+- Backend image digest가 바뀌면 Launch Template의 구체적인 새 버전과 ASG 변경이 plan에 나타나고, apply가 Rolling Instance Refresh를 시작한다. `$Latest` 문자열을 직접 사용하지 않는다.
 - ALB traffic은 8080, health check는 `9091/actuator/health/readiness`다.
 - RDS/Redis는 data private subnet과 전용 security group만 사용한다.
 - 유료 리소스 수량이 NAT 1, ALB 1, EC2 2~4, RDS 1, Redis 1과 일치한다.
@@ -70,4 +71,4 @@ apply 후 `alb_dns_name`을 `api.kdt-travelplanner.protove.net`의 Cloudflare DN
 - JSON 애플리케이션 로그: `/var/log/travel-planner`
 - ALB readiness: `9091/actuator/health/readiness`
 
-실패한 Instance Refresh는 자동 rollback하지 않는다. 현재 ASG가 Launch Template `$Latest`를 사용하므로 AWS `rollback-instance-refresh` 명령은 지원되지 않는다. 실험 기록을 남긴 뒤 이전 정상 `backend_image_uri` digest를 Terraform에 다시 입력하고 새 Launch Template version과 새 refresh를 명시적으로 실행한다.
+실패한 Instance Refresh는 자동 rollback하지 않는다. 현재 기본값은 이전 정상 `backend_image_uri` digest를 Terraform에 다시 입력하고 새 Launch Template version과 새 refresh를 명시적으로 실행하는 `MANUAL_BASELINE`이다. AWS 네이티브 rollback과 alarm 기반 자동화는 Desired Configuration과 동일한 오류 신호를 별도 검증하는 심화 범위로 둔다.
