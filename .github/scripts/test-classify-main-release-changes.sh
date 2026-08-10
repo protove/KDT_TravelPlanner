@@ -97,9 +97,17 @@ assert_flags "frontend-deploy-workflow" "$(new_path_case "frontend-deploy-workfl
   'run_frontend_verify=true' 'run_backend_verify=false' 'run_compose_verify=false' \
   'deploy_frontend=true' 'publish_backend=false' 'classification_error=false'
 
+assert_flags "backend-test-workflow" "$(new_path_case "backend-test-workflow" .github/workflows/backend-test.yml)" \
+  'run_frontend_verify=false' 'run_backend_verify=true' 'run_compose_verify=false' \
+  'deploy_frontend=false' 'publish_backend=false' 'classification_error=false'
+
 assert_flags "backend-deploy-workflow" "$(new_path_case "backend-deploy-workflow" .github/workflows/backend-deploy-dev.yml)" \
   'run_frontend_verify=false' 'run_backend_verify=true' 'run_compose_verify=true' \
   'deploy_frontend=false' 'publish_backend=true' 'classification_error=false'
+
+assert_flags "document" "$(new_path_case "document" reference/strategy/ci-cd/example.md)" \
+  'run_frontend_verify=false' 'run_backend_verify=false' 'run_compose_verify=false' \
+  'deploy_frontend=false' 'publish_backend=false' 'classification_error=false'
 
 assert_flags "ignored-document" "$(new_path_case "ignored-document" .gitignore)" \
   'run_frontend_verify=false' 'run_backend_verify=false' 'run_compose_verify=false' \

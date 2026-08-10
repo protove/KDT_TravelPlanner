@@ -45,6 +45,7 @@ while IFS= read -r changed_path; do
       ;;
     backend/*)
       mark_backend_verify
+      mark_compose_verify
       publish_backend=true
       ;;
     compose.yml|compose.dev.yml|compose.test.yml|.env.dev.example|.env.prod.example)
@@ -82,11 +83,6 @@ while IFS= read -r changed_path; do
       ;;
   esac
 done < <(git diff --name-only --no-renames --diff-filter=ACMRD "${base_sha}" "${head_sha}")
-
-# Backend source or publish-workflow changes require the runtime integration check.
-if [[ "${run_backend_verify}" == "true" ]]; then
-  run_compose_verify=true
-fi
 
 printf 'run_frontend_verify=%s\n' "${run_frontend_verify}"
 printf 'run_backend_verify=%s\n' "${run_backend_verify}"
