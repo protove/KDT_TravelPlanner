@@ -24,6 +24,32 @@ variable "backend_image_uri" {
   }
 }
 
+variable "monitoring_image_references" {
+  type = object({
+    prometheus = string
+    loki       = string
+    grafana    = string
+    alloy      = string
+  })
+  description = "Official DockerHub monitoring images pinned to reviewed semantic versions."
+  default = {
+    prometheus = "prom/prometheus:v3.13.1"
+    loki       = "grafana/loki:3.7.2"
+    grafana    = "grafana/grafana:13.1.0"
+    alloy      = "grafana/alloy:v1.16.1"
+  }
+
+  validation {
+    condition = alltrue([
+      can(regex("^prom/prometheus:v[0-9]+\\.[0-9]+\\.[0-9]+$", var.monitoring_image_references.prometheus)),
+      can(regex("^grafana/loki:[0-9]+\\.[0-9]+\\.[0-9]+$", var.monitoring_image_references.loki)),
+      can(regex("^grafana/grafana:[0-9]+\\.[0-9]+\\.[0-9]+$", var.monitoring_image_references.grafana)),
+      can(regex("^grafana/alloy:v[0-9]+\\.[0-9]+\\.[0-9]+$", var.monitoring_image_references.alloy)),
+    ])
+    error_message = "monitoring_image_references must use the official DockerHub repositories with exact semantic version tags; latest and tagless references are not allowed."
+  }
+}
+
 variable "persistent_state_bucket" {
   type        = string
   description = "S3 bucket containing the persistent dev Terraform State."

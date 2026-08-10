@@ -56,6 +56,16 @@ variable "backend_security_group_id" {
   description = "Security group attached to private backend instances."
 }
 
+variable "alloy_image_reference" {
+  type        = string
+  description = "Official DockerHub Grafana Alloy image pinned to an exact semantic version."
+
+  validation {
+    condition     = can(regex("^grafana/alloy:v[0-9]+\\.[0-9]+\\.[0-9]+$", var.alloy_image_reference))
+    error_message = "alloy_image_reference must be grafana/alloy with an exact vX.Y.Z tag."
+  }
+}
+
 variable "certificate_arn" {
   type        = string
   description = "Issued regional ACM certificate ARN for the API domain."

@@ -24,6 +24,36 @@ variable "monitoring_bucket_name" {
   description = "S3 bucket name for uploaded Prometheus, Loki and Grafana config files."
 }
 
+variable "prometheus_image_reference" {
+  type        = string
+  description = "Official DockerHub Prometheus image pinned to an exact semantic version."
+
+  validation {
+    condition     = can(regex("^prom/prometheus:v[0-9]+\\.[0-9]+\\.[0-9]+$", var.prometheus_image_reference))
+    error_message = "prometheus_image_reference must be prom/prometheus with an exact vX.Y.Z tag."
+  }
+}
+
+variable "loki_image_reference" {
+  type        = string
+  description = "Official DockerHub Loki image pinned to an exact semantic version."
+
+  validation {
+    condition     = can(regex("^grafana/loki:[0-9]+\\.[0-9]+\\.[0-9]+$", var.loki_image_reference))
+    error_message = "loki_image_reference must be grafana/loki with an exact X.Y.Z tag."
+  }
+}
+
+variable "grafana_image_reference" {
+  type        = string
+  description = "Official DockerHub Grafana image pinned to an exact semantic version."
+
+  validation {
+    condition     = can(regex("^grafana/grafana:[0-9]+\\.[0-9]+\\.[0-9]+$", var.grafana_image_reference))
+    error_message = "grafana_image_reference must be grafana/grafana with an exact X.Y.Z tag."
+  }
+}
+
 variable "monitoring_endpoint_parameter_name" {
   type        = string
   description = "SSM Parameter Store path where the Monitoring EC2 private IP is published for Alloy log shipping."
