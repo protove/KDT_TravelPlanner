@@ -177,6 +177,15 @@ resource "aws_vpc_security_group_ingress_rule" "backend_monitoring_scrape" {
   description                  = "Prometheus scrapes backend actuator metrics"
 }
 
+resource "aws_vpc_security_group_ingress_rule" "backend_monitoring_alloy" {
+  security_group_id            = aws_security_group.backend.id
+  referenced_security_group_id = aws_security_group.monitoring.id
+  from_port                    = 12345
+  ip_protocol                  = "tcp"
+  to_port                      = 12345
+  description                  = "Prometheus scrapes Alloy metrics"
+}
+
 resource "aws_vpc_security_group_ingress_rule" "monitoring_loki" {
   security_group_id            = aws_security_group.monitoring.id
   referenced_security_group_id = aws_security_group.backend.id
@@ -193,6 +202,15 @@ resource "aws_vpc_security_group_egress_rule" "monitoring_scrape" {
   ip_protocol                  = "tcp"
   to_port                      = 9091
   description                  = "Scrape backend actuator metrics"
+}
+
+resource "aws_vpc_security_group_egress_rule" "monitoring_scrape_alloy" {
+  security_group_id            = aws_security_group.monitoring.id
+  referenced_security_group_id = aws_security_group.backend.id
+  from_port                    = 12345
+  ip_protocol                  = "tcp"
+  to_port                      = 12345
+  description                  = "Scrape Alloy metrics from backend instances"
 }
 
 resource "aws_vpc_security_group_egress_rule" "monitoring_https" {

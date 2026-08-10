@@ -76,10 +76,17 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "up{job=~\"backend|prometheus|loki|alloy\"}",
-          "legendFormat": "{{job}}",
+          "expr": "sum by (job) (up{job=~\"backend|prometheus|loki|alloy\"})",
+          "legendFormat": "{{job}} up",
           "range": true,
           "refId": "A"
+        },
+        {
+          "editorMode": "code",
+          "expr": "count by (job) (up{job=~\"backend|prometheus|loki|alloy\"})",
+          "legendFormat": "{{job}} total",
+          "range": true,
+          "refId": "B"
         }
       ],
       "title": "Monitoring Targets",
@@ -690,6 +697,90 @@
       ],
       "title": "Recent Backend Logs",
       "type": "logs"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 15,
+            "lineWidth": 2,
+            "showPoints": "never",
+            "spanNulls": false
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 29
+      },
+      "id": 10,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "pluginVersion": "13.1.0",
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "sum(loki_source_file_files_active_total)",
+          "legendFormat": "active files",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "editorMode": "code",
+          "expr": "sum(rate(loki_write_sent_entries_total[5m]))",
+          "legendFormat": "sent entries/s",
+          "range": true,
+          "refId": "B"
+        },
+        {
+          "editorMode": "code",
+          "expr": "sum(rate(loki_write_dropped_entries_total[5m]))",
+          "legendFormat": "dropped entries/s",
+          "range": true,
+          "refId": "C"
+        }
+      ],
+      "title": "Alloy Log Delivery",
+      "type": "timeseries"
     }
   ],
   "refresh": "15s",

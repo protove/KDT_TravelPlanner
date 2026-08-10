@@ -57,9 +57,44 @@ plan 검토 시 다음을 모두 확인한다.
 - ASG는 min/desired/max `2/2/4`, Instance Refresh는 `100/200`, warm-up은 180초다.
 - Backend image digest가 바뀌면 Launch Template의 구체적인 새 버전과 ASG 변경이 plan에 나타나고, apply가 Rolling Instance Refresh를 시작한다. `$Latest` 문자열을 직접 사용하지 않는다.
 - ALB traffic은 8080, health check는 `9091/actuator/health/readiness`다.
+- Backend Alloy는 `0.0.0.0:12345`를 private host port로 publish하고, Monitoring SG에서만 접근 가능한 SG reference 규칙을 사용한다.
+- Alloy job은 `Service=travel-planner-backend`, `Environment=dev`, `running` EC2를 Prometheus EC2 Service Discovery로 찾는다. `alloy:12345` 정적 target은 EC2 경로에 남아 있지 않아야 한다.
 - RDS/Redis는 data private subnet과 전용 security group만 사용한다.
 - 유료 리소스 수량이 NAT 1, ALB 1, EC2 2~4, RDS 1, Redis 1과 일치한다.
 - Monitoring 이미지 변경 시 Monitoring EC2 replacement가 의도된 것인지 확인하고, apply 전에 필요한 Dashboard·Prometheus·Loki 증거를 외부에 보존한다.
+- Prometheus/Loki/Grafana/대시보드 파일 hash 변경 시 `monitoring_config_revision`과 Monitoring EC2 replacement가 함께 나타나며, S3 object가 먼저 준비되는 dependency가 유지된다.
+
+## 모니터링 변경 apply·refresh·rollback
+
+계획 파일은 작업별로 고유한 이름을 사용한다. 기존 `tfplan` 파일을 덮어쓰지 않고, 아래 예시처럼 AWS profile과 `-chdir`를 항상 함께 지정한다.
+
+```bash
+AWS_PROFILE=kdt-travel-terraform \
+terraform -chdir=infra/environments/dev-runtime \
+  plan -var-file=terraform.tfvars \
+  -out=dev-runtime-alloy-20260810.tfplan
+
+AWS_PROFILE=kdt-travel-terraform \
+terraform -chdir=infra/environments/dev-runtime \
+  show dev-runtime-alloy-20260810.tfplan
+
+AWS_PROFILE=kdt-travel-terraform \
+terraform -chdir=infra/environments/dev-runtime \
+  apply dev-runtime-alloy-20260810.tfplan
+```
+
+설정 revision만 확인하거나 drift를 조사할 때는 refresh-only plan을 사용한다. 이 명령은 상태를 바꾸지 않는다.
+
+```bash
+AWS_PROFILE=kdt-travel-terraform \
+terraform -chdir=infra/environments/dev-runtime \
+  plan -refresh-only -var-file=terraform.tfvars \
+  -out=dev-runtime-alloy-refresh-20260810.tfplan
+```
+
+Alloy 설정·이미지 변경을 되돌릴 때는 이전에 검증한 Terraform 코드와 이미지 참조를 복원한 뒤 새 plan을 만들고, 그 plan에서 Backend ASG Instance Refresh와 Monitoring EC2 replacement 범위를 확인한다. 이전 plan을 재사용하거나 `-target`으로 일부만 적용하지 않는다. Backend EC2 교체 시 해당 인스턴스의 Docker named volume은 함께 사라질 수 있으므로, Loki에서 필요한 로그와 Grafana/Prometheus 증거를 먼저 보존한다.
+
+apply 후에는 Prometheus API에서 `up{job="backend"}`와 `up{job="alloy"}`가 각각 Backend 인스턴스 수만큼 `1`인지, Alloy target의 `health`가 `up`인지 확인한다. `loki_source_file_files_active_total`, `loki_write_sent_entries_total`, `loki_write_dropped_entries_total`도 함께 확인하며 dropped entries는 `0`이어야 한다.
 
 apply 후 `alb_dns_name`을 `api.kdt-travelplanner.protove.net`의 Cloudflare DNS-only CNAME target으로 수동 등록한다.
 
