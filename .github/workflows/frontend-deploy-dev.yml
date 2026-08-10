@@ -1,6 +1,6 @@
 name: Frontend Deploy (Dev)
 
-# 공통 Release workflow의 영향받은 검증 Gate를 통과한 뒤 main push에서 호출합니다.
+# 공통 Release workflow가 main의 전체 검증을 통과한 뒤 호출합니다.
 # AWS Access Key를 저장하지 않고 GitHub Actions OIDC로 일시적인 IAM Role을 받습니다.
 
 on:
