@@ -208,6 +208,7 @@ resource "aws_launch_template" "backend" {
     tags = merge(var.tags, {
       Name    = "${local.name}-backend"
       Service = "travel-planner-backend"
+      Version = var.alloy_image_reference
     })
   }
 
@@ -253,6 +254,7 @@ resource "aws_autoscaling_group" "backend" {
     for_each = merge(var.tags, {
       Name    = "${local.name}-backend"
       Service = "travel-planner-backend"
+      Version = var.alloy_image_reference
     })
 
     content {

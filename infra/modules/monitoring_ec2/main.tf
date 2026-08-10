@@ -1,5 +1,16 @@
 locals {
   name = "${var.project_name}-${var.environment}"
+
+  # Keep the EC2 bootstrap revision tied to every configuration object that
+  # the instance downloads. A changed file therefore replaces the singleton
+  # Monitoring EC2 instead of leaving the old configuration in place.
+  monitoring_config_revision = sha256(join("|", [
+    filemd5("${path.module}/../../../monitoring/prometheus/prometheus.ec2.yml"),
+    filemd5("${path.module}/../../../monitoring/loki/loki.prod.yml"),
+    filemd5("${path.module}/../../../monitoring/ec2/datasources.yml"),
+    filemd5("${path.module}/../../../monitoring/grafana/provisioning/dashboards/dashboards.yml"),
+    filemd5("${path.module}/../../../monitoring/grafana/dashboards/backend-overview.json"),
+  ]))
 }
 
 # ── 설정 파일용 S3 버킷 ─────────────────────────────────────────
@@ -170,9 +181,18 @@ resource "aws_instance" "monitoring" {
     aws_region                 = var.aws_region
     grafana_image_reference    = var.grafana_image_reference
     loki_image_reference       = var.loki_image_reference
+    monitoring_config_revision = local.monitoring_config_revision
     monitoring_bucket_name     = aws_s3_bucket.monitoring_config.id
     prometheus_image_reference = var.prometheus_image_reference
   })
+
+  depends_on = [
+    aws_s3_object.prometheus_config,
+    aws_s3_object.loki_config,
+    aws_s3_object.grafana_datasources,
+    aws_s3_object.grafana_dashboards_provisioning,
+    aws_s3_object.grafana_dashboard_backend_overview,
+  ]
 
   tags = merge(var.tags, {
     Name    = "${local.name}-monitoring"

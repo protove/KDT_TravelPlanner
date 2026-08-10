@@ -1,4 +1,12 @@
-mock_provider "aws" {}
+mock_provider "aws" {
+  override_during = plan
+
+  mock_resource "aws_security_group" {
+    defaults = {
+      id = "sg-test"
+    }
+  }
+}
 
 variables {
   environment  = "dev"
@@ -24,6 +32,20 @@ run "runtime_ports_are_scoped" {
       aws_vpc_security_group_ingress_rule.cache_backend.from_port == 6379
     )
     error_message = "Data security groups must expose only PostgreSQL and Redis ports."
+  }
+
+  assert {
+    condition = (
+      aws_vpc_security_group_ingress_rule.backend_monitoring_alloy.from_port == 12345 &&
+      aws_vpc_security_group_ingress_rule.backend_monitoring_alloy.to_port == 12345 &&
+      aws_vpc_security_group_ingress_rule.backend_monitoring_alloy.referenced_security_group_id == aws_security_group.monitoring.id &&
+      aws_vpc_security_group_ingress_rule.backend_monitoring_alloy.cidr_ipv4 == null &&
+      aws_vpc_security_group_egress_rule.monitoring_scrape_alloy.from_port == 12345 &&
+      aws_vpc_security_group_egress_rule.monitoring_scrape_alloy.to_port == 12345 &&
+      aws_vpc_security_group_egress_rule.monitoring_scrape_alloy.referenced_security_group_id == aws_security_group.backend.id &&
+      aws_vpc_security_group_egress_rule.monitoring_scrape_alloy.cidr_ipv4 == null
+    )
+    error_message = "Alloy metrics must use a private security-group reference on TCP 12345 in both directions."
   }
 
   assert {

@@ -4,6 +4,9 @@ set -euo pipefail
 dnf install -y docker
 systemctl enable --now docker
 
+# Terraform monitoring-config-revision: ${monitoring_config_revision}
+# A configuration revision is delivered through a replacement of this EC2.
+
 # Pull reviewed image tags once during bootstrap. Subsequent service restarts
 # use the cached image; a version change is delivered through a new EC2.
 docker pull '${prometheus_image_reference}'
@@ -84,6 +87,7 @@ ExecStart=/usr/bin/docker run \
   --rm \
   --network travel-planner-monitoring \
   --network-alias loki \
+  --publish 3100:3100 \
   --volume /etc/travel-planner/loki/loki.yml:/etc/loki/local-config.yaml:ro \
   --volume /var/lib/travel-planner/loki:/loki \
   ${loki_image_reference}

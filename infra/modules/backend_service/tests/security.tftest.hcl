@@ -73,9 +73,14 @@ run "backend_is_private_and_rolls_without_capacity_loss" {
       aws_launch_template.backend.block_device_mappings[0].ebs[0].encrypted &&
       aws_launch_template.backend.block_device_mappings[0].ebs[0].volume_type == "gp3" &&
       strcontains(base64decode(aws_launch_template.backend.user_data), var.alloy_image_reference) &&
+      strcontains(base64decode(aws_launch_template.backend.user_data), "--publish 12345:12345") &&
+      strcontains(base64decode(aws_launch_template.backend.user_data), "--volume travel-planner-alloy-data:/var/lib/alloy/data") &&
+      strcontains(base64decode(aws_launch_template.backend.user_data), "--server.http.listen-addr=0.0.0.0:12345") &&
+      strcontains(base64decode(aws_launch_template.backend.user_data), "--storage.path=/var/lib/alloy/data") &&
+      aws_launch_template.backend.tag_specifications[0].tags["Version"] == var.alloy_image_reference &&
       !strcontains(base64decode(aws_launch_template.backend.user_data), "grafana/alloy:latest")
     )
-    error_message = "Backend instances must have no public IP, require IMDSv2, use encrypted gp3 storage and run the pinned Alloy image."
+    error_message = "Backend instances must have no public IP, require IMDSv2, use encrypted gp3 storage and expose Alloy metrics with persistent position storage."
   }
 
   assert {

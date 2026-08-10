@@ -53,12 +53,15 @@ run "monitoring_ec2_is_private_and_encrypted" {
       aws_instance.monitoring.root_block_device[0].volume_type == "gp3" &&
       aws_instance.monitoring.user_data_replace_on_change &&
       startswith(aws_instance.monitoring.user_data, "#!/usr/bin/env bash") &&
+      strcontains(aws_instance.monitoring.user_data, "Terraform monitoring-config-revision:") &&
+      strcontains(aws_instance.monitoring.user_data, output.monitoring_config_revision) &&
       strcontains(aws_instance.monitoring.user_data, var.prometheus_image_reference) &&
       strcontains(aws_instance.monitoring.user_data, var.loki_image_reference) &&
       strcontains(aws_instance.monitoring.user_data, var.grafana_image_reference) &&
+      strcontains(aws_instance.monitoring.user_data, "--publish 3100:3100") &&
       !strcontains(aws_instance.monitoring.user_data, ":latest")
     )
-    error_message = "Monitoring EC2 must have no public IP, require IMDSv2, use encrypted gp3 storage, replace on user-data changes and run the pinned monitoring images."
+    error_message = "Monitoring EC2 must have no public IP, require IMDSv2, use encrypted gp3 storage, publish Loki on host port 3100 for private Backend Alloy pushes, replace on user-data changes and run pinned monitoring images."
   }
 
   assert {
@@ -69,6 +72,11 @@ run "monitoring_ec2_is_private_and_encrypted" {
   assert {
     condition     = output.monitoring_endpoint_parameter_name == var.monitoring_endpoint_parameter_name
     error_message = "Monitoring endpoint parameter name must be exposed for narrow downstream dependencies."
+  }
+
+  assert {
+    condition     = length(output.monitoring_config_revision) == 64
+    error_message = "Monitoring configuration revision must be a SHA-256 hash of the uploaded configuration files."
   }
 }
 

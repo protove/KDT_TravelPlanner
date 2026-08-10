@@ -34,7 +34,7 @@ scrape_configs:
       - source_labels: [__meta_ec2_tag_Version]
         target_label: version
 
-  # ── 나머지는 Monitoring EC2 "안"에서 컨테이너로 같이 도니 고정 주소 그대로 ──
+  # ── Monitoring EC2 안에서 실행되는 Prometheus/Loki만 고정 주소 ──
   - job_name: prometheus
     static_configs:
       - targets:
@@ -43,7 +43,29 @@ scrape_configs:
     static_configs:
       - targets:
           - loki:3100
+
+  # ── 각 Backend EC2의 Alloy HTTP metrics endpoint를 동적으로 조회 ──
   - job_name: alloy
-    static_configs:
-      - targets:
-          - alloy:12345
+    metrics_path: /metrics
+    ec2_sd_configs:
+      - region: ap-northeast-2
+        port: 12345
+        filters:
+          - name: instance-state-name
+            values: [running]
+    relabel_configs:
+      - source_labels: [__meta_ec2_tag_Service]
+        regex: travel-planner-backend
+        action: keep
+      - source_labels: [__meta_ec2_tag_Environment]
+        regex: dev
+        action: keep
+      - source_labels: [__meta_ec2_private_ip]
+        target_label: __address__
+        replacement: "${1}:12345"
+      - source_labels: [__meta_ec2_instance_id]
+        target_label: instance_id
+      - source_labels: [__meta_ec2_availability_zone]
+        target_label: availability_zone
+      - source_labels: [__meta_ec2_tag_Version]
+        target_label: version

@@ -13,6 +13,11 @@ output "monitoring_endpoint_parameter_name" {
   value       = aws_ssm_parameter.monitoring_endpoint.name
 }
 
+output "monitoring_config_revision" {
+  description = "Hash of the Prometheus, Loki and Grafana configuration uploaded to S3."
+  value       = local.monitoring_config_revision
+}
+
 output "private_ip" {
   description = "Monitoring EC2 private IP (Prometheus/Loki/Grafana host)."
   value       = aws_instance.monitoring.private_ip

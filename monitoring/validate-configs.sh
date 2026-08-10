@@ -22,6 +22,12 @@ for profile in dev prod; do
     validate "/etc/alloy/config.$profile.alloy"
 done
 
+docker run --rm \
+  --entrypoint /bin/promtool \
+  -v "$SCRIPT_DIR/prometheus:/etc/prometheus:ro" \
+  prom/prometheus:v3.13.1 \
+  check config "/etc/prometheus/prometheus.ec2.yml"
+
 python3 -m json.tool \
   "$SCRIPT_DIR/grafana/dashboards/backend-overview.json" \
   >/dev/null

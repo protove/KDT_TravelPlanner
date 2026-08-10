@@ -180,10 +180,15 @@ MONITORING_ENDPOINT="$monitoring_endpoint" envsubst '$MONITORING_ENDPOINT' \
 exec docker run \
   --name travel-planner-alloy \
   --rm \
+  --publish 12345:12345 \
   --volume /etc/alloy/config.alloy:/etc/alloy/config.alloy:ro \
   --volume /var/log/travel-planner:/var/log/travel-planner:ro \
+  --volume travel-planner-alloy-data:/var/lib/alloy/data \
   '${alloy_image_reference}' \
-  run /etc/alloy/config.alloy
+  run \
+  --server.http.listen-addr=0.0.0.0:12345 \
+  --storage.path=/var/lib/alloy/data \
+  /etc/alloy/config.alloy
 SCRIPT
 
 chmod 0750 /usr/local/bin/start-travel-planner-alloy
