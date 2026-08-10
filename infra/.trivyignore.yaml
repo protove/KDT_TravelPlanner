@@ -12,7 +12,8 @@ misconfigurations:
       - "modules/static_frontend/main.tf"
       - "modules/terraform_state_backend/main.tf"
       - "modules/monitoring_ec2/main.tf"
-    statement: "SSE-S3 AES-256 is the approved encryption baseline for the current dev scope; customer-managed KMS keys require a separate cost and key-administration decision."
+      - "modules/load_test_runner/main.tf"
+    statement: "SSE-S3 AES-256 is the approved encryption baseline for the current dev scope; customer-managed KMS keys require a separate cost and key-administration decision. D-004 (Evidence S3 retention/KMS) in aws-load-test-handoff/decisions/OPEN_DECISIONS.md tracks the pending KMS decision for the load-test evidence bucket specifically."
     expired_at: 2027-01-31
 
   - id: AVD-AWS-0053

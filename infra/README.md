@@ -159,6 +159,8 @@ AWS S3에서는 `PROFILE_IMAGE_STORAGE_PATH_STYLE_ACCESS_ENABLED=false`를 사�
 
 `profile_image_runtime_policy_arn`은 생성만 되고 자동 연결되지 않는다. 개발용 `KDT-Dev-Runtime-Test` Permission Set에는 동일한 최소권한 인라인 정책을 유지하거나, 생성된 고객 관리형 정책을 이름과 `/` 경로로 연결한다. 두 방식을 중복 적용하지 않는다.
 
+`load_test_evidence_operator_read_policy_arn`도 같은 방식이다: `evidence/aws-load-tests/*` prefix에 대한 읽기 전용(`s3:GetObject`, `s3:ListBucket`) 고객 관리형 정책만 생성되고 자동 연결되지 않는다. B-01 운영자가 evidence를 조회해야 하면 이 정책을 자신의 SSO Permission Set이나 Role에 수동으로 연결한다.
+
 ## 금지 사항
 
 - `terraform.tfstate`, 저장된 plan, 실제 tfvars와 backend 설정을 Git에 커밋하지 않는다.
