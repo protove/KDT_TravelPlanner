@@ -58,9 +58,10 @@ run "monitoring_ec2_is_private_and_encrypted" {
       strcontains(aws_instance.monitoring.user_data, var.prometheus_image_reference) &&
       strcontains(aws_instance.monitoring.user_data, var.loki_image_reference) &&
       strcontains(aws_instance.monitoring.user_data, var.grafana_image_reference) &&
+      strcontains(aws_instance.monitoring.user_data, "--publish 3100:3100") &&
       !strcontains(aws_instance.monitoring.user_data, ":latest")
     )
-    error_message = "Monitoring EC2 must have no public IP, require IMDSv2, use encrypted gp3 storage, replace on user-data changes and run the pinned monitoring images."
+    error_message = "Monitoring EC2 must have no public IP, require IMDSv2, use encrypted gp3 storage, publish Loki on host port 3100 for private Backend Alloy pushes, replace on user-data changes and run pinned monitoring images."
   }
 
   assert {

@@ -87,6 +87,7 @@ ExecStart=/usr/bin/docker run \
   --rm \
   --network travel-planner-monitoring \
   --network-alias loki \
+  --publish 3100:3100 \
   --volume /etc/travel-planner/loki/loki.yml:/etc/loki/local-config.yaml:ro \
   --volume /var/lib/travel-planner/loki:/loki \
   ${loki_image_reference}
