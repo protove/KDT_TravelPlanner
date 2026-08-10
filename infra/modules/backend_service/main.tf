@@ -184,6 +184,7 @@ resource "aws_launch_template" "backend" {
 
   user_data = base64encode(templatefile("${path.module}/templates/backend-user-data.sh.tftpl", {
     application_secret_arn             = var.backend_application_secret_arn
+    alloy_image_reference              = var.alloy_image_reference
     aws_region                         = var.aws_region
     backend_image_uri                  = var.backend_image_uri
     database_address                   = var.database_address

@@ -154,7 +154,7 @@ resource "aws_instance" "monitoring" {
 
   metadata_options {
     http_endpoint               = "enabled"
-    http_put_response_hop_limit = 1
+    http_put_response_hop_limit = 2
     http_tokens                 = "required"
   }
 
@@ -164,10 +164,15 @@ resource "aws_instance" "monitoring" {
     volume_type = "gp3"
   }
 
-  user_data = base64encode(templatefile("${path.module}/templates/monitoring-user-data.sh.tftpl", {
-    aws_region             = var.aws_region
-    monitoring_bucket_name = aws_s3_bucket.monitoring_config.id
-  }))
+  user_data_replace_on_change = true
+
+  user_data = templatefile("${path.module}/templates/monitoring-user-data.sh.tftpl", {
+    aws_region                 = var.aws_region
+    grafana_image_reference    = var.grafana_image_reference
+    loki_image_reference       = var.loki_image_reference
+    monitoring_bucket_name     = aws_s3_bucket.monitoring_config.id
+    prometheus_image_reference = var.prometheus_image_reference
+  })
 
   tags = merge(var.tags, {
     Name    = "${local.name}-monitoring"

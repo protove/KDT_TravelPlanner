@@ -70,6 +70,9 @@ module "monitoring_ec2" {
   app_subnet_id                      = data.terraform_remote_state.persistent.outputs.app_subnet_ids[0]
   aws_region                         = var.aws_region
   environment                        = local.environment
+  prometheus_image_reference         = var.monitoring_image_references.prometheus
+  loki_image_reference               = var.monitoring_image_references.loki
+  grafana_image_reference            = var.monitoring_image_references.grafana
   monitoring_bucket_name             = "${var.project_name}-${local.environment}-monitoring-config-${data.aws_caller_identity.current.account_id}"
   monitoring_endpoint_parameter_name = local.monitoring_endpoint_parameter_name
   monitoring_security_group_id       = module.runtime_security.monitoring_security_group_id
@@ -122,7 +125,8 @@ module "backend_service" {
   google_oauth_redirect_uri          = "${local.api_origin}/api/v1/auth/oauth2/google/callback"
   instance_type                      = "t3.small"
   instance_warmup_seconds            = 180
-  monitoring_endpoint_parameter_name = local.monitoring_endpoint_parameter_name
+  alloy_image_reference              = var.monitoring_image_references.alloy
+  monitoring_endpoint_parameter_name = module.monitoring_ec2.monitoring_endpoint_parameter_name
   naver_oauth_redirect_uri           = "${local.api_origin}/api/v1/auth/oauth2/naver/callback"
   profile_image_bucket_name          = data.terraform_remote_state.persistent.outputs.profile_image_bucket_name
   profile_image_public_base_url      = data.terraform_remote_state.persistent.outputs.profile_image_public_base_url
@@ -138,6 +142,5 @@ module "backend_service" {
 
   depends_on = [
     aws_route.app_default,
-    module.monitoring_ec2,
   ]
 }

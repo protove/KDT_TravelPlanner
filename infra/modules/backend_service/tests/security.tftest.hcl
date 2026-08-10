@@ -36,6 +36,7 @@ mock_provider "aws" {
 
 variables {
   alb_security_group_id              = "sg-alb"
+  alloy_image_reference              = "grafana/alloy:v1.16.1"
   app_subnet_ids                     = ["subnet-app-a", "subnet-app-c"]
   aws_region                         = "ap-northeast-2"
   backend_application_secret_arn     = "arn:aws:secretsmanager:ap-northeast-2:123456789012:secret:app"
@@ -70,9 +71,11 @@ run "backend_is_private_and_rolls_without_capacity_loss" {
       !aws_launch_template.backend.network_interfaces[0].associate_public_ip_address &&
       aws_launch_template.backend.metadata_options[0].http_tokens == "required" &&
       aws_launch_template.backend.block_device_mappings[0].ebs[0].encrypted &&
-      aws_launch_template.backend.block_device_mappings[0].ebs[0].volume_type == "gp3"
+      aws_launch_template.backend.block_device_mappings[0].ebs[0].volume_type == "gp3" &&
+      strcontains(base64decode(aws_launch_template.backend.user_data), var.alloy_image_reference) &&
+      !strcontains(base64decode(aws_launch_template.backend.user_data), "grafana/alloy:latest")
     )
-    error_message = "Backend instances must have no public IP, require IMDSv2 and use encrypted gp3 storage."
+    error_message = "Backend instances must have no public IP, require IMDSv2, use encrypted gp3 storage and run the pinned Alloy image."
   }
 
   assert {
@@ -118,4 +121,14 @@ run "tagged_image_is_rejected" {
   }
 
   expect_failures = [var.backend_image_uri]
+}
+
+run "latest_alloy_image_is_rejected" {
+  command = plan
+
+  variables {
+    alloy_image_reference = "grafana/alloy:latest"
+  }
+
+  expect_failures = [var.alloy_image_reference]
 }

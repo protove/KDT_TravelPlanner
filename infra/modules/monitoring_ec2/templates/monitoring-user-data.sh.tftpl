@@ -4,6 +4,12 @@ set -euo pipefail
 dnf install -y docker
 systemctl enable --now docker
 
+# Pull reviewed image tags once during bootstrap. Subsequent service restarts
+# use the cached image; a version change is delivered through a new EC2.
+docker pull '${prometheus_image_reference}'
+docker pull '${loki_image_reference}'
+docker pull '${grafana_image_reference}'
+
 # ── S3에서 설정 파일 내려받기 (기존 로컬 monitoring/ 폴더 그대로 재사용) ──
 install -d -m 0755 \
   /etc/travel-planner/prometheus \
@@ -52,7 +58,7 @@ ExecStart=/usr/bin/docker run \
   --publish 127.0.0.1:9090:9090 \
   --volume /etc/travel-planner/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro \
   --volume /var/lib/travel-planner/prometheus:/prometheus \
-  prom/prometheus:latest
+  ${prometheus_image_reference}
 ExecStop=-/usr/bin/docker stop --time 30 travel-planner-prometheus
 Restart=always
 RestartSec=10
@@ -80,7 +86,7 @@ ExecStart=/usr/bin/docker run \
   --network-alias loki \
   --volume /etc/travel-planner/loki/loki.yml:/etc/loki/local-config.yaml:ro \
   --volume /var/lib/travel-planner/loki:/loki \
-  grafana/loki:latest
+  ${loki_image_reference}
 ExecStop=-/usr/bin/docker stop --time 30 travel-planner-loki
 Restart=always
 RestartSec=10
@@ -110,7 +116,7 @@ ExecStart=/usr/bin/docker run \
   --volume /etc/travel-planner/grafana/provisioning:/etc/grafana/provisioning:ro \
   --volume /etc/travel-planner/grafana/dashboards:/var/lib/grafana/dashboards:ro \
   --volume /var/lib/travel-planner/grafana:/var/lib/grafana \
-  grafana/grafana:latest
+  ${grafana_image_reference}
 ExecStop=-/usr/bin/docker stop --time 30 travel-planner-grafana
 Restart=always
 RestartSec=10

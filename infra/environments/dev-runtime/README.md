@@ -6,6 +6,7 @@
 - Internet-facing ALB와 Target Group
 - private EC2 ASG `2/2/4`, Launch Template, CPU 60% Target Tracking
 - PostgreSQL 17 Single-AZ RDS와 Redis OSS 7.1 단일 노드
+- Monitoring EC2의 Prometheus·Loki·Grafana와 Backend EC2의 Grafana Alloy
 
 이 Issue의 첫 인계 범위는 `plan`까지다. `apply`, smoke test, 부하 실험, `destroy`는 각각 별도 승인 후 실행한다.
 
@@ -30,6 +31,8 @@
 
 RDS master password와 Redis auth token은 Terraform/AWS가 생성한다. Launch Template user data에는 secret 값이 없으며, 인스턴스 role로 부팅 시 Secrets Manager에서 읽는다.
 
+모니터링 이미지는 별도 빌드·ECR push 없이 NAT Gateway를 통해 공식 DockerHub에서 내려받는다. 기본 버전은 `infra/environments/dev-runtime/variables.tf`의 `monitoring_image_references`에 정의하며 `latest`와 tag 없는 참조는 허용하지 않는다. 버전을 변경하면 Monitoring EC2는 user data 변경에 따른 replacement가 발생하고, Alloy 버전 변경은 Launch Template 새 버전과 ASG Rolling Instance Refresh를 시작한다.
+
 ## Operator plan
 
 `backend.hcl.example`과 `terraform.tfvars.example`을 복사한 로컬 파일은 커밋하지 않는다. 서울 리전에서 제공되는 PostgreSQL 17 patch 목록을 plan 직전에 조회하고, 선택한 정확한 버전을 `postgres_engine_version`에 기록한다.
@@ -50,11 +53,13 @@ plan 검토 시 다음을 모두 확인한다.
 
 - backend EC2 network interface에 public IP가 없다.
 - `backend_image_uri`가 persistent `dev` ECR의 `repository@sha256:<digest>`다.
+- Prometheus·Loki·Grafana·Alloy가 검토된 DockerHub 버전 태그를 사용하고 `latest`가 없다.
 - ASG는 min/desired/max `2/2/4`, Instance Refresh는 `100/200`, warm-up은 180초다.
 - Backend image digest가 바뀌면 Launch Template의 구체적인 새 버전과 ASG 변경이 plan에 나타나고, apply가 Rolling Instance Refresh를 시작한다. `$Latest` 문자열을 직접 사용하지 않는다.
 - ALB traffic은 8080, health check는 `9091/actuator/health/readiness`다.
 - RDS/Redis는 data private subnet과 전용 security group만 사용한다.
 - 유료 리소스 수량이 NAT 1, ALB 1, EC2 2~4, RDS 1, Redis 1과 일치한다.
+- Monitoring 이미지 변경 시 Monitoring EC2 replacement가 의도된 것인지 확인하고, apply 전에 필요한 Dashboard·Prometheus·Loki 증거를 외부에 보존한다.
 
 apply 후 `alb_dns_name`을 `api.kdt-travelplanner.protove.net`의 Cloudflare DNS-only CNAME target으로 수동 등록한다.
 
