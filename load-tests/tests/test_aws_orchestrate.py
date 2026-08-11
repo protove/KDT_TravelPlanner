@@ -35,6 +35,7 @@ class AwsOrchestrationContractTests(unittest.TestCase):
         self.assertIn('-e MAX_VUS="${MAX_VUS:-}"', runner_source)
         self.assertIn('EFFECTIVE_MAX_VUS="${EFFECTIVE_MAX_VUS:?', runner_source)
         self.assertIn('len(credentials) < required', runner_source)
+        self.assertIn('payload.get("seedState") != "complete"', runner_source)
         self.assertIn('--user 0:0', runner_source)
         self.assertIn('--cap-drop ALL', runner_source)
         self.assertIn('--security-opt no-new-privileges', runner_source)
@@ -47,6 +48,7 @@ class AwsOrchestrationContractTests(unittest.TestCase):
         self.assertIn("credentialIndex >= credentials.length", data_source)
         self.assertIn("credentials[credentialIndex]", data_source)
         self.assertIn("credentials.length < requiredCredentialCount", data_source)
+        self.assertIn("parsed.seedState !== 'complete'", data_source)
 
         import_pattern = re.compile(r"from ['\"](\.\./[^'\"]+)['\"]")
         for scenario in sorted((K6_ROOT / "aws/scenarios").glob("*.js")):

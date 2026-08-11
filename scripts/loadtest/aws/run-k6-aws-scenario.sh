@@ -68,6 +68,8 @@ try:
 except (OSError, json.JSONDecodeError):
     raise SystemExit("generated credential file is not valid readable JSON")
 credentials = payload.get("credentials") if isinstance(payload, dict) else None
+if not isinstance(payload, dict) or payload.get("seedState") != "complete":
+    raise SystemExit("generated credential file seedState must be complete")
 if not isinstance(credentials, list) or len(credentials) < required:
     observed = len(credentials) if isinstance(credentials, list) else 0
     raise SystemExit(

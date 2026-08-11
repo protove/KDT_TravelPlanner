@@ -358,9 +358,11 @@ class AwsSeed:
         ).strip()
         return [line for line in result.splitlines() if line]
 
-    def seed_redis_token(self, user_id: str, ttl_ms: int) -> tuple[str, str]:
-        token = new_opaque_token()
-        family_id = new_opaque_token()
+    def seed_redis_token(
+        self, user_id: str, ttl_ms: int, token: str | None = None, family_id: str | None = None,
+    ) -> tuple[str, str]:
+        token = token or new_opaque_token()
+        family_id = family_id or new_opaque_token()
         token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
         self.redis("SET", redis_refresh_token_key(token_hash), f"{user_id}|{family_id}", "PX", str(ttl_ms))
         self.redis("SET", redis_refresh_family_key(family_id), token_hash, "PX", str(ttl_ms))
@@ -460,8 +462,18 @@ def seed_all(runtime: AwsSeed, args: argparse.Namespace) -> None:
     skipped = 0
     for index in range(1, args.users + 1):
         user_id, already_existed = runtime.insert_user(run_id, index)
-        refresh_token, family_id = runtime.seed_redis_token(user_id, args.refresh_ttl_ms)
+        refresh_token = new_opaque_token()
+        family_id = new_opaque_token()
+        pending_credential = {
+            "userId": user_id,
+            "refreshToken": refresh_token,
+            "refreshFamilyId": family_id,
+        }
+        write_seed_checkpoint(runtime, args, credentials + [pending_credential], skipped)
+        runtime.seed_redis_token(user_id, args.refresh_ttl_ms, refresh_token, family_id)
         access_token, refresh_token = runtime.refresh(refresh_token)
+        pending_credential["refreshToken"] = refresh_token
+        write_seed_checkpoint(runtime, args, credentials + [pending_credential], skipped)
         if already_existed and runtime.has_existing_travel(user_id):
             travel_id = runtime.find_existing_travel(user_id)
             if travel_id is None:
@@ -473,18 +485,18 @@ def seed_all(runtime: AwsSeed, args: argparse.Namespace) -> None:
             travel_id = runtime.create_travel(access_token, index)
             timeline_ids = runtime.create_timeline_items(access_token, travel_id)
             print(f"[seed] user {index}/{args.users} prepared")
-        credentials.append({
-            "userId": user_id,
+        pending_credential.update({
             "travelId": travel_id,
-            "refreshToken": refresh_token,
-            "refreshFamilyId": family_id,
             "visitDate": "2026-08-01",
             "timelineItemIds": timeline_ids,
         })
+        credentials.append(pending_credential)
+        write_seed_checkpoint(runtime, args, credentials, skipped)
     runtime.write_credentials(
         {
             "runId": run_id,
-            "seedVersion": "aws-s1",
+            "seedVersion": "aws-s2",
+            "seedState": "complete",
             "seededAt": datetime.now(timezone.utc).isoformat(),
             "skippedAlreadySeeded": skipped,
             "credentials": credentials,
@@ -492,6 +504,25 @@ def seed_all(runtime: AwsSeed, args: argparse.Namespace) -> None:
         args.data_file,
     )
     print(f"[seed] complete: {len(credentials)} synthetic users seeded, {skipped} already present")
+
+
+def write_seed_checkpoint(
+    runtime: AwsSeed,
+    args: argparse.Namespace,
+    credentials: list[dict],
+    skipped: int,
+) -> None:
+    runtime.write_credentials(
+        {
+            "runId": args.run_id,
+            "seedVersion": "aws-s2",
+            "seedState": "in-progress",
+            "seededAt": datetime.now(timezone.utc).isoformat(),
+            "skippedAlreadySeeded": skipped,
+            "credentials": credentials,
+        },
+        args.data_file,
+    )
 
 
 def revoke_previous_credentials(runtime: AwsSeed, args: argparse.Namespace) -> None:

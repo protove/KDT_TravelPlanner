@@ -375,9 +375,9 @@ class SeedAwsLoadDataTest(unittest.TestCase):
         def fake_find_existing_timeline_items(travel_id):
             return ["existing-item-1", "existing-item-2", "existing-item-3"]
 
-        def fake_seed_redis_token(user_id, ttl_ms):
+        def fake_seed_redis_token(user_id, ttl_ms, token, family_id):
             calls["seed_redis_token"].append(user_id)
-            return (f"fresh-token-{user_id}", f"fresh-family-{user_id}")
+            return (token, family_id)
 
         def fake_refresh(token):
             calls["refresh"].append(token)
@@ -421,7 +421,7 @@ class SeedAwsLoadDataTest(unittest.TestCase):
         self.assertEqual(skipped_entry["timelineItemIds"], ["existing-item-1", "existing-item-2", "existing-item-3"])
         # A fresh token was minted for the skipped user too, not carried
         # over from whatever token it had when first seeded.
-        self.assertEqual(skipped_entry["refreshToken"], "fresh-token-user-2")
+        self.assertRegex(skipped_entry["refreshToken"], r"^[A-Za-z0-9_-]{43}$")
 
         # seed_redis_token/refresh ran for all 3 users, including the skip.
         self.assertEqual(sorted(calls["seed_redis_token"]), ["user-1", "user-2", "user-3"])
@@ -429,6 +429,60 @@ class SeedAwsLoadDataTest(unittest.TestCase):
         # But the expensive travel/timeline creation only ran for the 2
         # genuinely-new users.
         self.assertEqual(calls["create_travel"], 2)
+
+    def test_seed_checkpoints_token_before_redis_mutation(self):
+        runtime = object.__new__(SEED.AwsSeed)
+        events = []
+        writes = []
+        runtime.insert_user = lambda run_id, index: ("user-1", False)
+        runtime.seed_redis_token = (
+            lambda user_id, ttl_ms, token, family_id:
+            events.append(("redis", token, family_id)) or (token, family_id)
+        )
+        runtime.refresh = lambda token: ("access-token", "r" * 43)
+        runtime.has_existing_travel = lambda user_id: False
+        runtime.create_travel = lambda access_token, index: "travel-1"
+        runtime.create_timeline_items = lambda access_token, travel_id: ["timeline-1"]
+
+        def write_credentials(payload, path):
+            writes.append(json.loads(json.dumps(payload)))
+            events.append(("write", payload["credentials"][-1]["refreshToken"]))
+
+        runtime.write_credentials = write_credentials
+        args = type("Args", (), {
+            "run_id": "aws-b01-checkpoint", "users": 1, "refresh_ttl_ms": 1000,
+            "data_file": Path("/tmp/unused.json"),
+        })()
+
+        SEED.seed_all(runtime, args)
+
+        self.assertEqual(events[0][0], "write")
+        self.assertEqual(events[1][0], "redis")
+        self.assertEqual(events[0][1], events[1][1])
+        self.assertEqual(writes[0]["seedState"], "in-progress")
+        self.assertEqual(writes[-1]["seedState"], "complete")
+        self.assertEqual(writes[-1]["seedVersion"], "aws-s2")
+
+    def test_seed_failure_keeps_private_in_progress_credential_checkpoint(self):
+        runtime = object.__new__(SEED.AwsSeed)
+        runtime.insert_user = lambda run_id, index: ("user-1", False)
+        runtime.seed_redis_token = mock.Mock(side_effect=SEED.SeedError("redis unavailable"))
+        runtime.write_credentials = SEED.AwsSeed.write_credentials.__get__(runtime, SEED.AwsSeed)
+
+        with tempfile.TemporaryDirectory() as directory:
+            data_file = Path(directory) / "data.json"
+            args = type("Args", (), {
+                "run_id": "aws-b01-partial", "users": 1, "refresh_ttl_ms": 1000,
+                "data_file": data_file,
+            })()
+            with self.assertRaises(SEED.SeedError):
+                SEED.seed_all(runtime, args)
+
+            payload = json.loads(data_file.read_text(encoding="utf-8"))
+            self.assertEqual(payload["seedState"], "in-progress")
+            self.assertEqual(len(payload["credentials"]), 1)
+            self.assertRegex(payload["credentials"][0]["refreshToken"], r"^[A-Za-z0-9_-]{43}$")
+            self.assertEqual(stat.S_IMODE(data_file.stat().st_mode), stat.S_IRUSR | stat.S_IWUSR)
 
     def test_previous_credential_file_is_revoked_before_reseeding(self):
         runtime = type("Runtime", (), {

@@ -7,6 +7,9 @@ const credentials = new SharedArray('load-test-credentials', () => {
   if (!parsed.credentials || parsed.credentials.length === 0) {
     throw new Error('load-test data must contain at least one credential');
   }
+  if (__ENV.REQUIRE_UNIQUE_CREDENTIALS === '1' && parsed.seedState !== 'complete') {
+    throw new Error('AWS load-test data seedState must be complete');
+  }
   return parsed.credentials;
 });
 
