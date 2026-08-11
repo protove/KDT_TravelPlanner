@@ -94,7 +94,7 @@ resource "aws_elasticache_subnet_group" "this" {
 resource "aws_elasticache_user" "default" {
   user_id       = local.redis_default_user_id
   user_name     = "default"
-  engine        = "REDIS"
+  engine        = "redis"
   access_string = "on ~* +@all"
 
   authentication_mode {
@@ -117,7 +117,7 @@ resource "aws_elasticache_user" "default" {
 resource "aws_elasticache_user" "load_test" {
   user_id       = local.redis_load_test_user_identity
   user_name     = local.redis_load_test_user_identity
-  engine        = "REDIS"
+  engine        = "redis"
   access_string = "on ~* -@all +set +del"
 
   authentication_mode {
@@ -128,7 +128,7 @@ resource "aws_elasticache_user" "load_test" {
 }
 
 resource "aws_elasticache_user_group" "this" {
-  engine        = "REDIS"
+  engine        = "redis"
   user_group_id = "${local.name}-redis-users"
   user_ids = [
     aws_elasticache_user.default.user_id,
