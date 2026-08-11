@@ -32,6 +32,19 @@ RUN_METADATA_CONTRACT.md it refuses to run unless the observed account
 matches --expected-account-id exactly, and it never prints a full account
 ID, Secrets Manager ARN content, or database/Redis password to stdout or
 stderr.
+
+Credential contract (D-001-R1 후속, aws-load-test-handoff/decisions/DECISION_LOG.md
+"Seed/Cleanup 최소권한"): this script never reads the RDS master secret or
+the backend's shared Redis AUTH secret. --database-secret-arn must point to
+a dedicated, least-privilege test-only Secret with the JSON shape
+{"username": "...", "password": "..."} (both fields required — the DB
+username comes from the secret now, not a separate flag). Redis uses
+ElastiCache RBAC with IAM authentication instead of a Secret at all:
+--redis-iam-user is the RBAC username (Terraform-provisioned, not secret)
+and --redis-replication-group-id is the ElastiCache replication group ID
+the IAM auth token is signed for. The actual DB role and Redis RBAC
+user/Secret are created by the Infra owner (console or approved IaC), not
+by this script.
 """
 
 from __future__ import annotations
@@ -62,6 +75,13 @@ REDIS_CLIENT_IMAGE = "redis:7-alpine"
 
 class SeedError(RuntimeError):
     """A sanitized seed or contract verification failure."""
+
+
+class SecretContractError(SeedError):
+    """The Secrets Manager value did not match the expected {username,
+    password} test-credential contract. Distinguished from other SeedErrors
+    with its own exit code (2) so an operator can tell "the wrong secret is
+    wired in" apart from "the DB/Redis/API itself failed" (1) at a glance."""
 
 
 def sql_literal(value: str) -> str:
@@ -104,11 +124,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--database-host", required=True)
     parser.add_argument("--database-port", type=int, default=5432)
     parser.add_argument("--database-name", required=True)
-    parser.add_argument("--database-user", required=True)
-    parser.add_argument("--database-secret-arn", required=True, help="Secrets Manager ARN holding the RDS master password (RDS-managed secret JSON)")
+    parser.add_argument("--database-secret-arn", required=True, help="Secrets Manager ARN of the dedicated test-only DB Secret, JSON {\"username\":..,\"password\":..} (never the RDS master secret)")
     parser.add_argument("--redis-host", required=True)
     parser.add_argument("--redis-port", type=int, default=6379)
-    parser.add_argument("--redis-secret-arn", required=True, help="Secrets Manager ARN holding the Redis AUTH token (JSON with a 'password' field)")
+    parser.add_argument("--redis-iam-user", required=True, help="ElastiCache RBAC username this Runner authenticates as via IAM (never the shared default-user AUTH token)")
+    parser.add_argument("--redis-replication-group-id", required=True, help="ElastiCache replication group ID the IAM auth token is signed for")
     parser.add_argument("--base-url", required=True, help="ALB HTTPS base URL, e.g. https://api.kdt-travelplanner.protove.net")
     parser.add_argument("--data-file", type=Path, required=True, help="Where to write synthetic credentials (0600); cleanup-aws-load-data.py reads this to remove exact Redis keys")
     parser.add_argument("--refresh-ttl-ms", type=int, default=DEFAULT_REFRESH_TTL_MS)
@@ -141,7 +161,12 @@ def verify_account(expected_account_id: str, region: str) -> None:
         raise SeedError("observed AWS account does not match --expected-account-id; refusing to run")
 
 
-def read_secret_password(secret_arn: str, region: str) -> str:
+def read_secret_credential(secret_arn: str, region: str) -> tuple[str, str]:
+    """Returns (username, password) from a dedicated test-only Secret. Never
+    call this with an RDS master or shared-Redis-AUTH secret ARN — those use
+    a different JSON shape on purpose, and this function's strict
+    username+password requirement makes accidentally wiring one of those in
+    fail loudly (SecretContractError) instead of silently."""
     completed = subprocess.run(
         [
             "aws", "secretsmanager", "get-secret-value",
@@ -156,18 +181,65 @@ def read_secret_password(secret_arn: str, region: str) -> str:
     try:
         payload = json.loads(raw)
     except json.JSONDecodeError as error:
-        raise SeedError("Secrets Manager value is not valid JSON") from error
+        raise SecretContractError("Secrets Manager value is not valid JSON") from error
+    username = payload.get("username")
     password = payload.get("password")
+    if not isinstance(username, str) or not username:
+        raise SecretContractError("Secrets Manager value has no 'username' field (wrong secret? this must be a dedicated test-only credential)")
     if not isinstance(password, str) or not password:
-        raise SeedError("Secrets Manager value has no 'password' field")
-    return password
+        raise SecretContractError("Secrets Manager value has no 'password' field")
+    return username, password
+
+
+def generate_redis_iam_auth_token(user_name: str, replication_group_id: str, region: str) -> str:
+    """Signs a short-lived (15 min) ElastiCache IAM auth token for RBAC
+    username `user_name`, following AWS's documented technique for
+    IAM-authenticated Redis OSS access: a SigV4-presigned "connect" request
+    against a fake https://<replication-group-id>/ URL, with the scheme
+    stripped before use as the redis-cli AUTH password. This never touches
+    Secrets Manager and the token is never written to disk or logged — it is
+    only ever passed to redis-cli via the REDISCLI_AUTH environment
+    variable, mirroring how the (now-removed) Redis AUTH secret password was
+    handled."""
+    try:
+        import botocore.session
+        from botocore.signers import RequestSigner
+    except ImportError as error:
+        raise SeedError(
+            "botocore is required for Redis IAM authentication but is not installed "
+            "(infra/modules/load_test_runner/templates/runner-user-data.sh.tftpl should have pip-installed it)"
+        ) from error
+    session = botocore.session.get_session()
+    credentials = session.get_credentials()
+    if credentials is None:
+        raise SeedError("no AWS credentials available to sign the Redis IAM auth token")
+    request_signer = RequestSigner(
+        service_id=session.get_service_model("elasticache").service_id,
+        region_name=region,
+        signing_name="elasticache",
+        signature_version="v4",
+        credentials=credentials,
+        event_emitter=session.get_component("event_emitter"),
+    )
+    url = request_signer.generate_presigned_url(
+        {
+            "method": "GET",
+            "url": f"https://{replication_group_id}/",
+            "body": {"Action": "connect", "User": user_name},
+            "context": {},
+        },
+        region_name=region,
+        expires_in=900,
+        operation_name="",
+    )
+    return url.removeprefix("https://")
 
 
 class AwsSeed:
-    def __init__(self, args: argparse.Namespace, database_password: str, redis_password: str) -> None:
+    def __init__(self, args: argparse.Namespace, database_username: str, database_password: str) -> None:
         self.args = args
+        self.database_username = database_username
         self.database_password = database_password
-        self.redis_password = redis_password
         self.base_url = args.base_url.rstrip("/")
 
     def psql(self, sql: str) -> str:
@@ -178,21 +250,26 @@ class AwsSeed:
                 "-e", "PGPASSWORD", "-e", "PGSSLMODE",
                 POSTGRES_CLIENT_IMAGE, "psql",
                 "-h", self.args.database_host, "-p", str(self.args.database_port),
-                "-U", self.args.database_user, "-d", self.args.database_name,
+                "-U", self.database_username, "-d", self.args.database_name,
                 "-v", "ON_ERROR_STOP=1", "-tA", "-c", sql,
             ],
             env=env,
         )
 
     def redis(self, *arguments: str) -> str:
-        env = {**os.environ, "REDISCLI_AUTH": self.redis_password}
+        # Freshly signed per call (tokens are valid 15 minutes): seed runs are
+        # short but this avoids any expiry-timing assumption entirely.
+        auth_token = generate_redis_iam_auth_token(
+            self.args.redis_iam_user, self.args.redis_replication_group_id, self.args.region,
+        )
+        env = {**os.environ, "REDISCLI_AUTH": auth_token}
         return run(
             [
                 "docker", "run", "--rm", "--network", "host",
                 "-e", "REDISCLI_AUTH",
                 REDIS_CLIENT_IMAGE, "redis-cli",
                 "-h", self.args.redis_host, "-p", str(self.args.redis_port),
-                "--tls", "--no-auth-warning", *arguments,
+                "--tls", "--no-auth-warning", "--user", self.args.redis_iam_user, *arguments,
             ],
             env=env,
         )
@@ -251,6 +328,18 @@ class AwsSeed:
     def has_existing_travel(self, user_id: str) -> bool:
         result = self.psql(f"SELECT id FROM planners_table WHERE owner_id = {sql_literal(user_id)} LIMIT 1").strip()
         return bool(result)
+
+    def find_existing_travel(self, user_id: str) -> str | None:
+        result = self.psql(
+            f"SELECT id FROM planners_table WHERE owner_id = {sql_literal(user_id)} ORDER BY created_at LIMIT 1"
+        ).strip()
+        return result or None
+
+    def find_existing_timeline_items(self, travel_id: str) -> list[str]:
+        result = self.psql(
+            f"SELECT id FROM timeline_table WHERE planner_id = {sql_literal(travel_id)} ORDER BY visit_order"
+        ).strip()
+        return [line for line in result.splitlines() if line]
 
     def seed_redis_token(self, user_id: str, ttl_ms: int) -> tuple[str, str]:
         token = new_opaque_token()
@@ -315,19 +404,38 @@ class AwsSeed:
 
 
 def seed_all(runtime: AwsSeed, args: argparse.Namespace) -> None:
+    # Every user always gets a credentials[] entry, whether freshly created
+    # or already-seeded from a prior run. This fixes two related bugs: (1)
+    # an all-skipped retry used to write {"credentials": []}, silently
+    # discarding a richer prior data file that cleanup-aws-load-data.py and
+    # k6 both depend on; (2) even a *partial* skip used to omit the skipped
+    # users' entries entirely, and any refreshToken it *did* carry forward
+    # from create_travel-time state would be minutes-to-hours stale against
+    # its 4h Redis TTL by the time a later phase (Ramp/Baseline/Spike) reads
+    # it. seed_redis_token()+refresh() mint a brand-new, valid token for
+    # every user on every seed_all() call regardless of already_existed —
+    # writing directly into Redis by hash, so it works the same for a
+    # brand-new or a long-existing user_table row. Only the expensive
+    # DB/API-side work (user insert, travel/timeline creation) is skipped
+    # when already fully seeded.
     run_id = args.run_id
     credentials = []
     skipped = 0
     for index in range(1, args.users + 1):
         user_id, already_existed = runtime.insert_user(run_id, index)
-        if already_existed and runtime.has_existing_travel(user_id):
-            skipped += 1
-            print(f"[seed] user {index}/{args.users} already fully seeded, skipping")
-            continue
         refresh_token, family_id = runtime.seed_redis_token(user_id, args.refresh_ttl_ms)
         access_token, refresh_token = runtime.refresh(refresh_token)
-        travel_id = runtime.create_travel(access_token, index)
-        timeline_ids = runtime.create_timeline_items(access_token, travel_id)
+        if already_existed and runtime.has_existing_travel(user_id):
+            travel_id = runtime.find_existing_travel(user_id)
+            if travel_id is None:
+                raise SeedError(f"user {index} has_existing_travel reported true but no planners_table row was found")
+            timeline_ids = runtime.find_existing_timeline_items(travel_id)
+            skipped += 1
+            print(f"[seed] user {index}/{args.users} already fully seeded, reused travel/timeline, minted fresh token")
+        else:
+            travel_id = runtime.create_travel(access_token, index)
+            timeline_ids = runtime.create_timeline_items(access_token, travel_id)
+            print(f"[seed] user {index}/{args.users} prepared")
         credentials.append({
             "userId": user_id,
             "travelId": travel_id,
@@ -336,7 +444,6 @@ def seed_all(runtime: AwsSeed, args: argparse.Namespace) -> None:
             "visitDate": "2026-08-01",
             "timelineItemIds": timeline_ids,
         })
-        print(f"[seed] user {index}/{args.users} prepared")
     runtime.write_credentials(
         {
             "runId": run_id,
@@ -358,9 +465,8 @@ def main() -> int:
         raise SeedError("--users must be between 1 and 200")
     args.data_file = args.data_file.resolve()
     verify_account(args.expected_account_id, args.region)
-    database_password = read_secret_password(args.database_secret_arn, args.region)
-    redis_password = read_secret_password(args.redis_secret_arn, args.region)
-    runtime = AwsSeed(args, database_password, redis_password)
+    database_username, database_password = read_secret_credential(args.database_secret_arn, args.region)
+    runtime = AwsSeed(args, database_username, database_password)
     seed_all(runtime, args)
     return 0
 
@@ -368,6 +474,12 @@ def main() -> int:
 if __name__ == "__main__":
     try:
         raise SystemExit(main())
+    except SecretContractError as error:
+        # Distinct exit code (2): the Secrets Manager value doesn't match
+        # the expected test-credential contract, as opposed to a DB/Redis/API
+        # failure during seeding itself (1).
+        print(f"[seed] ERROR (secret contract): {error}", file=sys.stderr)
+        raise SystemExit(2)
     except SeedError as error:
         print(f"[seed] ERROR: {error}", file=sys.stderr)
         raise SystemExit(1)

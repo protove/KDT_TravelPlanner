@@ -87,22 +87,57 @@ class SeedAwsLoadDataTest(unittest.TestCase):
         finally:
             subprocess.run = original_run
 
-    def test_read_secret_password_requires_password_field(self):
-        original_run = subprocess.run
-        subprocess.run = lambda *a, **k: FakeCompletedProcess(returncode=0, stdout=json.dumps({"username": "x"}))
-        try:
-            with self.assertRaises(SEED.SeedError):
-                SEED.read_secret_password("arn:aws:secretsmanager:...", "ap-northeast-2")
-        finally:
-            subprocess.run = original_run
-
-    def test_read_secret_password_extracts_password(self):
+    def test_read_secret_credential_requires_username_field(self):
         original_run = subprocess.run
         subprocess.run = lambda *a, **k: FakeCompletedProcess(returncode=0, stdout=json.dumps({"password": "s3cr3t"}))
         try:
-            self.assertEqual(SEED.read_secret_password("arn:aws:secretsmanager:...", "ap-northeast-2"), "s3cr3t")
+            with self.assertRaises(SEED.SecretContractError):
+                SEED.read_secret_credential("arn:aws:secretsmanager:...", "ap-northeast-2")
         finally:
             subprocess.run = original_run
+
+    def test_read_secret_credential_requires_password_field(self):
+        original_run = subprocess.run
+        subprocess.run = lambda *a, **k: FakeCompletedProcess(returncode=0, stdout=json.dumps({"username": "test-db-user"}))
+        try:
+            with self.assertRaises(SEED.SecretContractError):
+                SEED.read_secret_credential("arn:aws:secretsmanager:...", "ap-northeast-2")
+        finally:
+            subprocess.run = original_run
+
+    def test_read_secret_credential_rejects_rds_master_secret_shape(self):
+        # RDS-managed master secrets don't carry a 'username' field the same
+        # way (and this must never be pointed at one anyway) — malformed/
+        # unexpected JSON must fail loudly as a contract error, not silently
+        # coerce.
+        original_run = subprocess.run
+        subprocess.run = lambda *a, **k: FakeCompletedProcess(returncode=0, stdout="not json")
+        try:
+            with self.assertRaises(SEED.SecretContractError):
+                SEED.read_secret_credential("arn:aws:secretsmanager:...", "ap-northeast-2")
+        finally:
+            subprocess.run = original_run
+
+    def test_read_secret_credential_extracts_username_and_password(self):
+        original_run = subprocess.run
+        subprocess.run = lambda *a, **k: FakeCompletedProcess(
+            returncode=0, stdout=json.dumps({"username": "loadtest-db-user", "password": "s3cr3t"})
+        )
+        try:
+            self.assertEqual(
+                SEED.read_secret_credential("arn:aws:secretsmanager:...", "ap-northeast-2"),
+                ("loadtest-db-user", "s3cr3t"),
+            )
+        finally:
+            subprocess.run = original_run
+
+    def test_generate_redis_iam_auth_token_fails_cleanly_without_botocore(self):
+        # This sandbox has no botocore installed (network-restricted), which
+        # doubles as a real test of the fallback path: it must raise a
+        # SeedError with an actionable message, not a raw ImportError.
+        with self.assertRaises(SEED.SeedError) as ctx:
+            SEED.generate_redis_iam_auth_token("loadtest-dev", "kdt-travelplanner-dev-redis", "ap-northeast-2")
+        self.assertIn("botocore", str(ctx.exception))
 
     def test_credential_file_is_written_with_private_permissions(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -113,7 +148,7 @@ class SeedAwsLoadDataTest(unittest.TestCase):
             self.assertEqual(stat.S_IMODE(path.stat().st_mode), stat.S_IRUSR | stat.S_IWUSR)
             self.assertEqual(json.loads(path.read_text(encoding="utf-8")), {"credentials": []})
 
-    def test_docker_invocations_never_put_password_in_argv(self):
+    def test_docker_invocations_never_put_password_or_token_in_argv(self):
         captured = {}
 
         def fake_run(command, *, env=None, input_text=None):
@@ -122,25 +157,112 @@ class SeedAwsLoadDataTest(unittest.TestCase):
             return "ok"
 
         original_run = SEED.run
+        original_token_fn = SEED.generate_redis_iam_auth_token
         SEED.run = fake_run
+        SEED.generate_redis_iam_auth_token = lambda user, rg, region: "signed-iam-token"
         try:
             runtime = object.__new__(SEED.AwsSeed)
             runtime.args = type("Args", (), {
                 "database_host": "db.internal", "database_port": 5432,
-                "database_user": "travel_planner", "database_name": "travel_diary_dev",
+                "database_name": "travel_diary_dev",
                 "redis_host": "redis.internal", "redis_port": 6379,
+                "redis_iam_user": "loadtest-dev", "redis_replication_group_id": "kdt-travelplanner-dev-redis",
+                "region": "ap-northeast-2",
             })()
+            runtime.database_username = "loadtest-db-user"
             runtime.database_password = "super-secret-db-password"
-            runtime.redis_password = "super-secret-redis-password"
             runtime.psql("SELECT 1")
             self.assertNotIn("super-secret-db-password", captured["command"])
+            self.assertIn("loadtest-db-user", captured["command"])
             self.assertEqual(captured["env"]["PGPASSWORD"], "super-secret-db-password")
 
-            runtime.redis("PING")
-            self.assertNotIn("super-secret-redis-password", captured["command"])
-            self.assertEqual(captured["env"]["REDISCLI_AUTH"], "super-secret-redis-password")
+            runtime.redis("SET", "k", "v")
+            self.assertNotIn("signed-iam-token", captured["command"])
+            self.assertIn("--user", captured["command"])
+            self.assertIn("loadtest-dev", captured["command"])
+            self.assertEqual(captured["env"]["REDISCLI_AUTH"], "signed-iam-token")
         finally:
             SEED.run = original_run
+            SEED.generate_redis_iam_auth_token = original_token_fn
+
+    def test_seed_all_gives_every_user_a_fresh_credential_even_when_skipped(self):
+        # Regression test for the "credentials: [] overwrite" bug plus the
+        # deeper staleness bug it was hiding: a user that's already fully
+        # seeded (existing user_table + planners_table rows) must still get
+        # a credentials[] entry with a *freshly minted* refresh token this
+        # run, reusing its existing travel/timeline rather than either being
+        # silently dropped from the file or given a possibly-expired token
+        # carried over from whenever it was first seeded.
+        runtime = object.__new__(SEED.AwsSeed)
+        calls = {"seed_redis_token": [], "refresh": [], "create_travel": 0}
+
+        def fake_insert_user(run_id, index):
+            # user 2 is already fully seeded; the rest are brand new.
+            return (f"user-{index}", index == 2)
+
+        def fake_has_existing_travel(user_id):
+            return user_id == "user-2"
+
+        def fake_find_existing_travel(user_id):
+            return "existing-travel-id"
+
+        def fake_find_existing_timeline_items(travel_id):
+            return ["existing-item-1", "existing-item-2", "existing-item-3"]
+
+        def fake_seed_redis_token(user_id, ttl_ms):
+            calls["seed_redis_token"].append(user_id)
+            return (f"fresh-token-{user_id}", f"fresh-family-{user_id}")
+
+        def fake_refresh(token):
+            calls["refresh"].append(token)
+            return (f"access-{token}", token)
+
+        def fake_create_travel(access_token, index):
+            calls["create_travel"] += 1
+            return f"new-travel-{index}"
+
+        def fake_create_timeline_items(access_token, travel_id):
+            return [f"{travel_id}-item-1"]
+
+        written = {}
+
+        def fake_write_credentials(payload, path):
+            written.update(payload)
+
+        runtime.insert_user = fake_insert_user
+        runtime.has_existing_travel = fake_has_existing_travel
+        runtime.find_existing_travel = fake_find_existing_travel
+        runtime.find_existing_timeline_items = fake_find_existing_timeline_items
+        runtime.seed_redis_token = fake_seed_redis_token
+        runtime.refresh = fake_refresh
+        runtime.create_travel = fake_create_travel
+        runtime.create_timeline_items = fake_create_timeline_items
+        runtime.write_credentials = fake_write_credentials
+
+        args = type("Args", (), {
+            "run_id": "aws-b01-20260811-001", "users": 3, "refresh_ttl_ms": 1000,
+            "data_file": Path("/tmp/unused.json"),
+        })()
+
+        SEED.seed_all(runtime, args)
+
+        # Every user (including the skipped one) got a credentials entry.
+        self.assertEqual(len(written["credentials"]), 3)
+        self.assertEqual(written["skippedAlreadySeeded"], 1)
+
+        skipped_entry = next(c for c in written["credentials"] if c["userId"] == "user-2")
+        self.assertEqual(skipped_entry["travelId"], "existing-travel-id")
+        self.assertEqual(skipped_entry["timelineItemIds"], ["existing-item-1", "existing-item-2", "existing-item-3"])
+        # A fresh token was minted for the skipped user too, not carried
+        # over from whatever token it had when first seeded.
+        self.assertEqual(skipped_entry["refreshToken"], "fresh-token-user-2")
+
+        # seed_redis_token/refresh ran for all 3 users, including the skip.
+        self.assertEqual(sorted(calls["seed_redis_token"]), ["user-1", "user-2", "user-3"])
+        self.assertEqual(len(calls["refresh"]), 3)
+        # But the expensive travel/timeline creation only ran for the 2
+        # genuinely-new users.
+        self.assertEqual(calls["create_travel"], 2)
 
 
 class CleanupAwsLoadDataTest(unittest.TestCase):
@@ -162,29 +284,63 @@ class CleanupAwsLoadDataTest(unittest.TestCase):
         with self.assertRaises(CLEANUP.CleanupError):
             CLEANUP.verify_account("abc", "ap-northeast-2")
 
+    def test_read_secret_credential_requires_username_field(self):
+        original_run = subprocess.run
+        subprocess.run = lambda *a, **k: FakeCompletedProcess(returncode=0, stdout=json.dumps({"password": "s3cr3t"}))
+        try:
+            with self.assertRaises(CLEANUP.SecretContractError):
+                CLEANUP.read_secret_credential("arn:aws:secretsmanager:...", "ap-northeast-2")
+        finally:
+            subprocess.run = original_run
+
+    def test_read_secret_credential_extracts_username_and_password(self):
+        original_run = subprocess.run
+        subprocess.run = lambda *a, **k: FakeCompletedProcess(
+            returncode=0, stdout=json.dumps({"username": "loadtest-db-user", "password": "s3cr3t"})
+        )
+        try:
+            self.assertEqual(
+                CLEANUP.read_secret_credential("arn:aws:secretsmanager:...", "ap-northeast-2"),
+                ("loadtest-db-user", "s3cr3t"),
+            )
+        finally:
+            subprocess.run = original_run
+
+    def test_generate_redis_iam_auth_token_fails_cleanly_without_botocore(self):
+        with self.assertRaises(CLEANUP.CleanupError) as ctx:
+            CLEANUP.generate_redis_iam_auth_token("loadtest-dev", "kdt-travelplanner-dev-redis", "ap-northeast-2")
+        self.assertIn("botocore", str(ctx.exception))
+
     def test_matching_user_count_parses_psql_output(self):
         original_psql = CLEANUP.psql
-        CLEANUP.psql = lambda args, password, sql: "3\n"
+        CLEANUP.psql = lambda args, username, password, sql: "3\n"
         try:
-            self.assertEqual(CLEANUP.matching_user_count(object(), "pw", "aws-b01-20260809-001"), 3)
+            self.assertEqual(CLEANUP.matching_user_count(object(), "u", "pw", "aws-b01-20260809-001"), 3)
         finally:
             CLEANUP.psql = original_psql
 
     def test_matching_user_count_zero_means_nothing_to_delete(self):
         original_psql = CLEANUP.psql
-        CLEANUP.psql = lambda args, password, sql: ""
+        CLEANUP.psql = lambda args, username, password, sql: ""
         try:
-            self.assertEqual(CLEANUP.matching_user_count(object(), "pw", "aws-b01-20260809-001"), 0)
+            self.assertEqual(CLEANUP.matching_user_count(object(), "u", "pw", "aws-b01-20260809-001"), 0)
         finally:
             CLEANUP.psql = original_psql
+
+    def test_cleanup_redis_missing_data_file_is_a_credential_file_error(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "does-not-exist.json"
+            args = type("Args", (), {"data_file": path})()
+            with self.assertRaises(CLEANUP.CredentialFileError):
+                CLEANUP.cleanup_redis(args, "aws-b01-20260809-001")
 
     def test_cleanup_redis_refuses_mismatched_run_id(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "data.json"
             path.write_text(json.dumps({"runId": "other-run", "credentials": []}), encoding="utf-8")
             args = type("Args", (), {"data_file": path})()
-            with self.assertRaises(CLEANUP.CleanupError):
-                CLEANUP.cleanup_redis(args, "pw", "aws-b01-20260809-001")
+            with self.assertRaises(CLEANUP.CredentialFileError):
+                CLEANUP.cleanup_redis(args, "aws-b01-20260809-001")
 
     def test_cleanup_redis_deletes_exact_recorded_keys_only(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -197,13 +353,14 @@ class CleanupAwsLoadDataTest(unittest.TestCase):
             }), encoding="utf-8")
             args = type("Args", (), {
                 "data_file": path, "redis_host": "redis.internal", "redis_port": 6379,
+                "redis_iam_user": "loadtest-dev", "redis_replication_group_id": "kdt-travelplanner-dev-redis",
             })()
 
             captured_keys = []
             original_redis = CLEANUP.redis
-            CLEANUP.redis = lambda a, password, *arguments: captured_keys.append(arguments) or "1"
+            CLEANUP.redis = lambda a, *arguments: captured_keys.append(arguments) or "1"
             try:
-                deleted = CLEANUP.cleanup_redis(args, "pw", "aws-b01-20260809-001")
+                deleted = CLEANUP.cleanup_redis(args, "aws-b01-20260809-001")
             finally:
                 CLEANUP.redis = original_redis
 
@@ -212,7 +369,7 @@ class CleanupAwsLoadDataTest(unittest.TestCase):
             self.assertIn(("DEL", f"auth:refresh:token:{expected_token_hash}"), captured_keys)
             self.assertIn(("DEL", f"auth:refresh:family:{family_id}"), captured_keys)
 
-    def test_docker_invocations_never_put_password_in_argv(self):
+    def test_docker_invocations_never_put_password_or_token_in_argv(self):
         captured = {}
 
         def fake_run(command, *, env=None):
@@ -221,17 +378,29 @@ class CleanupAwsLoadDataTest(unittest.TestCase):
             return "ok"
 
         original_run = CLEANUP.run
+        original_token_fn = CLEANUP.generate_redis_iam_auth_token
         CLEANUP.run = fake_run
+        CLEANUP.generate_redis_iam_auth_token = lambda user, rg, region: "signed-iam-token"
         try:
             args = type("Args", (), {
                 "database_host": "db.internal", "database_port": 5432,
-                "database_user": "travel_planner", "database_name": "travel_diary_dev",
+                "database_name": "travel_diary_dev",
+                "redis_host": "redis.internal", "redis_port": 6379,
+                "redis_iam_user": "loadtest-dev", "redis_replication_group_id": "kdt-travelplanner-dev-redis",
+                "region": "ap-northeast-2",
             })()
-            CLEANUP.psql(args, "super-secret-db-password", "SELECT 1")
+            CLEANUP.psql(args, "loadtest-db-user", "super-secret-db-password", "SELECT 1")
             self.assertNotIn("super-secret-db-password", captured["command"])
+            self.assertIn("loadtest-db-user", captured["command"])
             self.assertEqual(captured["env"]["PGPASSWORD"], "super-secret-db-password")
+
+            CLEANUP.redis(args, "PING")
+            self.assertNotIn("signed-iam-token", captured["command"])
+            self.assertIn("--user", captured["command"])
+            self.assertEqual(captured["env"]["REDISCLI_AUTH"], "signed-iam-token")
         finally:
             CLEANUP.run = original_run
+            CLEANUP.generate_redis_iam_auth_token = original_token_fn
 
 
 if __name__ == "__main__":

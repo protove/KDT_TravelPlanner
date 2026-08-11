@@ -99,7 +99,7 @@ data "aws_iam_policy_document" "load_runner_runtime" {
     }
   }
 
-  # seed/cleanup adapter(별도 Issue)가 DB/Redis 자격증명을 읽을 수 있도록
+  # seed/cleanup adapter가 DB 자격증명(전용 test Secret)을 읽을 수 있도록
   # 준비해두는 자리. secrets_arns가 비어 있으면 이 statement는 생성되지 않는다.
   dynamic "statement" {
     for_each = length(var.secrets_arns) > 0 ? [1] : []
@@ -107,6 +107,18 @@ data "aws_iam_policy_document" "load_runner_runtime" {
       sid       = "LoadTestSeedCredentialsRead"
       actions   = ["secretsmanager:GetSecretValue"]
       resources = var.secrets_arns
+    }
+  }
+
+  # Redis는 Secret이 아니라 ElastiCache RBAC + IAM 인증을 쓴다 (D-001-R1 후속
+  # Seed/Cleanup 최소권한). elasticache:Connect는 User ARN과 Replication
+  # Group ARN 둘 다에 대한 권한을 요구한다.
+  dynamic "statement" {
+    for_each = length(var.redis_iam_auth_arns) > 0 ? [1] : []
+    content {
+      sid       = "LoadTestRedisIamAuth"
+      actions   = ["elasticache:Connect"]
+      resources = var.redis_iam_auth_arns
     }
   }
 }

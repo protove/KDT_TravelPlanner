@@ -8,3 +8,9 @@ postgres_engine_version = "17.8"
 
 # Tags are rejected. Replace this example digest with an image that exists in the persistent dev ECR repository.
 backend_image_uri = "123456789012.dkr.ecr.ap-northeast-2.amazonaws.com/kdt-travelplanner-dev-backend@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
+# D-001-R1 후속 "Seed/Cleanup 최소권한": ARN of a dedicated, least-privilege
+# test-only DB Secret (JSON {"username":..,"password":..}), created by the
+# Infra owner separately (console or approved IaC) — never the RDS master
+# secret. See aws-load-test-handoff/decisions/DECISION_LOG.md.
+test_db_secret_arn = "arn:aws:secretsmanager:ap-northeast-2:123456789012:secret:kdt-travelplanner-dev/loadtest/db-XXXXXX"

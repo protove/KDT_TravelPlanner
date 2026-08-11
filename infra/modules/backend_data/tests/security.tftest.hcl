@@ -57,13 +57,37 @@ run "data_services_are_private_and_encrypted" {
       aws_elasticache_replication_group.this.at_rest_encryption_enabled &&
       aws_elasticache_replication_group.this.transit_encryption_enabled &&
       aws_elasticache_replication_group.this.transit_encryption_mode == "required" &&
-      aws_elasticache_replication_group.this.auth_token_update_strategy == "SET"
+      length(aws_elasticache_replication_group.this.user_group_ids) == 1
     )
-    error_message = "Redis must be a single encrypted and authenticated node."
+    error_message = "Redis must be a single encrypted node authenticated via the RBAC user group (D-001-R1 후속: auth_token replaced by user_group_ids)."
   }
 
   assert {
     condition     = aws_db_instance.this.skip_final_snapshot && !aws_db_instance.this.deletion_protection
     error_message = "The reproducible dev runtime must be destroyable without a final snapshot."
+  }
+
+  assert {
+    condition = (
+      aws_elasticache_user.default.user_name == "default" &&
+      aws_elasticache_user.default.authentication_mode[0].type == "password"
+    )
+    error_message = "The default Redis user must keep password authentication so the backend app's existing access is unaffected."
+  }
+
+  assert {
+    condition = (
+      aws_elasticache_user.load_test.authentication_mode[0].type == "iam" &&
+      aws_elasticache_user.load_test.access_string == "on ~* -@all +set +del"
+    )
+    error_message = "The load-test Redis RBAC user must authenticate via IAM (never a Secret) and be scoped to only SET/DEL (D-001-R1 후속 Seed/Cleanup 최소권한)."
+  }
+
+  assert {
+    condition = length(setsubtract(
+      [aws_elasticache_user.default.user_id, aws_elasticache_user.load_test.user_id],
+      aws_elasticache_user_group.this.user_ids,
+    )) == 0
+    error_message = "The user group must contain both the default and load-test Redis users."
   }
 }

@@ -75,7 +75,13 @@ variable "runner_security_group_id" {
 
 variable "secrets_arns" {
   type        = list(string)
-  description = "Secrets Manager ARNs the Runner may read for seed/cleanup credentials (e.g. database, Redis). Empty by default; the seed/cleanup adapter Issue wires actual ARNs in."
+  description = "Secrets Manager ARNs the Runner may read for seed/cleanup DB credentials. Empty by default. D-001-R1 후속 (Seed/Cleanup 최소권한): must be a dedicated test-only Secret ARN, never the RDS master secret. Redis no longer uses a Secret at all — see redis_iam_auth_arns."
+  default     = []
+}
+
+variable "redis_iam_auth_arns" {
+  type        = list(string)
+  description = "ARNs the Runner needs elasticache:Connect on for Redis RBAC IAM authentication: the load-test ElastiCache user ARN and the replication group ARN (both required together). Empty by default; the Seed/Cleanup Secret rework Issue wires actual ARNs in."
   default     = []
 }
 

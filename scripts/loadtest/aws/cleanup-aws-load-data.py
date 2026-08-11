@@ -25,6 +25,13 @@ deletes the two keys per credential recorded by seed-aws-load-data.py's
 omitted, Redis keys are left to expire on their own TTL
 (--refresh-ttl-ms at seed time, 4h by default) and this is logged, not
 treated as an error — the DB cleanup below is independent of the data file.
+
+Credential contract (same as seed-aws-load-data.py, D-001-R1 후속,
+aws-load-test-handoff/decisions/DECISION_LOG.md "Seed/Cleanup 최소권한"):
+--database-secret-arn is a dedicated test-only Secret, JSON
+{"username": "...", "password": "..."} — never the RDS master secret. Redis
+uses ElastiCache RBAC with IAM authentication (--redis-iam-user +
+--redis-replication-group-id), never the shared default-user AUTH secret.
 """
 
 from __future__ import annotations
@@ -49,6 +56,19 @@ class CleanupError(RuntimeError):
     """A sanitized cleanup or contract verification failure."""
 
 
+class SecretContractError(CleanupError):
+    """The Secrets Manager value did not match the expected {username,
+    password} test-credential contract. Distinct exit code (2)."""
+
+
+class CredentialFileError(CleanupError):
+    """--data-file was given but missing/unreadable/malformed. Distinct
+    exit code (3) so an operator can tell "Redis cleanup couldn't find its
+    input file" apart from "DB or Redis cleanup itself failed" (1) or "wrong
+    secret wired in" (2) — the DB cleanup above this in main() already
+    succeeded by the time this can happen."""
+
+
 def sql_literal(value: str) -> str:
     return "'" + value.replace("'", "''") + "'"
 
@@ -67,11 +87,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--database-host", required=True)
     parser.add_argument("--database-port", type=int, default=5432)
     parser.add_argument("--database-name", required=True)
-    parser.add_argument("--database-user", required=True)
-    parser.add_argument("--database-secret-arn", required=True)
-    parser.add_argument("--redis-host", default=None, help="Omit together with --redis-secret-arn to skip Redis cleanup entirely")
+    parser.add_argument("--database-secret-arn", required=True, help="Secrets Manager ARN of the dedicated test-only DB Secret, JSON {\"username\":..,\"password\":..} (never the RDS master secret)")
+    parser.add_argument("--redis-host", default=None, help="Omit together with --redis-iam-user/--redis-replication-group-id to skip Redis cleanup entirely")
     parser.add_argument("--redis-port", type=int, default=6379)
-    parser.add_argument("--redis-secret-arn", default=None)
+    parser.add_argument("--redis-iam-user", default=None, help="ElastiCache RBAC username this Runner authenticates as via IAM")
+    parser.add_argument("--redis-replication-group-id", default=None, help="ElastiCache replication group ID the IAM auth token is signed for")
     parser.add_argument("--data-file", type=Path, default=None, help="seed-aws-load-data.py's credential file; enables exact-match Redis key cleanup")
     parser.add_argument("--dry-run", action="store_true", help="Report how many synthetic users match, delete nothing")
     return parser.parse_args()
@@ -98,7 +118,9 @@ def verify_account(expected_account_id: str, region: str) -> None:
         raise CleanupError("observed AWS account does not match --expected-account-id; refusing to run")
 
 
-def read_secret_password(secret_arn: str, region: str) -> str:
+def read_secret_credential(secret_arn: str, region: str) -> tuple[str, str]:
+    """Returns (username, password) from a dedicated test-only Secret. Never
+    call this with an RDS master secret ARN."""
     completed = subprocess.run(
         [
             "aws", "secretsmanager", "get-secret-value",
@@ -113,14 +135,56 @@ def read_secret_password(secret_arn: str, region: str) -> str:
     try:
         payload = json.loads(raw)
     except json.JSONDecodeError as error:
-        raise CleanupError("Secrets Manager value is not valid JSON") from error
+        raise SecretContractError("Secrets Manager value is not valid JSON") from error
+    username = payload.get("username")
     password = payload.get("password")
+    if not isinstance(username, str) or not username:
+        raise SecretContractError("Secrets Manager value has no 'username' field (wrong secret? this must be a dedicated test-only credential)")
     if not isinstance(password, str) or not password:
-        raise CleanupError("Secrets Manager value has no 'password' field")
-    return password
+        raise SecretContractError("Secrets Manager value has no 'password' field")
+    return username, password
 
 
-def psql(args: argparse.Namespace, password: str, sql: str) -> str:
+def generate_redis_iam_auth_token(user_name: str, replication_group_id: str, region: str) -> str:
+    """See seed-aws-load-data.py's copy of this function for the full
+    explanation; duplicated rather than shared to match this repo's existing
+    convention of standalone seed/cleanup scripts (psql()/redis()/
+    verify_account() are already duplicated the same way)."""
+    try:
+        import botocore.session
+        from botocore.signers import RequestSigner
+    except ImportError as error:
+        raise CleanupError(
+            "botocore is required for Redis IAM authentication but is not installed "
+            "(infra/modules/load_test_runner/templates/runner-user-data.sh.tftpl should have pip-installed it)"
+        ) from error
+    session = botocore.session.get_session()
+    credentials = session.get_credentials()
+    if credentials is None:
+        raise CleanupError("no AWS credentials available to sign the Redis IAM auth token")
+    request_signer = RequestSigner(
+        service_id=session.get_service_model("elasticache").service_id,
+        region_name=region,
+        signing_name="elasticache",
+        signature_version="v4",
+        credentials=credentials,
+        event_emitter=session.get_component("event_emitter"),
+    )
+    url = request_signer.generate_presigned_url(
+        {
+            "method": "GET",
+            "url": f"https://{replication_group_id}/",
+            "body": {"Action": "connect", "User": user_name},
+            "context": {},
+        },
+        region_name=region,
+        expires_in=900,
+        operation_name="",
+    )
+    return url.removeprefix("https://")
+
+
+def psql(args: argparse.Namespace, username: str, password: str, sql: str) -> str:
     env = {**os.environ, "PGPASSWORD": password, "PGSSLMODE": "require"}
     return run(
         [
@@ -128,37 +192,38 @@ def psql(args: argparse.Namespace, password: str, sql: str) -> str:
             "-e", "PGPASSWORD", "-e", "PGSSLMODE",
             POSTGRES_CLIENT_IMAGE, "psql",
             "-h", args.database_host, "-p", str(args.database_port),
-            "-U", args.database_user, "-d", args.database_name,
+            "-U", username, "-d", args.database_name,
             "-v", "ON_ERROR_STOP=1", "-tA", "-c", sql,
         ],
         env=env,
     )
 
 
-def redis(args: argparse.Namespace, password: str, *arguments: str) -> str:
-    env = {**os.environ, "REDISCLI_AUTH": password}
+def redis(args: argparse.Namespace, *arguments: str) -> str:
+    auth_token = generate_redis_iam_auth_token(args.redis_iam_user, args.redis_replication_group_id, args.region)
+    env = {**os.environ, "REDISCLI_AUTH": auth_token}
     return run(
         [
             "docker", "run", "--rm", "--network", "host",
             "-e", "REDISCLI_AUTH",
             REDIS_CLIENT_IMAGE, "redis-cli",
             "-h", args.redis_host, "-p", str(args.redis_port),
-            "--tls", "--no-auth-warning", *arguments,
+            "--tls", "--no-auth-warning", "--user", args.redis_iam_user, *arguments,
         ],
         env=env,
     )
 
 
-def matching_user_count(args: argparse.Namespace, password: str, run_id: str) -> int:
+def matching_user_count(args: argparse.Namespace, username: str, password: str, run_id: str) -> int:
     result = psql(
-        args, password,
+        args, username, password,
         "SELECT count(*) FROM user_table WHERE provider = 'GOOGLE' AND provider_user_id LIKE "
         f"{sql_literal(like_pattern(run_id))}",
     ).strip()
     return int(result or "0")
 
 
-def delete_matching_rows(args: argparse.Namespace, password: str, run_id: str) -> None:
+def delete_matching_rows(args: argparse.Namespace, username: str, password: str, run_id: str) -> None:
     pattern = sql_literal(like_pattern(run_id))
     script = (
         "BEGIN; "
@@ -168,26 +233,29 @@ def delete_matching_rows(args: argparse.Namespace, password: str, run_id: str) -
         f"{pattern}; "
         "COMMIT;"
     )
-    psql(args, password, script)
+    psql(args, username, password, script)
 
 
-def cleanup_redis(args: argparse.Namespace, redis_password: str, run_id: str) -> int:
+def cleanup_redis(args: argparse.Namespace, run_id: str) -> int:
     path = args.data_file.resolve()
     if not path.exists():
-        raise CleanupError("--data-file does not exist")
-    payload = json.loads(path.read_text(encoding="utf-8"))
+        raise CredentialFileError("--data-file does not exist")
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as error:
+        raise CredentialFileError("--data-file is not valid JSON") from error
     if payload.get("runId") != run_id:
-        raise CleanupError("--data-file runId does not match --run-id; refusing to touch its Redis keys")
+        raise CredentialFileError("--data-file runId does not match --run-id; refusing to touch its Redis keys")
     deleted = 0
     for credential in payload.get("credentials", []):
         refresh_token = credential.get("refreshToken")
         family_id = credential.get("refreshFamilyId")
         if isinstance(refresh_token, str):
             token_hash = hashlib.sha256(refresh_token.encode("utf-8")).hexdigest()
-            redis(args, redis_password, "DEL", f"auth:refresh:token:{token_hash}")
+            redis(args, "DEL", f"auth:refresh:token:{token_hash}")
             deleted += 1
         if isinstance(family_id, str):
-            redis(args, redis_password, "DEL", f"auth:refresh:family:{family_id}")
+            redis(args, "DEL", f"auth:refresh:family:{family_id}")
             deleted += 1
     return deleted
 
@@ -196,13 +264,13 @@ def main() -> int:
     args = parse_args()
     if not RUN_ID_PATTERN.fullmatch(args.run_id):
         raise CleanupError("--run-id must be 1-40 chars of [A-Za-z0-9-]")
-    if bool(args.redis_host) != bool(args.redis_secret_arn):
-        raise CleanupError("--redis-host and --redis-secret-arn must be given together, or both omitted")
+    if bool(args.redis_host) != bool(args.redis_iam_user) or bool(args.redis_host) != bool(args.redis_replication_group_id):
+        raise CleanupError("--redis-host, --redis-iam-user, and --redis-replication-group-id must all be given together, or all omitted")
 
     verify_account(args.expected_account_id, args.region)
-    database_password = read_secret_password(args.database_secret_arn, args.region)
+    database_username, database_password = read_secret_credential(args.database_secret_arn, args.region)
 
-    count = matching_user_count(args, database_password, args.run_id)
+    count = matching_user_count(args, database_username, database_password, args.run_id)
     if count == 0:
         print("[cleanup] no synthetic data found for this run-id; nothing to do")
         return 0
@@ -211,16 +279,15 @@ def main() -> int:
         print(f"[cleanup] dry-run: {count} synthetic user(s) match this run-id; would be deleted")
         return 0
 
-    delete_matching_rows(args, database_password, args.run_id)
+    delete_matching_rows(args, database_username, database_password, args.run_id)
     print(f"[cleanup] deleted {count} synthetic user(s) and their owned travels/timeline items")
 
-    if not (args.redis_host and args.redis_secret_arn):
-        print("[cleanup] no --redis-host/--redis-secret-arn given; skipping Redis key cleanup (keys expire on their own TTL)")
+    if not (args.redis_host and args.redis_iam_user and args.redis_replication_group_id):
+        print("[cleanup] no --redis-host/--redis-iam-user/--redis-replication-group-id given; skipping Redis key cleanup (keys expire on their own TTL)")
     elif not args.data_file:
         print("[cleanup] no --data-file given; skipping Redis key cleanup (keys expire on their own TTL)")
     else:
-        redis_password = read_secret_password(args.redis_secret_arn, args.region)
-        redis_deleted = cleanup_redis(args, redis_password, args.run_id)
+        redis_deleted = cleanup_redis(args, args.run_id)
         print(f"[cleanup] deleted {redis_deleted} Redis key(s)")
 
     return 0
@@ -229,6 +296,12 @@ def main() -> int:
 if __name__ == "__main__":
     try:
         raise SystemExit(main())
+    except SecretContractError as error:
+        print(f"[cleanup] ERROR (secret contract): {error}", file=sys.stderr)
+        raise SystemExit(2)
+    except CredentialFileError as error:
+        print(f"[cleanup] ERROR (credential file): {error}", file=sys.stderr)
+        raise SystemExit(3)
     except CleanupError as error:
         print(f"[cleanup] ERROR: {error}", file=sys.stderr)
         raise SystemExit(1)
