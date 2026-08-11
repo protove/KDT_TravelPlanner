@@ -74,7 +74,16 @@ class OAuthLoginService(
 		if (profile.provider != provider) {
 			throw OAuthProviderException()
 		}
-		val user = userService.upsert(profile)
+
+		// 이슈 #237 — 탈퇴 이력이 있는 계정이면 upsert()가 WithdrawnOAuthAccountException을 던진다.
+		// 이걸 그대로 흘려보내면 ApiExceptionHandler가 500 JSON으로 응답하게 되는데,
+		// 이 엔드포인트는 브라우저가 직접 이동하는 리다이렉트 응답을 기대하므로
+		// access_denied 케이스와 동일하게 프론트로 302 리다이렉트해야 한다.
+		val user = try {
+			userService.upsert(profile)
+		} catch (exception: WithdrawnOAuthAccountException) {
+			return buildErrorRedirect(consumedState.frontendRedirectUrl, WITHDRAWN_ACCOUNT_ERROR)
+		}
 		val exchangeCode = exchangeCodeService.issue(requireNotNull(user.id))
 		return UriComponentsBuilder.fromUriString(consumedState.frontendRedirectUrl)
 			.queryParam("code", exchangeCode)
@@ -89,12 +98,18 @@ class OAuthLoginService(
 		stateCookie: String?,
 	): URI {
 		val consumedState = stateService.consume(state, stateCookie, provider)
-		return UriComponentsBuilder.fromUriString(consumedState.frontendRedirectUrl)
-			.queryParam(ERROR_QUERY_PARAMETER, ACCESS_DENIED_ERROR)
+		return buildErrorRedirect(consumedState.frontendRedirectUrl, ACCESS_DENIED_ERROR)
+	}
+
+	private fun buildErrorRedirect(
+		frontendRedirectUrl: String,
+		errorValue: String,
+	): URI =
+		UriComponentsBuilder.fromUriString(frontendRedirectUrl)
+			.queryParam(ERROR_QUERY_PARAMETER, errorValue)
 			.build()
 			.encode()
 			.toUri()
-	}
 
 	private fun resolveProvider(providerName: String): OAuthProvider =
 		OAuthProvider.entries.firstOrNull { it.name.equals(providerName, ignoreCase = true) }
@@ -106,6 +121,7 @@ class OAuthLoginService(
 	companion object {
 		private const val ERROR_QUERY_PARAMETER = "error"
 		private const val ACCESS_DENIED_ERROR = "access_denied"
+		private const val WITHDRAWN_ACCOUNT_ERROR = "withdrawn_account"
 	}
 }
 
