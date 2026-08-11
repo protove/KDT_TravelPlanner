@@ -10,6 +10,7 @@ locals {
     filemd5("${path.module}/../../../monitoring/ec2/datasources.yml"),
     filemd5("${path.module}/../../../monitoring/grafana/provisioning/dashboards/dashboards.yml"),
     filemd5("${path.module}/../../../monitoring/grafana/dashboards/backend-overview.json"),
+    filemd5("${path.module}/../../../monitoring/grafana/dashboards/aws-load-test.json"),
   ]))
 }
 
@@ -81,6 +82,18 @@ resource "aws_s3_object" "grafana_dashboard_backend_overview" {
   key    = "grafana/dashboards/backend-overview.json"
   source = "${path.module}/../../../monitoring/grafana/dashboards/backend-overview.json"
   etag   = filemd5("${path.module}/../../../monitoring/grafana/dashboards/backend-overview.json")
+}
+
+# Plan04 (aws-load-test-handoff/plans/04_GRAFANA_DASHBOARD_PLAN.md): B-01 evidence
+# dashboard. Its Prometheus panels reference k6 remote-write metric names that are
+# not yet verified against a live receiver (D-002 not approved/wired) — see the
+# dashboard JSON's own panel descriptions. CloudWatch/Loki/Spring-scrape panels use
+# already-provisioned datasources and work today.
+resource "aws_s3_object" "grafana_dashboard_aws_load_test" {
+  bucket = aws_s3_bucket.monitoring_config.id
+  key    = "grafana/dashboards/aws-load-test.json"
+  source = "${path.module}/../../../monitoring/grafana/dashboards/aws-load-test.json"
+  etag   = filemd5("${path.module}/../../../monitoring/grafana/dashboards/aws-load-test.json")
 }
 
 # ── Monitoring EC2 IAM 권한 ─────────────────────────────────────
@@ -192,6 +205,7 @@ resource "aws_instance" "monitoring" {
     aws_s3_object.grafana_datasources,
     aws_s3_object.grafana_dashboards_provisioning,
     aws_s3_object.grafana_dashboard_backend_overview,
+    aws_s3_object.grafana_dashboard_aws_load_test,
   ]
 
   tags = merge(var.tags, {

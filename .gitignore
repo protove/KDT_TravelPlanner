@@ -23,6 +23,7 @@ load-tests/k6/data/data.json
 evidence/load-tests/
 load-tests/**/__pycache__/
 scripts/loadtest/**/__pycache__/
+monitoring/**/__pycache__/
 
 # Local AWS B-01 orchestration evidence (uploaded to S3 by upload-aws-evidence.py, not committed)
 evidence/aws-load-tests/
