@@ -95,7 +95,13 @@ module "load_test_runner" {
   k6_image_reference       = var.k6_image_reference
   project_name             = var.project_name
   runner_security_group_id = module.runtime_security.load_runner_security_group_id
-  tags                     = local.common_tags
+  # #247 (seed/cleanup adapter): Runner reads the RDS master password and
+  # Redis AUTH token to seed/cleanup synthetic B-01 data directly.
+  secrets_arns = [
+    module.backend_data.database_master_secret_arn,
+    module.backend_data.redis_auth_secret_arn,
+  ]
+  tags = local.common_tags
 
   depends_on = [
     aws_route.app_default,
