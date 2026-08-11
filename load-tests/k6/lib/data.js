@@ -10,10 +10,33 @@ const credentials = new SharedArray('load-test-credentials', () => {
   return parsed.credentials;
 });
 
+if (__ENV.REQUIRE_UNIQUE_CREDENTIALS === '1') {
+  const requiredCredentialCount = Number(__ENV.REQUIRED_UNIQUE_CREDENTIAL_COUNT);
+  if (!Number.isInteger(requiredCredentialCount) || requiredCredentialCount < 1) {
+    throw new Error('REQUIRED_UNIQUE_CREDENTIAL_COUNT must be a positive integer');
+  }
+  if (credentials.length < requiredCredentialCount) {
+    throw new Error(
+      `seeded credential count ${credentials.length} is smaller than `
+      + `required unique credential count ${requiredCredentialCount}`,
+    );
+  }
+}
+
 const vuStates = {};
 
 export function vuCredential() {
-  return credentials[(exec.vu.idInTest - 1) % credentials.length];
+  const credentialIndex = exec.vu.idInTest - 1;
+  if (__ENV.REQUIRE_UNIQUE_CREDENTIALS === '1') {
+    if (credentialIndex >= credentials.length) {
+      throw new Error(
+        `AWS VU ${exec.vu.idInTest} has no unique credential; `
+        + `seeded credential count is ${credentials.length}`,
+      );
+    }
+    return credentials[credentialIndex];
+  }
+  return credentials[credentialIndex % credentials.length];
 }
 
 function vuState() {

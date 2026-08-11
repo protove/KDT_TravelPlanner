@@ -26,6 +26,7 @@ AWS_PROFILE_FILE="${AWS_PROFILE_FILE:?AWS_PROFILE_FILE is required}"
 DATA_FILE="${DATA_FILE:?DATA_FILE is required (seeded credential file for this run)}"
 REGION="${REGION:?REGION is required}"
 ENVIRONMENT="${ENVIRONMENT:?ENVIRONMENT is required}"
+EFFECTIVE_MAX_VUS="${EFFECTIVE_MAX_VUS:?EFFECTIVE_MAX_VUS is required}"
 
 declare -A SCENARIO_FILES=(
   [smoke]="smoke.js"
@@ -50,6 +51,31 @@ if [[ ! -f "$DATA_FILE" ]]; then
   echo "missing generated credential file: $DATA_FILE" >&2
   exit 2
 fi
+python3 - "$DATA_FILE" "$EFFECTIVE_MAX_VUS" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+data_file, required_raw = sys.argv[1:]
+try:
+    required = int(required_raw)
+except ValueError:
+    raise SystemExit("EFFECTIVE_MAX_VUS must be a positive integer")
+if required < 1 or str(required) != required_raw:
+    raise SystemExit("EFFECTIVE_MAX_VUS must be a positive integer")
+try:
+    payload = json.loads(Path(data_file).read_text(encoding="utf-8"))
+except (OSError, json.JSONDecodeError):
+    raise SystemExit("generated credential file is not valid readable JSON")
+credentials = payload.get("credentials") if isinstance(payload, dict) else None
+if not isinstance(credentials, list) or len(credentials) < required:
+    observed = len(credentials) if isinstance(credentials, list) else 0
+    raise SystemExit(
+        f"seeded credential count {observed} is smaller than effective maxVUs {required}; "
+        "AWS VUs may not share refresh credentials"
+    )
+print(f"[k6-aws] unique credential capacity verified: credentials={len(credentials)} maxVUs={required}")
+PY
 
 mkdir -p "$RUN_DIR"
 started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -121,6 +147,8 @@ docker run -i --name "$K6_CONTAINER_NAME" \
   -e BASE_URL="$BASE_URL" \
   -e AWS_PROFILE_FILE="/profiles/$(basename "$AWS_PROFILE_FILE")" \
   -e DATA_FILE=/data/data.json \
+  -e REQUIRE_UNIQUE_CREDENTIALS=1 \
+  -e REQUIRED_UNIQUE_CREDENTIAL_COUNT="$EFFECTIVE_MAX_VUS" \
   -e K6_IMAGE_DIGEST="$K6_IMAGE_DIGEST" \
   -e RATE="${RATE:-}" \
   -e START_RATE="${START_RATE:-}" \
@@ -130,7 +158,7 @@ docker run -i --name "$K6_CONTAINER_NAME" \
   -e DURATION="${DURATION:-}" \
   -e WARMUP="${WARMUP:-}" \
   -e PREALLOCATED_VUS="${PREALLOCATED_VUS:-20}" \
-  -e MAX_VUS="${MAX_VUS:-20}" \
+  -e MAX_VUS="${MAX_VUS:-}" \
   -e SPIKE_PEAK_MULTIPLIER="${SPIKE_PEAK_MULTIPLIER:-}" \
   -e SPIKE_HOLD="${SPIKE_HOLD:-}" \
   "$K6_IMAGE_DIGEST" run \

@@ -15,7 +15,9 @@ PROFILE = REPOSITORY_ROOT / "load-tests/aws/profiles/ec2-b01.json"
 DESTROY_GATE = REPOSITORY_ROOT / "scripts/loadtest/aws/check-destroy-gate.sh"
 LOAD_RUNNER_TERRAFORM = REPOSITORY_ROOT / "infra/modules/load_test_runner/main.tf"
 AWS_K6_RUNNER = REPOSITORY_ROOT / "scripts/loadtest/aws/run-k6-aws-scenario.sh"
+AWS_PHASE_RUNNER = REPOSITORY_ROOT / "scripts/loadtest/aws/run-aws-b01.sh"
 K6_ROOT = REPOSITORY_ROOT / "load-tests/k6"
+K6_DATA = K6_ROOT / "lib/data.js"
 
 
 class AwsOrchestrationContractTests(unittest.TestCase):
@@ -28,12 +30,23 @@ class AwsOrchestrationContractTests(unittest.TestCase):
         self.assertIn('-v "$K6_DIR:/scripts:ro"', runner_source)
         self.assertIn('-v "$DATA_FILE:/data/data.json:ro"', runner_source)
         self.assertIn('-e DATA_FILE=/data/data.json', runner_source)
+        self.assertIn('-e REQUIRE_UNIQUE_CREDENTIALS=1', runner_source)
+        self.assertIn('-e REQUIRED_UNIQUE_CREDENTIAL_COUNT="$EFFECTIVE_MAX_VUS"', runner_source)
+        self.assertIn('-e MAX_VUS="${MAX_VUS:-}"', runner_source)
+        self.assertIn('EFFECTIVE_MAX_VUS="${EFFECTIVE_MAX_VUS:?', runner_source)
+        self.assertIn('len(credentials) < required', runner_source)
         self.assertIn('--user 0:0', runner_source)
         self.assertIn('--cap-drop ALL', runner_source)
         self.assertIn('--security-opt no-new-privileges', runner_source)
         self.assertIn('"/scripts/aws/scenarios/$SCENARIO_FILE"', runner_source)
         self.assertIn('DATA_FILE="${DATA_FILE:?', runner_source)
         self.assertIn('export DATA_FILE', orchestrator_source)
+
+        data_source = K6_DATA.read_text(encoding="utf-8")
+        self.assertIn("REQUIRE_UNIQUE_CREDENTIALS === '1'", data_source)
+        self.assertIn("credentialIndex >= credentials.length", data_source)
+        self.assertIn("credentials[credentialIndex]", data_source)
+        self.assertIn("credentials.length < requiredCredentialCount", data_source)
 
         import_pattern = re.compile(r"from ['\"](\.\./[^'\"]+)['\"]")
         for scenario in sorted((K6_ROOT / "aws/scenarios").glob("*.js")):
@@ -81,6 +94,56 @@ class AwsOrchestrationContractTests(unittest.TestCase):
         self.assertIn("--base-url URL", result.stdout)
         self.assertIn("--runner-instance-type TYPE", result.stdout)
         self.assertIn("d005-record", result.stdout)
+        self.assertIn("Default: 80", result.stdout)
+
+    def test_phase_credential_refresh_and_profile_vu_defaults_are_preserved(self) -> None:
+        orchestrator_source = SCRIPT.read_text(encoding="utf-8")
+        phase_runner_source = AWS_PHASE_RUNNER.read_text(encoding="utf-8")
+
+        self.assertIn("USERS=80", orchestrator_source)
+        self.assertIn('seed_credentials\n  export REPOSITORY_ROOT', orchestrator_source)
+        self.assertIn('validate_phase_credential_capacity "$phase"', orchestrator_source)
+        self.assertIn('configure_phase_max_vus ramp "${RAMP_MAX_VUS:-}"', phase_runner_source)
+        self.assertIn('configure_phase_max_vus baseline "${BASELINE_MAX_VUS:-}"', phase_runner_source)
+        self.assertIn('configure_phase_max_vus spike "${SPIKE_MAX_VUS:-}"', phase_runner_source)
+        self.assertIn('profile limits.maxVUs', phase_runner_source)
+        self.assertNotIn('${RAMP_MAX_VUS:-$MAX_VUS}', phase_runner_source)
+        self.assertNotIn('${BASELINE_MAX_VUS:-$MAX_VUS}', phase_runner_source)
+        self.assertNotIn('${SPIKE_MAX_VUS:-$MAX_VUS}', phase_runner_source)
+
+    def test_ramp_rejects_operator_ceiling_below_profile_default(self) -> None:
+        result = subprocess.run(
+            [
+                "bash", str(SCRIPT), "ramp", "--dry-run",
+                "--region", "ap-northeast-2", "--environment", "dev",
+                "--expected-account-id", "111111111111",
+                "--alb-arn", "arn:aws:elasticloadbalancing:ap-northeast-2:111111111111:loadbalancer/app/example/1234567890abcdef",
+                "--base-url", "https://b01.example.com",
+                "--runner-id", "i-0123456789abcdef0",
+                "--max-rate", "30", "--max-vus", "20",
+                "--run-id", "aws-b01-capacity-test", "--profile", str(PROFILE),
+            ],
+            cwd=REPOSITORY_ROOT, capture_output=True, text=True, check=False,
+        )
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("exceeds operator --max-vus ceiling", result.stderr)
+
+    def test_ramp_rejects_seed_count_below_effective_max_vus(self) -> None:
+        result = subprocess.run(
+            [
+                "bash", str(SCRIPT), "ramp", "--dry-run",
+                "--region", "ap-northeast-2", "--environment", "dev",
+                "--expected-account-id", "111111111111",
+                "--alb-arn", "arn:aws:elasticloadbalancing:ap-northeast-2:111111111111:loadbalancer/app/example/1234567890abcdef",
+                "--base-url", "https://b01.example.com",
+                "--runner-id", "i-0123456789abcdef0",
+                "--max-rate", "30", "--max-vus", "100", "--users", "59",
+                "--run-id", "aws-b01-capacity-test", "--profile", str(PROFILE),
+            ],
+            cwd=REPOSITORY_ROOT, capture_output=True, text=True, check=False,
+        )
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("AWS VUs may not share refresh credentials", result.stderr)
 
     def test_alb_dns_base_url_is_rejected_before_aws_calls(self) -> None:
         result = subprocess.run(

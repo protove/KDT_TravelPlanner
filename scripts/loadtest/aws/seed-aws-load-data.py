@@ -66,6 +66,15 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 from urllib.parse import urlencode
 
+SCRIPT_DIRECTORY = Path(__file__).resolve().parent
+if str(SCRIPT_DIRECTORY) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIRECTORY))
+
+from refresh_credential_lifecycle import (  # noqa: E402
+    CredentialLifecycleError,
+    revoke_credential_file,
+)
+
 DEFAULT_REFRESH_TTL_MS = 4 * 60 * 60 * 1000  # 4h — short-lived by design; this is a shared, persistent store
 RUN_ID_PATTERN = re.compile(r"^[A-Za-z0-9-]{1,40}$")
 ACCOUNT_ID_PATTERN = re.compile(r"^\d{12}$")
@@ -120,7 +129,7 @@ def synthetic_nickname(run_id: str, index: int) -> str:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--run-id", required=True, help="RUN_METADATA_CONTRACT runId; tags every row this run creates")
-    parser.add_argument("--users", type=int, default=20)
+    parser.add_argument("--users", type=int, default=80)
     parser.add_argument("--expected-account-id", required=True, help="12-digit AWS account ID this run is approved to target")
     parser.add_argument("--region", required=True)
     parser.add_argument("--database-host", required=True)
@@ -374,6 +383,26 @@ class AwsSeed:
             raise SeedError(f"refresh contract failed with status {status}")
         return access_token, rotated  # type: ignore[return-value]
 
+    def refresh_status(self, token: str) -> int:
+        request = Request(f"{self.base_url}/api/v1/auth/token/refresh", method="POST")
+        request.add_header("Cookie", f"refresh_token={token}")
+        try:
+            with urlopen(request, timeout=15) as response:
+                return response.status
+        except HTTPError as error:
+            return error.code
+        except URLError as error:
+            raise SeedError("refresh-token family revocation request failed") from error
+
+    def delete_exact_refresh_keys(self, keys: list[str]) -> int:
+        if not keys:
+            return 0
+        result = self.redis("DEL", *keys).strip()
+        try:
+            return int(result or "0")
+        except ValueError as error:
+            raise SeedError("Redis DEL returned a non-integer result") from error
+
     def create_travel(self, access_token: str, index: int) -> str:
         status, body, _ = self.api(
             "POST", "/travels", token=access_token,
@@ -465,6 +494,25 @@ def seed_all(runtime: AwsSeed, args: argparse.Namespace) -> None:
     print(f"[seed] complete: {len(credentials)} synthetic users seeded, {skipped} already present")
 
 
+def revoke_previous_credentials(runtime: AwsSeed, args: argparse.Namespace) -> None:
+    if not args.data_file.exists():
+        return
+    try:
+        result = revoke_credential_file(
+            args.data_file,
+            args.run_id,
+            runtime.refresh_status,
+            runtime.delete_exact_refresh_keys,
+        )
+    except CredentialLifecycleError as error:
+        raise SeedError(str(error)) from error
+    print(
+        "[seed] revoked "
+        f"{result.credential_count} previous refresh-token family/families; "
+        f"deleted {result.redis_deleted_count}/{result.redis_key_count} exact Redis key(s)"
+    )
+
+
 def main() -> int:
     args = parse_args()
     if not RUN_ID_PATTERN.fullmatch(args.run_id):
@@ -475,6 +523,7 @@ def main() -> int:
     verify_account(args.expected_account_id, args.region)
     database_username, database_password = read_secret_credential(args.database_secret_arn, args.region)
     runtime = AwsSeed(args, database_username, database_password)
+    revoke_previous_credentials(runtime, args)
     seed_all(runtime, args)
     return 0
 

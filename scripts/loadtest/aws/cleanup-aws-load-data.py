@@ -18,11 +18,12 @@ created. Every AWS command this script runs is gated by the same
 --expected-account-id check as seed-aws-load-data.py
 (aws-load-test-handoff/contracts/RUN_METADATA_CONTRACT.md).
 
-Redis cleanup is best-effort and exact-match only: it never SCANs the
-keyspace (that would risk touching real users' active sessions). It only
-deletes the two keys per credential recorded by seed-aws-load-data.py's
---data-file, computed from values already in that file. If --data-file is
-omitted, Redis keys are left to expire on their own TTL
+Redis cleanup is exact-match only: it never reads or SCANs the keyspace
+(that would risk touching real users' active sessions). It first uses the
+backend refresh endpoint's reuse detection to revoke each recorded family,
+then deletes the exact token, family, and used-token keys computable from
+seed-aws-load-data.py's --data-file. If --data-file is omitted, Redis keys
+are left to expire on their own TTL
 (--refresh-ttl-ms at seed time, 4h by default) and this is logged, not
 treated as an error — the DB cleanup below is independent of the data file.
 
@@ -37,7 +38,6 @@ uses ElastiCache RBAC with IAM authentication (--redis-iam-user +
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
 import re
@@ -45,15 +45,27 @@ import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
+from urllib.request import Request, urlopen
+
+SCRIPT_DIRECTORY = Path(__file__).resolve().parent
+if str(SCRIPT_DIRECTORY) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIRECTORY))
+
+from refresh_credential_lifecycle import (  # noqa: E402
+    CredentialLifecycleError,
+    redis_refresh_family_key as lifecycle_redis_refresh_family_key,
+    redis_refresh_token_key as lifecycle_redis_refresh_token_key,
+    redis_used_refresh_token_key as lifecycle_redis_used_refresh_token_key,
+    revoke_credential_file,
+)
 
 RUN_ID_PATTERN = re.compile(r"^[A-Za-z0-9-]{1,40}$")
 ACCOUNT_ID_PATTERN = re.compile(r"^\d{12}$")
 POSTGRES_CLIENT_IMAGE = "postgres:17-alpine"
 REDIS_CLIENT_IMAGE = "redis:7-alpine"
 PROVIDER_USER_ID_PREFIX = "loadtest-aws-"
-TOKEN_PATTERN = re.compile(r"^[A-Za-z0-9_-]{43}$")
-TOKEN_HASH_PATTERN = re.compile(r"^[a-f0-9]{64}$")
 
 
 class CleanupError(RuntimeError):
@@ -97,6 +109,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--redis-iam-user", default=None, help="ElastiCache RBAC username this Runner authenticates as via IAM")
     parser.add_argument("--redis-replication-group-id", default=None, help="ElastiCache replication group ID the IAM auth token is signed for")
     parser.add_argument("--data-file", type=Path, default=None, help="seed-aws-load-data.py's credential file; enables exact-match Redis key cleanup")
+    parser.add_argument("--base-url", default=None, help="Approved backend HTTPS base URL; required with Redis + --data-file so active refresh-token families can be revoked")
     parser.add_argument("--dry-run", action="store_true", help="Report how many synthetic users match, delete nothing")
     parser.add_argument("--result-file", type=Path, default=None, help="Write a structured cleanup-result.json here (orchestrate-aws-b01.sh's cleanup-result record, TEAM_MEMBER_B01_ACTION_REQUEST.md §4.2)")
     return parser.parse_args()
@@ -184,15 +197,24 @@ def generate_redis_iam_auth_token(user_name: str, replication_group_id: str, reg
 
 
 def redis_refresh_token_key(token_hash: str) -> str:
-    if not TOKEN_HASH_PATTERN.fullmatch(token_hash):
-        raise CredentialFileError("refusing to address a Redis key outside the refresh-token namespace")
-    return f"auth:refresh:token:{token_hash}"
+    try:
+        return lifecycle_redis_refresh_token_key(token_hash)
+    except CredentialLifecycleError as error:
+        raise CredentialFileError(str(error)) from error
 
 
 def redis_refresh_family_key(family_id: str) -> str:
-    if not TOKEN_PATTERN.fullmatch(family_id):
-        raise CredentialFileError("refusing to address a Redis key outside the refresh-family namespace")
-    return f"auth:refresh:family:{family_id}"
+    try:
+        return lifecycle_redis_refresh_family_key(family_id)
+    except CredentialLifecycleError as error:
+        raise CredentialFileError(str(error)) from error
+
+
+def redis_used_refresh_token_key(token_hash: str) -> str:
+    try:
+        return lifecycle_redis_used_refresh_token_key(token_hash)
+    except CredentialLifecycleError as error:
+        raise CredentialFileError(str(error)) from error
 
 
 def psql(args: argparse.Namespace, username: str, password: str, sql: str) -> str:
@@ -247,28 +269,39 @@ def delete_matching_rows(args: argparse.Namespace, username: str, password: str,
     psql(args, username, password, script)
 
 
-def cleanup_redis(args: argparse.Namespace, run_id: str) -> int:
-    path = args.data_file.resolve()
-    if not path.exists():
-        raise CredentialFileError("--data-file does not exist")
+def refresh_status(args: argparse.Namespace, refresh_token: str) -> int:
+    request = Request(f"{args.base_url.rstrip('/')}/api/v1/auth/token/refresh", method="POST")
+    request.add_header("Cookie", f"refresh_token={refresh_token}")
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as error:
-        raise CredentialFileError("--data-file is not valid JSON") from error
-    if payload.get("runId") != run_id:
-        raise CredentialFileError("--data-file runId does not match --run-id; refusing to touch its Redis keys")
-    deleted = 0
-    for credential in payload.get("credentials", []):
-        refresh_token = credential.get("refreshToken")
-        family_id = credential.get("refreshFamilyId")
-        if isinstance(refresh_token, str) and TOKEN_PATTERN.fullmatch(refresh_token):
-            token_hash = hashlib.sha256(refresh_token.encode("utf-8")).hexdigest()
-            redis(args, "DEL", redis_refresh_token_key(token_hash))
-            deleted += 1
-        if isinstance(family_id, str) and TOKEN_PATTERN.fullmatch(family_id):
-            redis(args, "DEL", redis_refresh_family_key(family_id))
-            deleted += 1
-    return deleted
+        with urlopen(request, timeout=15) as response:
+            return response.status
+    except HTTPError as error:
+        return error.code
+    except URLError as error:
+        raise CleanupError("refresh-token family revocation request failed") from error
+
+
+def delete_exact_refresh_keys(args: argparse.Namespace, keys: list[str]) -> int:
+    if not keys:
+        return 0
+    result = redis(args, "DEL", *keys).strip()
+    try:
+        return int(result or "0")
+    except ValueError as error:
+        raise CleanupError("Redis DEL returned a non-integer result") from error
+
+
+def cleanup_redis(args: argparse.Namespace, run_id: str) -> tuple[int, int, int]:
+    try:
+        result = revoke_credential_file(
+            args.data_file,
+            run_id,
+            lambda token: refresh_status(args, token),
+            lambda keys: delete_exact_refresh_keys(args, list(keys)),
+        )
+    except CredentialLifecycleError as error:
+        raise CredentialFileError(str(error)) from error
+    return result.credential_count, result.redis_deleted_count, result.redis_key_count
 
 
 def main() -> int:
@@ -277,19 +310,13 @@ def main() -> int:
         raise CleanupError("--run-id must be 1-40 chars of [A-Za-z0-9-]")
     if bool(args.redis_host) != bool(args.redis_iam_user) or bool(args.redis_host) != bool(args.redis_replication_group_id):
         raise CleanupError("--redis-host, --redis-iam-user, and --redis-replication-group-id must all be given together, or all omitted")
+    if args.redis_host and args.data_file and not args.base_url:
+        raise CleanupError("--base-url is required when Redis cleanup uses --data-file")
 
     verify_account(args.expected_account_id, args.region)
     database_username, database_password = read_secret_credential(args.database_secret_arn, args.region)
 
     count = matching_user_count(args, database_username, database_password, args.run_id)
-    if count == 0:
-        print("[cleanup] no synthetic data found for this run-id; nothing to do")
-        write_result(args.result_file, {
-            "runId": args.run_id, "dryRun": args.dry_run, "matchedUserCount": 0,
-            "dbDeleted": False, "redisKeysDeleted": None, "redisSkippedReason": "no-matching-data",
-        })
-        return 0
-
     if args.dry_run:
         print(f"[cleanup] dry-run: {count} synthetic user(s) match this run-id; would be deleted")
         write_result(args.result_file, {
@@ -298,24 +325,34 @@ def main() -> int:
         })
         return 0
 
-    delete_matching_rows(args, database_username, database_password, args.run_id)
-    print(f"[cleanup] deleted {count} synthetic user(s) and their owned travels/timeline items")
-
     redis_deleted = None
+    redis_exact_key_count = None
+    refresh_family_count = None
     redis_skipped_reason = None
     if not (args.redis_host and args.redis_iam_user and args.redis_replication_group_id):
-        redis_skipped_reason = "no-redis-args"
+        redis_skipped_reason = "no-matching-data" if count == 0 else "no-redis-args"
         print("[cleanup] no --redis-host/--redis-iam-user/--redis-replication-group-id given; skipping Redis key cleanup (keys expire on their own TTL)")
     elif not args.data_file:
         redis_skipped_reason = "no-data-file"
         print("[cleanup] no --data-file given; skipping Redis key cleanup (keys expire on their own TTL)")
     else:
-        redis_deleted = cleanup_redis(args, args.run_id)
-        print(f"[cleanup] deleted {redis_deleted} Redis key(s)")
+        refresh_family_count, redis_deleted, redis_exact_key_count = cleanup_redis(args, args.run_id)
+        print(
+            f"[cleanup] revoked {refresh_family_count} refresh-token family/families; "
+            f"deleted {redis_deleted}/{redis_exact_key_count} exact Redis key(s)"
+        )
+
+    if count == 0:
+        print("[cleanup] no synthetic database data found for this run-id")
+    else:
+        delete_matching_rows(args, database_username, database_password, args.run_id)
+        print(f"[cleanup] deleted {count} synthetic user(s) and their owned travels/timeline items")
 
     write_result(args.result_file, {
         "runId": args.run_id, "dryRun": False, "matchedUserCount": count,
-        "dbDeleted": True, "redisKeysDeleted": redis_deleted, "redisSkippedReason": redis_skipped_reason,
+        "dbDeleted": count > 0, "refreshFamiliesRevoked": refresh_family_count,
+        "redisKeysDeleted": redis_deleted, "redisExactKeyCount": redis_exact_key_count,
+        "redisSkippedReason": redis_skipped_reason,
     })
     return 0
 
