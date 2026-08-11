@@ -523,7 +523,7 @@ target_stage() {
     backend_asg_name=""
     asg_json='{"note":"dry-run"}'
   else
-    backend_target_ids_text="$(python3 -c 'import json,sys; print("\\n".join(target.get("Target", {}).get("Id", "") for target in json.loads(sys.argv[1]).get("TargetHealthDescriptions", []) if target.get("TargetHealth", {}).get("State") == "healthy"))' "$target_health_json")"
+    backend_target_ids_text="$(python3 -c 'import json,sys; print("\n".join(target.get("Target", {}).get("Id", "") for target in json.loads(sys.argv[1]).get("TargetHealthDescriptions", []) if target.get("TargetHealth", {}).get("State") == "healthy"))' "$target_health_json")"
     mapfile -t backend_target_ids <<<"$backend_target_ids_text"
     if [[ "${#backend_target_ids[@]}" -eq 0 ]]; then
       echo "ALB target group has no healthy backend target" >&2
