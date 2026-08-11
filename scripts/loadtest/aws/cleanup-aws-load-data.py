@@ -45,12 +45,15 @@ import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import urlencode
 
 RUN_ID_PATTERN = re.compile(r"^[A-Za-z0-9-]{1,40}$")
 ACCOUNT_ID_PATTERN = re.compile(r"^\d{12}$")
 POSTGRES_CLIENT_IMAGE = "postgres:17-alpine"
 REDIS_CLIENT_IMAGE = "redis:7-alpine"
 PROVIDER_USER_ID_PREFIX = "loadtest-aws-"
+TOKEN_PATTERN = re.compile(r"^[A-Za-z0-9_-]{43}$")
+TOKEN_HASH_PATTERN = re.compile(r"^[a-f0-9]{64}$")
 
 
 class CleanupError(RuntimeError):
@@ -163,7 +166,8 @@ def generate_redis_iam_auth_token(user_name: str, replication_group_id: str, reg
     verify_account() are already duplicated the same way)."""
     try:
         import botocore.session
-        from botocore.signers import RequestSigner
+        from botocore.auth import SigV4QueryAuth
+        from botocore.awsrequest import AWSRequest
     except ImportError as error:
         raise CleanupError(
             "botocore is required for Redis IAM authentication but is not installed "
@@ -173,26 +177,22 @@ def generate_redis_iam_auth_token(user_name: str, replication_group_id: str, reg
     credentials = session.get_credentials()
     if credentials is None:
         raise CleanupError("no AWS credentials available to sign the Redis IAM auth token")
-    request_signer = RequestSigner(
-        service_id=session.get_service_model("elasticache").service_id,
-        region_name=region,
-        signing_name="elasticache",
-        signature_version="v4",
-        credentials=credentials,
-        event_emitter=session.get_component("event_emitter"),
-    )
-    url = request_signer.generate_presigned_url(
-        {
-            "method": "GET",
-            "url": f"https://{replication_group_id}/",
-            "body": {"Action": "connect", "User": user_name},
-            "context": {},
-        },
-        region_name=region,
-        expires_in=900,
-        operation_name="",
-    )
-    return url.removeprefix("https://")
+    query = urlencode({"Action": "connect", "User": user_name})
+    request = AWSRequest(method="GET", url=f"https://{replication_group_id}/?{query}")
+    SigV4QueryAuth(credentials, "elasticache", region, expires=900).add_auth(request)
+    return request.url.removeprefix("https://")
+
+
+def redis_refresh_token_key(token_hash: str) -> str:
+    if not TOKEN_HASH_PATTERN.fullmatch(token_hash):
+        raise CredentialFileError("refusing to address a Redis key outside the refresh-token namespace")
+    return f"auth:refresh:token:{token_hash}"
+
+
+def redis_refresh_family_key(family_id: str) -> str:
+    if not TOKEN_PATTERN.fullmatch(family_id):
+        raise CredentialFileError("refusing to address a Redis key outside the refresh-family namespace")
+    return f"auth:refresh:family:{family_id}"
 
 
 def psql(args: argparse.Namespace, username: str, password: str, sql: str) -> str:
@@ -261,12 +261,12 @@ def cleanup_redis(args: argparse.Namespace, run_id: str) -> int:
     for credential in payload.get("credentials", []):
         refresh_token = credential.get("refreshToken")
         family_id = credential.get("refreshFamilyId")
-        if isinstance(refresh_token, str):
+        if isinstance(refresh_token, str) and TOKEN_PATTERN.fullmatch(refresh_token):
             token_hash = hashlib.sha256(refresh_token.encode("utf-8")).hexdigest()
-            redis(args, "DEL", f"auth:refresh:token:{token_hash}")
+            redis(args, "DEL", redis_refresh_token_key(token_hash))
             deleted += 1
-        if isinstance(family_id, str):
-            redis(args, "DEL", f"auth:refresh:family:{family_id}")
+        if isinstance(family_id, str) and TOKEN_PATTERN.fullmatch(family_id):
+            redis(args, "DEL", redis_refresh_family_key(family_id))
             deleted += 1
     return deleted
 

@@ -45,6 +45,11 @@ variable "instance_type" {
     shows a bottleneck. t3.micro is a Smoke-only choice, not for Ramp/Baseline.
   EOT
   default     = "t3.small"
+
+  validation {
+    condition     = can(regex("^t3\\.[a-z0-9]+$", var.instance_type))
+    error_message = "instance_type must be a t3 family instance type."
+  }
 }
 
 variable "k6_image_reference" {
@@ -54,6 +59,38 @@ variable "k6_image_reference" {
   validation {
     condition     = can(regex("^grafana/k6:[0-9]+\\.[0-9]+\\.[0-9]+@sha256:[0-9a-f]{64}$", var.k6_image_reference))
     error_message = "k6_image_reference must be grafana/k6 with an exact X.Y.Z tag pinned by @sha256 digest."
+  }
+}
+
+variable "source_repository_url" {
+  type        = string
+  description = "Reviewed public repository URL containing the load-test scripts and k6 workloads."
+  default     = "https://github.com/protove/KDT_TravelPlanner.git"
+
+  validation {
+    condition     = var.source_repository_url == "https://github.com/protove/KDT_TravelPlanner.git"
+    error_message = "source_repository_url must remain the reviewed KDT_TravelPlanner repository."
+  }
+}
+
+variable "source_commit_sha" {
+  type        = string
+  description = "Exact 40-hex commit SHA the Runner must checkout before executing a load test."
+
+  validation {
+    condition     = can(regex("^[0-9a-f]{40}$", var.source_commit_sha))
+    error_message = "source_commit_sha must be an exact 40-character lowercase hexadecimal commit SHA."
+  }
+}
+
+variable "botocore_version" {
+  type        = string
+  description = "Exact botocore version installed for the Redis IAM SigV4 signer."
+  default     = "1.43.68"
+
+  validation {
+    condition     = can(regex("^[0-9]+\\.[0-9]+\\.[0-9]+$", var.botocore_version))
+    error_message = "botocore_version must be a pinned semantic version."
   }
 }
 

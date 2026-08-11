@@ -244,6 +244,43 @@ class MainIntegrationTest(unittest.TestCase):
             finally:
                 sys.argv = original_argv
 
+    def test_main_allows_post_retirement_local_scan_without_data_file(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "metadata.json").write_text('{"runId": "aws-b01-20260809-001"}', encoding="utf-8")
+
+            import sys
+            original_argv = sys.argv
+            sys.argv = [
+                "build-evidence-manifest.py",
+                "--evidence-root", str(root),
+                "--run-id", "aws-b01-20260809-001",
+            ]
+            try:
+                exit_code = MANIFEST.main()
+            finally:
+                sys.argv = original_argv
+
+            self.assertEqual(exit_code, 0)
+            self.assertTrue((root / "manifest.json").exists())
+
+    def test_require_png_rejects_an_incomplete_capture(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            import sys
+            original_argv = sys.argv
+            sys.argv = [
+                "build-evidence-manifest.py",
+                "--evidence-root", str(root),
+                "--run-id", "aws-b01-20260809-001",
+                "--require-png",
+            ]
+            try:
+                with self.assertRaises(MANIFEST.ManifestError):
+                    MANIFEST.main()
+            finally:
+                sys.argv = original_argv
+
 
 if __name__ == "__main__":
     unittest.main()

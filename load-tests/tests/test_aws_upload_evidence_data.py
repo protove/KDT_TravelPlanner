@@ -159,6 +159,29 @@ class SafetyScanTest(unittest.TestCase):
         self.assertTrue(callable(module.scan))
 
 
+class CredentialRetirementTest(unittest.TestCase):
+    def test_raw_data_file_is_deleted_and_retirement_report_written(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            data_file = root / "data.json"
+            data_file.write_text('{"credentials": []}', encoding="utf-8")
+
+            report = UPLOAD.retire_credential_file(root, data_file)
+
+            self.assertFalse(data_file.exists())
+            self.assertEqual(report.name, "credential-retirement.json")
+            self.assertEqual(json.loads(report.read_text(encoding="utf-8"))["status"], "retired")
+
+    def test_retirement_rejects_a_file_outside_evidence_root(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "evidence"
+            root.mkdir()
+            outside = Path(directory) / "data.json"
+            outside.write_text("{}", encoding="utf-8")
+            with self.assertRaises(UPLOAD.UploadError):
+                UPLOAD.retire_credential_file(root, outside)
+
+
 class UploadFileTest(unittest.TestCase):
     def test_raises_on_checksum_mismatch(self):
         original_run = UPLOAD.run

@@ -13,6 +13,11 @@ output "database_name" {
   value       = aws_db_instance.this.db_name
 }
 
+output "database_identifier" {
+  description = "RDS DB instance identifier used by CloudWatch dimensions."
+  value       = aws_db_instance.this.identifier
+}
+
 output "database_port" {
   description = "RDS PostgreSQL port."
   value       = aws_db_instance.this.port
@@ -31,6 +36,16 @@ output "redis_primary_endpoint" {
 output "redis_port" {
   description = "Redis TLS port."
   value       = aws_elasticache_replication_group.this.port
+}
+
+output "redis_replication_group_id" {
+  description = "ElastiCache replication group ID used by IAM signing and CloudWatch dimension resolution."
+  value       = aws_elasticache_replication_group.this.id
+}
+
+output "redis_member_cluster_ids" {
+  description = "ElastiCache member cluster IDs available for node-level CloudWatch dimensions."
+  value       = aws_elasticache_replication_group.this.member_clusters
 }
 
 output "redis_load_test_user_name" {

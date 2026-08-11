@@ -162,6 +162,17 @@ class ExtractPanelQueriesTest(unittest.TestCase):
     def test_empty_panels_list_yields_no_queries(self):
         self.assertEqual(EXPORT.extract_panel_queries({"dashboard": {"panels": []}}), [])
 
+    def test_cloudwatch_dimension_variables_resolve_from_target_contract(self):
+        payload = json.loads(json.dumps(SAMPLE_DASHBOARD_PAYLOAD))
+        payload["dashboard"]["panels"][-1]["targets"][0]["dimensions"] = {"LoadBalancer": "$alb_dimension"}
+        queries = EXPORT.extract_panel_queries(payload, {"albDimension": "app/example/abc"})
+        cloudwatch = next(q for q in queries if q["panelId"] == 7)
+        self.assertEqual(cloudwatch["cloudwatch"]["dimensions"], {"LoadBalancer": "app/example/abc"})
+
+    def test_cloudwatch_empty_dimensions_are_rejected_for_live_export(self):
+        with self.assertRaises(EXPORT.ExportError):
+            EXPORT.extract_panel_queries(SAMPLE_DASHBOARD_PAYLOAD, {})
+
 
 class CollectPanelQueriesTest(unittest.TestCase):
     def test_writes_one_file_per_query_and_counts_success_and_failure(self):

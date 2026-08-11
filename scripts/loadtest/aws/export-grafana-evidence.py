@@ -48,6 +48,13 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 QUERYABLE_DATASOURCE_TYPES = {"prometheus", "loki", "cloudwatch"}
+CLOUDWATCH_DIMENSION_VARIABLES = {
+    "alb_dimension": "albDimension",
+    "target_group_dimension": "targetGroupDimension",
+    "autoscaling_group_name": "autoScalingGroupName",
+    "db_instance_identifier": "dbInstanceIdentifier",
+    "cache_cluster_id": "cacheClusterId",
+}
 
 
 class ExportError(RuntimeError):
@@ -134,7 +141,41 @@ def fetch_annotations(grafana_url: str, auth_header: str, run_id: str, from_ms: 
     return json.loads(grafana_request(url, auth_header))
 
 
-def extract_panel_queries(dashboard_payload: dict) -> list[dict]:
+def load_resource_dimensions(evidence_root: Path) -> dict:
+    """Load the non-secret CloudWatch dimension contract written by target_stage."""
+    path = evidence_root / "aws" / "resource-dimensions.json"
+    if not path.exists():
+        raise ExportError("aws/resource-dimensions.json is missing; target validation must resolve CloudWatch resources before Grafana export")
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as error:
+        raise ExportError("aws/resource-dimensions.json is not valid JSON") from error
+    return payload
+
+
+def resolve_cloudwatch_dimensions(dimensions: dict, resource_dimensions: dict | None) -> dict:
+    """Resolve dashboard `$variable` dimensions to exact AWS identifiers."""
+    if resource_dimensions is None:
+        return dimensions or {}
+    if not dimensions:
+        raise ExportError("a CloudWatch panel has empty dimensions; refusing an unscoped metric query")
+    resolved = {}
+    for name, value in dimensions.items():
+        if isinstance(value, str) and value.startswith("$"):
+            variable_name = value[1:]
+            resource_key = CLOUDWATCH_DIMENSION_VARIABLES.get(variable_name)
+            if resource_key is None:
+                raise ExportError(f"unknown CloudWatch dashboard dimension variable: {variable_name}")
+            value = resource_dimensions.get(resource_key)
+            if not value:
+                raise ExportError(f"CloudWatch dimension {variable_name} is missing from aws/resource-dimensions.json")
+        if not isinstance(value, str) or not value:
+            raise ExportError(f"CloudWatch dimension {name} is empty")
+        resolved[name] = value
+    return resolved
+
+
+def extract_panel_queries(dashboard_payload: dict, resource_dimensions: dict | None = None) -> list[dict]:
     """Pure/offline: derive one collectible query per panel target from a
     fetched (or test-supplied) Grafana dashboard API payload. No network
     calls — safe to unit test without mocking HTTP."""
@@ -166,7 +207,7 @@ def extract_panel_queries(dashboard_payload: dict) -> list[dict]:
                     "metricName": target.get("metricName"),
                     "statistic": target.get("statistic", "Average"),
                     "period": target.get("period", "60"),
-                    "dimensions": target.get("dimensions") or {},
+                    "dimensions": resolve_cloudwatch_dimensions(target.get("dimensions") or {}, resource_dimensions),
                 }
             queries.append(entry)
     return queries
@@ -313,6 +354,11 @@ def main() -> int:
     dashboard_payload = fetch_dashboard(args.grafana_url, auth_header, args.dashboard_uid)
     (grafana_dir / "dashboard.json").write_text(json.dumps(dashboard_payload, indent=2) + "\n", encoding="utf-8")
 
+    resource_dimensions = load_resource_dimensions(evidence_root)
+    (grafana_dir / "resource-dimensions.json").write_text(
+        json.dumps(resource_dimensions, indent=2) + "\n", encoding="utf-8",
+    )
+
     from_ms = to_epoch_seconds(from_utc) * 1000
     to_ms = to_epoch_seconds(to_utc) * 1000
     annotations = fetch_annotations(args.grafana_url, auth_header, run_id, from_ms, to_ms)
@@ -321,7 +367,7 @@ def main() -> int:
         encoding="utf-8",
     )
 
-    panel_queries = extract_panel_queries(dashboard_payload)
+    panel_queries = extract_panel_queries(dashboard_payload, resource_dimensions)
     collected, failed = collect_panel_queries(args.grafana_url, auth_header, panel_queries, from_utc, to_utc, args.region, queries_dir)
 
     contracts = build_panel_capture_contracts(dashboard_payload, panel_queries, args.grafana_url, run_id, from_utc, to_utc)

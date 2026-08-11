@@ -40,7 +40,7 @@ RUN_ID_PATTERN = re.compile(r"^[A-Za-z0-9-]{1,40}$")
 MANIFEST_FILENAME = "manifest.json"
 SAFETY_REPORT_FILENAME = "evidence-safety.json"
 SKIP_FILENAMES = {MANIFEST_FILENAME}
-DEFAULT_PNG_STATUS_REASON = "PNG rendering requires a D-003 renderer decision (see Plan04/Plan05); Query JSON is the evidence of record until then."
+DEFAULT_PNG_STATUS_REASON = "D-003 requires SSM port-forward plus read-only browser capture; Query JSON remains the evidence of record until every contracted panel PNG is saved."
 
 
 class ManifestError(RuntimeError):
@@ -51,7 +51,8 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--evidence-root", type=Path, required=True, help="Local evidence bundle directory, e.g. evidence/aws-load-tests/<run-id>")
     parser.add_argument("--run-id", required=True)
-    parser.add_argument("--data-file", type=Path, required=True, help="seed-aws-load-data.py's credential file, passed to the safety scanner")
+    parser.add_argument("--data-file", type=Path, default=None, help="Runner-side seed credential file; omit after data.json has been retired")
+    parser.add_argument("--require-png", action="store_true", help="Fail unless every Grafana capture contract has a matching panel PNG")
     parser.add_argument("--compare-s3-bucket", default="", help="If given, cross-check s3-download-sourced files' checksums against this bucket via s3api get-object-attributes")
     parser.add_argument("--s3-prefix", default="evidence/aws-load-tests", help="Bucket prefix before <run-id>/ (matches upload-aws-evidence.py's default)")
     parser.add_argument("--region", default="", help="Required with --compare-s3-bucket")
@@ -224,8 +225,8 @@ def main() -> int:
     evidence_root = args.evidence_root.resolve()
     if not evidence_root.is_dir():
         raise ManifestError("--evidence-root does not exist or is not a directory")
-    data_file = args.data_file.resolve()
-    if not data_file.exists():
+    data_file = args.data_file.resolve() if args.data_file else None
+    if data_file is not None and not data_file.exists():
         raise ManifestError("--data-file does not exist")
     if args.compare_s3_bucket and not args.region:
         raise ManifestError("--region is required with --compare-s3-bucket")
@@ -240,6 +241,11 @@ def main() -> int:
     print(f"[manifest] safety scan clean: {safety_result.get('scannedFiles')} file(s) scanned")
 
     manifest = build_manifest(evidence_root, args.run_id)
+
+    if args.require_png and manifest.get("pngStatus") != "exported":
+        raise ManifestError(
+            f"--require-png requested but pngStatus={manifest.get('pngStatus')}; capture every contracted panel before finalizing local export"
+        )
 
     checksum_mismatch = False
     if args.compare_s3_bucket:

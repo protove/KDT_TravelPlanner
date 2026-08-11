@@ -16,6 +16,9 @@
 # only ever writes after a real, successful, gated export:
 #   - freeze-metadata.json   (D-006 approval was recorded)
 #   - export-complete.json   (upload-aws-evidence.py's final export ran to completion)
+# and the local-side proof that the S3 bundle was downloaded, PNG capture was
+# finalized, and the require-png manifest passed:
+#   - local-export-complete.json
 #
 # Neither file re-verifies that the S3 objects actually exist (that would
 # require a real `aws s3api head-object` call, out of scope for a local
@@ -33,6 +36,7 @@ fi
 missing=()
 [[ -f "$EVIDENCE_ROOT/freeze-metadata.json" ]] || missing+=("freeze-metadata.json (D-006 not approved)")
 [[ -f "$EVIDENCE_ROOT/export-complete.json" ]] || missing+=("export-complete.json (final export did not complete)")
+[[ -f "$EVIDENCE_ROOT/local-export-complete.json" ]] || missing+=("local-export-complete.json (local S3 download/PNG/checksum finalization did not complete)")
 
 if [[ "${#missing[@]}" -gt 0 ]]; then
   echo "[destroy-gate] BLOCKED: $EVIDENCE_ROOT is not safe to destroy against yet." >&2
@@ -42,5 +46,5 @@ if [[ "${#missing[@]}" -gt 0 ]]; then
   exit 1
 fi
 
-echo "[destroy-gate] OK: $EVIDENCE_ROOT has freeze-metadata.json and export-complete.json."
+echo "[destroy-gate] OK: $EVIDENCE_ROOT has freeze-metadata.json, export-complete.json, and local-export-complete.json."
 echo "[destroy-gate] This does not verify the S3 upload independently — if in doubt, check the bucket directly before destroying."

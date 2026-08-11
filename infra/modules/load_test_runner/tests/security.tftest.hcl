@@ -43,6 +43,7 @@ variables {
   k6_image_reference       = "grafana/k6:0.54.0@sha256:1f40432b1cbe7234e977f96c362c9bc550a2d2b583d014dd8669fe40d3e9e755"
   project_name             = "kdt-travelplanner"
   runner_security_group_id = "sg-load-runner"
+  source_commit_sha        = "0123456789abcdef0123456789abcdef01234567"
 }
 
 run "load_runner_is_private_and_encrypted" {
@@ -58,6 +59,9 @@ run "load_runner_is_private_and_encrypted" {
       aws_instance.load_runner.user_data_replace_on_change &&
       startswith(aws_instance.load_runner.user_data, "#!/usr/bin/env bash") &&
       strcontains(aws_instance.load_runner.user_data, var.k6_image_reference) &&
+      strcontains(aws_instance.load_runner.user_data, var.source_commit_sha) &&
+      strcontains(aws_instance.load_runner.user_data, "git clone") &&
+      strcontains(aws_instance.load_runner.user_data, "botocore==1.43.68") &&
       !strcontains(aws_instance.load_runner.user_data, ":latest")
     )
     error_message = "Load Runner must have no public IP, require IMDSv2, use encrypted gp3 storage, replace on user-data changes, and pull only the pinned k6 image."
@@ -129,4 +133,24 @@ run "k6_image_without_digest_is_rejected" {
   }
 
   expect_failures = [var.k6_image_reference]
+}
+
+run "source_commit_sha_must_be_exact" {
+  command = plan
+
+  variables {
+    source_commit_sha = "not-a-commit"
+  }
+
+  expect_failures = [var.source_commit_sha]
+}
+
+run "runner_instance_type_must_be_t3_family" {
+  command = plan
+
+  variables {
+    instance_type = "m6i.large"
+  }
+
+  expect_failures = [var.instance_type]
 }

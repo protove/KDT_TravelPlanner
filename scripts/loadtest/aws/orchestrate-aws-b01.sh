@@ -43,6 +43,8 @@ ENVIRONMENT=""
 EXPECTED_ACCOUNT_ID=""
 ALB_ARN=""
 RUNNER_ID=""
+RUNNER_INSTANCE_TYPE="t3.small"
+BASE_URL=""
 S3_BUCKET=""
 S3_PREFIX="evidence/aws-load-tests"
 DRY_RUN=0
@@ -56,19 +58,22 @@ DATABASE_HOST=""
 DATABASE_PORT=5432
 DATABASE_NAME=""
 DATABASE_SECRET_ARN=""
+DB_INSTANCE_IDENTIFIER=""
 REDIS_HOST=""
 REDIS_PORT=6379
 REDIS_IAM_USER=""
 REDIS_REPLICATION_GROUP_ID=""
+CACHE_CLUSTER_ID=""
 GRAFANA_URL="${GRAFANA_URL:-}"
 GRAFANA_ADMIN_USER="${GRAFANA_ADMIN_USER:-}"
 GRAFANA_ADMIN_PASSWORD="${GRAFANA_ADMIN_PASSWORD:-}"
 PROMETHEUS_URL=""
 SLO_FREEZE_APPROVED_BY=""
+PROFILE_SHA256=""
 
 usage() {
   cat <<'USAGE'
-usage: orchestrate-aws-b01.sh [target|seed|smoke|ramp|baseline|spike|evidence|cleanup|provisional-review|freeze|export|all] [options]
+usage: orchestrate-aws-b01.sh [target|seed|smoke|ramp|baseline|d005-record|spike|evidence|cleanup|provisional-review|freeze|export|all] [options]
 
 Required:
   --profile PATH                 AWS load-test profile JSON (default: load-tests/aws/profiles/ec2-b01.json)
@@ -76,7 +81,9 @@ Required:
   --environment ENVIRONMENT
   --expected-account-id ID       12-digit AWS account ID this run is approved to target
   --alb-arn ARN                  Exact ALB ARN to verify and resolve BASE_URL from
-  --runner-id INSTANCE_ID        This Runner EC2's instance ID (verifies InService, resolves ASG name)
+  --base-url URL                 Approved custom HTTPS hostname (never the ALB *.amazonaws.com DNS name)
+  --runner-id INSTANCE_ID        Standalone Runner EC2 instance ID (must be running and SSM Online)
+  --runner-instance-type TYPE    Expected Runner type (default: t3.small)
   --s3-prefix PREFIX             Default: evidence/aws-load-tests
   --dry-run                      Skip real aws/docker calls; print the planned actions
   --max-rate RATE                Operator ceiling on top of profile.limits.maxRate
@@ -88,9 +95,11 @@ Also required for most modes:
   --database-host/--database-name/--database-secret-arn   (seed/cleanup/all)
                                     --database-secret-arn must be a dedicated test-only Secret,
                                     JSON {"username":..,"password":..} (never the RDS master secret)
+  --db-instance-identifier ID     CloudWatch RDS dimension for local Grafana export (optional at Runner time)
   --redis-host/--redis-iam-user/--redis-replication-group-id
                                     (seed/cleanup/all; omit all three together to skip Redis in cleanup —
                                     seed always requires Redis). ElastiCache RBAC + IAM auth, never a Secret.
+  --cache-cluster-id ID            CloudWatch ElastiCache dimension for local Grafana export
   --confirmed-rate RATE            (baseline/spike/all after Ramp) D-005 operator-confirmed arrival-rate
   --slo-freeze-approved-by NAME    (freeze/all after provisional-review) D-006 approver identity (person or role, not a secret)
 
@@ -103,7 +112,7 @@ Optional:
   --prometheus-url URL            (evidence/all) skip Query JSON collection if omitted
 
 Modes:
-  target|seed|smoke|ramp|baseline|spike   individual phases, as before
+  target|seed|smoke|ramp|baseline|spike   individual phases with target validation
   evidence            Grafana Annotation + Query collection (post-Spike; PNG excluded, see D-003/Plan04)
   cleanup              synthetic data cleanup; writes cleanup-result.json into the evidence bundle
   provisional-review    writes provisional-review.json (an inventory, not a pass/fail verdict) for the
@@ -118,13 +127,15 @@ USAGE
 
 while [[ "$#" -gt 0 ]]; do
   case "$1" in
-    target|seed|smoke|ramp|baseline|spike|evidence|cleanup|provisional-review|freeze|export|all) MODE="$1"; shift ;;
+    target|seed|smoke|ramp|baseline|d005-record|spike|evidence|cleanup|provisional-review|freeze|export|all) MODE="$1"; shift ;;
     --profile) PROFILE="$2"; shift 2 ;;
     --region) REGION="$2"; shift 2 ;;
     --environment) ENVIRONMENT="$2"; shift 2 ;;
     --expected-account-id) EXPECTED_ACCOUNT_ID="$2"; shift 2 ;;
     --alb-arn) ALB_ARN="$2"; shift 2 ;;
+    --base-url) BASE_URL="$2"; shift 2 ;;
     --runner-id) RUNNER_ID="$2"; shift 2 ;;
+    --runner-instance-type) RUNNER_INSTANCE_TYPE="$2"; shift 2 ;;
     --s3-bucket) S3_BUCKET="$2"; shift 2 ;;
     --s3-prefix) S3_PREFIX="$2"; shift 2 ;;
     --dry-run) DRY_RUN=1; shift ;;
@@ -138,10 +149,12 @@ while [[ "$#" -gt 0 ]]; do
     --database-port) DATABASE_PORT="$2"; shift 2 ;;
     --database-name) DATABASE_NAME="$2"; shift 2 ;;
     --database-secret-arn) DATABASE_SECRET_ARN="$2"; shift 2 ;;
+    --db-instance-identifier) DB_INSTANCE_IDENTIFIER="$2"; shift 2 ;;
     --redis-host) REDIS_HOST="$2"; shift 2 ;;
     --redis-port) REDIS_PORT="$2"; shift 2 ;;
     --redis-iam-user) REDIS_IAM_USER="$2"; shift 2 ;;
     --redis-replication-group-id) REDIS_REPLICATION_GROUP_ID="$2"; shift 2 ;;
+    --cache-cluster-id) CACHE_CLUSTER_ID="$2"; shift 2 ;;
     --grafana-url) GRAFANA_URL="$2"; shift 2 ;;
     --grafana-user) GRAFANA_ADMIN_USER="$2"; shift 2 ;;
     --grafana-password) GRAFANA_ADMIN_PASSWORD="$2"; shift 2 ;;
@@ -152,7 +165,7 @@ while [[ "$#" -gt 0 ]]; do
   esac
 done
 
-for required in REGION ENVIRONMENT EXPECTED_ACCOUNT_ID ALB_ARN RUNNER_ID MAX_RATE MAX_VUS; do
+for required in REGION ENVIRONMENT EXPECTED_ACCOUNT_ID ALB_ARN BASE_URL RUNNER_ID MAX_RATE MAX_VUS; do
   if [[ -z "${!required}" ]]; then
     echo "--${required,,} is required" >&2
     exit 2
@@ -160,6 +173,14 @@ for required in REGION ENVIRONMENT EXPECTED_ACCOUNT_ID ALB_ARN RUNNER_ID MAX_RAT
 done
 if [[ ! "$EXPECTED_ACCOUNT_ID" =~ ^[0-9]{12}$ ]]; then
   echo "--expected-account-id must be exactly 12 digits" >&2
+  exit 2
+fi
+if [[ ! "$BASE_URL" =~ ^https://[^/]+$ || "$BASE_URL" == *amazonaws.com* ]]; then
+  echo "--base-url must be an approved custom HTTPS hostname, not an AWS ALB DNS name" >&2
+  exit 2
+fi
+if [[ ! "$RUNNER_INSTANCE_TYPE" =~ ^t3\.[a-z0-9]+$ ]]; then
+  echo "--runner-instance-type must be a t3 family instance type" >&2
   exit 2
 fi
 if [[ ! -f "$PROFILE" ]]; then
@@ -171,6 +192,7 @@ python3 "$REPOSITORY_ROOT/scripts/loadtest/aws/validate-aws-profile.py" "$PROFIL
 RUN_ID="${RUN_ID:-aws-b01-$(date -u +%Y%m%d-%H%M%S)}"
 EVIDENCE_ROOT="$REPOSITORY_ROOT/evidence/aws-load-tests/$RUN_ID"
 DATA_FILE="$EVIDENCE_ROOT/data.json"
+PROFILE_SHA256="$(python3 -c "import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],'rb').read()).hexdigest())" "$PROFILE")"
 mkdir -p "$EVIDENCE_ROOT"
 
 AWS_CMD=(aws)
@@ -190,6 +212,72 @@ run_aws_json() {
   aws "$@"
 }
 
+STAGE_DIR="$EVIDENCE_ROOT/stages"
+stage_confirmed_rate() {
+  local stage="$1"
+  case "$stage" in
+    baseline-*|d005|spike) printf '%s' "${CONFIRMED_RATE:-}" ;;
+    *) printf '' ;;
+  esac
+}
+
+stage_is_complete() {
+  local stage="$1" marker="$STAGE_DIR/$stage.json"
+  [[ "$DRY_RUN" == "1" ]] && return 1
+  [[ -f "$marker" ]] || return 1
+  local stage_rate
+  stage_rate="$(stage_confirmed_rate "$stage")"
+  python3 - "$marker" "$RUN_ID" "$PROFILE_SHA256" "$stage_rate" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+marker, run_id, profile_sha, confirmed_rate = sys.argv[1:]
+payload = json.loads(Path(marker).read_text(encoding="utf-8"))
+if payload.get("runId") != run_id or payload.get("profileSha256") != profile_sha:
+    raise SystemExit(1)
+if (payload.get("confirmedRate") or "") != confirmed_rate:
+    raise SystemExit(1)
+PY
+}
+
+mark_stage_complete() {
+  local stage="$1"
+  [[ "$DRY_RUN" == "1" ]] && return 0
+  mkdir -p "$STAGE_DIR"
+  local stage_rate
+  stage_rate="$(stage_confirmed_rate "$stage")"
+  python3 - "$STAGE_DIR/$stage.json" "$stage" "$RUN_ID" "$PROFILE_SHA256" "$stage_rate" <<'PY'
+import json
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+output, stage, run_id, profile_sha, confirmed_rate = sys.argv[1:]
+Path(output).write_text(json.dumps({
+    "stage": stage,
+    "runId": run_id,
+    "profileSha256": profile_sha,
+    "confirmedRate": confirmed_rate or None,
+    "completedAtUtc": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
+}, indent=2) + "\n", encoding="utf-8")
+PY
+}
+
+run_stage_once() {
+  local stage="$1"
+  shift
+  if [[ -f "$STAGE_DIR/$stage.json" ]] && stage_is_complete "$stage"; then
+    echo "[b01] stage=$stage already complete for this run/profile/rate; skipping"
+    return 0
+  elif [[ -f "$STAGE_DIR/$stage.json" ]]; then
+    echo "[b01] stage=$stage exists but profile/rate inputs differ; use a new --run-id instead of rerunning" >&2
+    exit 2
+  fi
+  "$@"
+  mark_stage_complete "$stage"
+}
+
 verify_account() {
   local observed
   observed="$(run_aws_json sts get-caller-identity --region "$REGION" --query Account --output text 2>/dev/null || true)"
@@ -204,6 +292,50 @@ verify_account() {
   echo "$observed"
 }
 
+validate_runner_instance() {
+  python3 - "$@" <<'PY'
+import json
+import sys
+
+payload, instance_id, environment, expected_type = sys.argv[1:]
+reservations = json.loads(payload).get("Reservations", [])
+instances = [item for reservation in reservations for item in reservation.get("Instances", [])]
+if len(instances) != 1 or instances[0].get("InstanceId") != instance_id:
+    raise SystemExit("Runner instance was not resolved exactly")
+instance = instances[0]
+tags = {tag.get("Key"): tag.get("Value", "") for tag in instance.get("Tags", [])}
+if instance.get("State", {}).get("Name") != "running":
+    raise SystemExit("Runner EC2 is not running")
+if instance.get("InstanceType") != expected_type:
+    raise SystemExit("Runner EC2 Instance Type does not match --runner-instance-type")
+if not instance.get("IamInstanceProfile", {}).get("Arn"):
+    raise SystemExit("Runner EC2 has no IAM instance profile")
+if not instance.get("SecurityGroups"):
+    raise SystemExit("Runner EC2 has no security group")
+if tags.get("Environment") != environment or tags.get("Service") != "travel-planner-load-runner":
+    raise SystemExit("Runner EC2 tags do not match the approved environment/service")
+print(json.dumps({
+    "status": "validated",
+    "instanceId": instance_id,
+    "instanceType": instance.get("InstanceType"),
+    "iamInstanceProfileArn": instance["IamInstanceProfile"]["Arn"],
+    "securityGroupIds": sorted(group["GroupId"] for group in instance["SecurityGroups"]),
+    "tags": {"Environment": tags.get("Environment"), "Service": tags.get("Service")},
+}, sort_keys=True))
+PY
+}
+
+validate_runner_ssm() {
+  python3 - "$1" <<'PY'
+import json
+import sys
+
+items = json.loads(sys.argv[1]).get("InstanceInformationList", [])
+if len(items) != 1 or items[0].get("PingStatus") != "Online":
+    raise SystemExit("Runner EC2 is not SSM Online")
+PY
+}
+
 target_stage() {
   echo "[b01] target: verifying account/ALB/runner"
   local observed_account
@@ -213,18 +345,30 @@ target_stage() {
   account_sha256="$(python3 -c "import hashlib,sys; print(hashlib.sha256(sys.argv[1].encode()).hexdigest())" "$observed_account")"
 
   mkdir -p "$EVIDENCE_ROOT/aws"
-  local alb_json target_group_arn target_health_json asg_name asg_json dns_name
+  local alb_json target_group_arn target_health_json backend_asg_name asg_json dns_name
+  local runner_json runner_ssm_json runner_validation_json
   alb_json="$(run_aws_json elbv2 describe-load-balancers --load-balancer-arns "$ALB_ARN" --region "$REGION")"
   echo "$alb_json" > "$EVIDENCE_ROOT/aws/resource-config.json"
   if [[ "$DRY_RUN" == "1" ]]; then
     dns_name="dry-run.invalid"
     target_group_arn=""
+    runner_validation_json='{"status":"dry-run"}'
   else
     dns_name="$(python3 -c "import json,sys; print(json.load(sys.stdin)['LoadBalancers'][0]['DNSName'])" <<<"$alb_json")"
     target_group_arn="$(run_aws_json elbv2 describe-target-groups --load-balancer-arn "$ALB_ARN" --region "$REGION" \
       | python3 -c "import json,sys; groups=json.load(sys.stdin)['TargetGroups']; print(groups[0]['TargetGroupArn'] if groups else '')")"
+    runner_json="$(run_aws_json ec2 describe-instances --instance-ids "$RUNNER_ID" --region "$REGION")"
+    runner_validation_json="$(validate_runner_instance "$runner_json" "$RUNNER_ID" "$ENVIRONMENT" "$RUNNER_INSTANCE_TYPE")"
+    runner_ssm_json="$(run_aws_json ssm describe-instance-information --filters "Key=InstanceIds,Values=$RUNNER_ID" --region "$REGION")"
+    validate_runner_ssm "$runner_ssm_json"
   fi
-  BASE_URL="https://$dns_name"
+  echo "$runner_validation_json" > "$EVIDENCE_ROOT/aws/runner-validation.json"
+  echo "{\"approvedBaseUrl\":\"$BASE_URL\",\"albDnsName\":\"$dns_name\"}" > "$EVIDENCE_ROOT/aws/base-url-validation.json"
+  if [[ "$DRY_RUN" != "1" ]]; then
+    # This request intentionally accepts a 4xx/5xx application response; the
+    # curl exit status still verifies DNS, TCP, TLS and certificate hostname.
+    curl --silent --show-error --max-time 10 --output /dev/null "$BASE_URL/"
+  fi
 
   if [[ -n "$target_group_arn" ]]; then
     target_health_json="$(run_aws_json elbv2 describe-target-health --target-group-arn "$target_group_arn" --region "$REGION")"
@@ -234,20 +378,48 @@ target_stage() {
   echo "$target_health_json" > "$EVIDENCE_ROOT/aws/target-health.json"
 
   if [[ "$DRY_RUN" == "1" ]]; then
-    asg_name=""
+    backend_asg_name=""
+    asg_json='{"note":"dry-run"}'
   else
-    asg_name="$(run_aws_json autoscaling describe-auto-scaling-instances --instance-ids "$RUNNER_ID" --region "$REGION" \
+    backend_target_ids_text="$(python3 -c 'import json,sys; print("\\n".join(target.get("Target", {}).get("Id", "") for target in json.loads(sys.argv[1]).get("TargetHealthDescriptions", []) if target.get("TargetHealth", {}).get("State") == "healthy"))' "$target_health_json")"
+    mapfile -t backend_target_ids <<<"$backend_target_ids_text"
+    if [[ "${#backend_target_ids[@]}" -eq 0 ]]; then
+      echo "ALB target group has no healthy backend target" >&2
+      exit 1
+    fi
+    backend_asg_name="$(run_aws_json autoscaling describe-auto-scaling-instances --instance-ids "${backend_target_ids[@]}" --region "$REGION" \
       | python3 -c "import json,sys; items=json.load(sys.stdin)['AutoScalingInstances']; print(items[0]['AutoScalingGroupName'] if items else '')")"
-  fi
-  if [[ -n "$asg_name" ]]; then
-    asg_json="$(run_aws_json autoscaling describe-scaling-activities --auto-scaling-group-name "$asg_name" --region "$REGION" --max-items 20)"
-  else
-    asg_json='{"note":"Runner instance not found in any ASG (dry-run or --runner-id mismatch)"}'
+    if [[ -z "$backend_asg_name" ]]; then
+      echo "healthy backend target is not attached to an Auto Scaling Group" >&2
+      exit 1
+    fi
+    asg_json="$(run_aws_json autoscaling describe-scaling-activities --auto-scaling-group-name "$backend_asg_name" --region "$REGION" --max-items 20)"
   fi
   echo "$asg_json" > "$EVIDENCE_ROOT/aws/asg-activities.json"
 
+  python3 - "$EVIDENCE_ROOT/aws/resource-dimensions.json" "$ALB_ARN" "$target_group_arn" "$backend_asg_name" "$DB_INSTANCE_IDENTIFIER" "$CACHE_CLUSTER_ID" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+output, alb_arn, target_group_arn, asg_name, db_identifier, cache_cluster_id = sys.argv[1:]
+def suffix(arn, marker):
+    if not arn or marker not in arn:
+        return None
+    return arn.split(marker, 1)[1]
+
+Path(output).write_text(json.dumps({
+    "albDimension": suffix(alb_arn, "loadbalancer/"),
+    "targetGroupDimension": suffix(target_group_arn, "targetgroup/"),
+    "autoScalingGroupName": asg_name or None,
+    "dbInstanceIdentifier": db_identifier or None,
+    "cacheClusterId": cache_cluster_id or None,
+    "note": "CloudWatch dimensions are non-secret identifiers; compare against Terraform outputs/AWS console before Grafana capture.",
+}, indent=2) + "\n", encoding="utf-8")
+PY
+
   python3 - "$EVIDENCE_ROOT/metadata.json" "$RUN_ID" "$ENVIRONMENT" "$REGION" "$account_last4" "$account_sha256" \
-    "$ALB_ARN" "$asg_name" "$RUNNER_ID" "$REPOSITORY_ROOT" <<'PY'
+    "$ALB_ARN" "$backend_asg_name" "$RUNNER_ID" "$RUNNER_INSTANCE_TYPE" "$BASE_URL" "$REPOSITORY_ROOT" <<'PY'
 import hashlib
 import json
 import subprocess
@@ -256,7 +428,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 (output, run_id, environment, region, account_last4, account_sha256,
- alb_arn, asg_name, runner_id, repo_root) = sys.argv[1:]
+ alb_arn, asg_name, runner_id, runner_instance_type, base_url, repo_root) = sys.argv[1:]
 commit_sha = subprocess.run(
     ["git", "-C", repo_root, "rev-parse", "HEAD"], capture_output=True, text=True, check=True,
 ).stdout.strip()
@@ -277,6 +449,8 @@ Path(output).write_text(json.dumps({
         "albArnHash": alb_arn_hash,
         "autoScalingGroupName": asg_name or None,
         "runnerInstanceId": runner_id,
+        "runnerInstanceType": runner_instance_type,
+        "baseUrl": base_url,
     },
 }, indent=2) + "\n", encoding="utf-8")
 PY
@@ -308,6 +482,7 @@ seed_stage() {
 
 k6_phase_stage() {
   local phase="$1"
+  local baseline_rep="${2:-}"
   echo "[b01] $phase"
   if [[ "$DRY_RUN" == "1" ]]; then
     echo "[dry-run] run-aws-b01.sh $phase (RUN_ID=$RUN_ID rate=${CONFIRMED_RATE:-<profile>})" >&2
@@ -320,9 +495,13 @@ k6_phase_stage() {
   export K6_IMAGE_DIGEST="$K6_IMAGE" AWS_PROFILE_FILE="$PROFILE" RUN_ID="$RUN_ID"
   if [[ -n "$CONFIRMED_RATE" ]]; then export CONFIRMED_RATE; fi
   if [[ "$phase" == "baseline" ]]; then
-    for rep in 1 2 3; do
-      "$REPOSITORY_ROOT/scripts/loadtest/aws/run-aws-b01.sh" baseline "$rep"
-    done
+    if [[ -n "$baseline_rep" ]]; then
+      "$REPOSITORY_ROOT/scripts/loadtest/aws/run-aws-b01.sh" baseline "$baseline_rep"
+    else
+      for rep in 1 2 3; do
+        "$REPOSITORY_ROOT/scripts/loadtest/aws/run-aws-b01.sh" baseline "$rep"
+      done
+    fi
   else
     "$REPOSITORY_ROOT/scripts/loadtest/aws/run-aws-b01.sh" "$phase"
   fi
@@ -340,6 +519,12 @@ d005_record_stage() {
     return 0
   fi
   if [[ -z "$CONFIRMED_RATE" ]]; then echo "--confirmed-rate is required for d005-record" >&2; exit 2; fi
+  for rep in 1 2 3; do
+    if [[ ! -f "$EVIDENCE_ROOT/stages/baseline-$rep.json" ]]; then
+      echo "baseline-$rep is not complete; refusing to record D-005" >&2
+      exit 2
+    fi
+  done
   local profile_sha256
   profile_sha256="$(python3 -c "import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],'rb').read()).hexdigest())" "$PROFILE")"
   python3 - "$EVIDENCE_ROOT/d005-arrival-rate.json" "$RUN_ID" "$CONFIRMED_RATE" "${MAX_VUS:-}" "$profile_sha256" "$PROFILE" <<'PY'
@@ -593,76 +778,84 @@ PY
 
 case "$MODE" in
   target)
-    target_stage
+    run_stage_once target target_stage
     ;;
   seed)
-    target_stage
-    seed_stage
+    run_stage_once target target_stage
+    run_stage_once seed seed_stage
     ;;
   smoke)
-    target_stage
-    seed_stage
-    k6_phase_stage smoke
+    run_stage_once target target_stage
+    run_stage_once seed seed_stage
+    run_stage_once smoke k6_phase_stage smoke
     ;;
   ramp)
-    target_stage
-    seed_stage
-    k6_phase_stage ramp
+    run_stage_once target target_stage
+    run_stage_once seed seed_stage
+    run_stage_once ramp k6_phase_stage ramp
     echo "[b01] Ramp complete. Review $EVIDENCE_ROOT/k6/ramp/summary.json, decide D-005, then re-run with:"
-    echo "      orchestrate-aws-b01.sh baseline --run-id $RUN_ID --confirmed-rate <rate> ..."
+    echo "      orchestrate-aws-b01.sh all --run-id $RUN_ID --confirmed-rate <rate> ..."
     ;;
   baseline)
     if [[ -z "$CONFIRMED_RATE" ]]; then echo "--confirmed-rate is required for baseline" >&2; exit 2; fi
-    target_stage
-    seed_stage
-    k6_phase_stage baseline
+    run_stage_once target target_stage
+    run_stage_once seed seed_stage
+    for rep in 1 2 3; do
+      run_stage_once "baseline-$rep" k6_phase_stage baseline "$rep"
+    done
+    ;;
+  d005-record)
+    if [[ -z "$CONFIRMED_RATE" ]]; then echo "--confirmed-rate is required for d005-record" >&2; exit 2; fi
+    run_stage_once d005 d005_record_stage
     ;;
   spike)
     if [[ -z "$CONFIRMED_RATE" ]]; then echo "--confirmed-rate is required for spike" >&2; exit 2; fi
-    target_stage
-    seed_stage
-    k6_phase_stage spike
+    run_stage_once target target_stage
+    run_stage_once seed seed_stage
+    run_stage_once spike k6_phase_stage spike
     ;;
   evidence)
-    evidence_stage
+    run_stage_once evidence evidence_stage
     ;;
   cleanup)
-    cleanup_stage
+    run_stage_once cleanup cleanup_stage
     ;;
   provisional-review)
-    provisional_review_stage
+    run_stage_once provisional-review provisional_review_stage
     ;;
   freeze)
-    freeze_stage
+    run_stage_once freeze freeze_stage
     ;;
   export)
-    export_stage
+    run_stage_once export export_stage
     ;;
   all)
-    target_stage
-    seed_stage
-    k6_phase_stage smoke
-    k6_phase_stage ramp
+    run_stage_once target target_stage
+    run_stage_once seed seed_stage
+    run_stage_once smoke k6_phase_stage smoke
+    run_stage_once ramp k6_phase_stage ramp
     if [[ -z "$CONFIRMED_RATE" ]]; then
       echo "[b01] Ramp complete; D-005 needs an operator decision before Baseline/Spike can run."
       echo "      Review $EVIDENCE_ROOT/k6/ramp/summary.json, then re-run:"
       echo "      orchestrate-aws-b01.sh all --run-id $RUN_ID --confirmed-rate <rate> ..."
       exit 0
     fi
-    k6_phase_stage baseline
-    d005_record_stage
-    k6_phase_stage spike
-    evidence_stage
-    cleanup_stage
-    provisional_review_stage
+    for rep in 1 2 3; do
+      run_stage_once "baseline-$rep" k6_phase_stage baseline "$rep"
+    done
+    run_stage_once d005 d005_record_stage
+    run_stage_once spike k6_phase_stage spike
+    run_stage_once evidence evidence_stage
+    run_stage_once cleanup cleanup_stage
+    run_stage_once provisional-review provisional_review_stage
     if [[ -z "$SLO_FREEZE_APPROVED_BY" ]]; then
       echo "[b01] Provisional review complete; D-006 needs an operator decision before final export."
       echo "      Review $EVIDENCE_ROOT/provisional-review.json and run validate-aws-run.py $EVIDENCE_ROOT --confirmed-rate $CONFIRMED_RATE, then re-run:"
       echo "      orchestrate-aws-b01.sh all --run-id $RUN_ID --confirmed-rate $CONFIRMED_RATE --slo-freeze-approved-by <name> ..."
       exit 0
     fi
-    freeze_stage
-    export_stage
+    run_stage_once freeze freeze_stage
+    run_stage_once export export_stage
     echo "[b01] all complete. Ephemeral resource teardown (terraform destroy) is a separate, explicitly-approved step —"
     echo "      run scripts/loadtest/aws/check-destroy-gate.sh $EVIDENCE_ROOT first."
     ;;

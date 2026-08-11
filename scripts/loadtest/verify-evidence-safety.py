@@ -19,7 +19,13 @@ FORBIDDEN_PATTERNS = {
 }
 
 
-def load_secret_values(data_file: Path) -> set[str]:
+def load_secret_values(data_file: Path | None) -> set[str]:
+    if data_file is None:
+        # The Runner performs the value-aware scan while data.json is still
+        # present. Local export happens only after that file has been retired,
+        # so the local scan still enforces structural forbidden patterns but
+        # has no raw credential file to read.
+        return set()
     payload = json.loads(data_file.read_text(encoding="utf-8"))
     values: set[str] = set()
     for credential in payload.get("credentials", []):
@@ -30,7 +36,7 @@ def load_secret_values(data_file: Path) -> set[str]:
     return values
 
 
-def scan(evidence_root: Path, data_file: Path) -> dict:
+def scan(evidence_root: Path, data_file: Path | None = None) -> dict:
     secret_values = load_secret_values(data_file)
     findings = []
     scanned_files = 0
@@ -67,9 +73,10 @@ def scan(evidence_root: Path, data_file: Path) -> dict:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("evidence_root", type=Path)
-    parser.add_argument("--data-file", type=Path, required=True)
+    parser.add_argument("--data-file", type=Path, default=None, help="Runner-side raw credential file; omit for a post-retirement local export scan")
     args = parser.parse_args()
-    result = scan(args.evidence_root.resolve(), args.data_file.resolve())
+    data_file = args.data_file.resolve() if args.data_file else None
+    result = scan(args.evidence_root.resolve(), data_file)
     output = args.evidence_root / "evidence-safety.json"
     output.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
     if result["safe"]:

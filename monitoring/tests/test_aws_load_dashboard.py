@@ -89,23 +89,33 @@ class DashboardStructureTest(unittest.TestCase):
         variable_names = {variable["name"] for variable in self.dashboard["templating"]["list"]}
         self.assertTrue(variable_names.isdisjoint({"user_id", "travel_id", "request_id"}))
 
-    def test_template_variables_match_plan04_safe_label_set(self):
-        # Plan04 "변수와 시간": environment, version, instance, availability_zone, route.
+    def test_template_variables_include_safe_labels_and_cloudwatch_dimensions(self):
+        # Plan04 labels plus non-secret CloudWatch resource dimension
+        # placeholders resolved from aws/resource-dimensions.json at export.
         variable_names = {variable["name"] for variable in self.dashboard["templating"]["list"]}
-        self.assertEqual(variable_names, {"environment", "version", "instance", "availability_zone", "route"})
+        self.assertEqual(variable_names, {
+            "environment", "version", "instance", "availability_zone", "route",
+            "alb_dimension", "target_group_dimension", "autoscaling_group_name",
+            "db_instance_identifier", "cache_cluster_id",
+        })
 
     def test_cloudwatch_panels_have_no_hardcoded_resource_dimensions(self):
         # "CloudWatch resource dimension이 다른 환경으로 새지 않음" (Plan04
         # 검증): a hardcoded ASG/ALB/RDS/Redis identifier here would silently
         # point every environment's dashboard at one fixed dev resource.
-        # Dimensions must stay empty (resolved by the Monitoring EC2's own
-        # region/account context at query time) or use a template variable.
+        # Dimensions must use a template variable resolved from the target
+        # validation artifact; an empty dimension would issue an unscoped
+        # metric query.
         for panel in self.dashboard["panels"]:
             for target in panel.get("targets", []):
                 if "namespace" not in target:
                     continue
                 dimensions = target.get("dimensions", {})
-                self.assertEqual(dimensions, {}, f"panel {panel['id']} has hardcoded CloudWatch dimensions: {dimensions}")
+                self.assertTrue(dimensions, f"panel {panel['id']} must have scoped CloudWatch dimensions")
+                self.assertTrue(
+                    all(isinstance(value, str) and value.startswith("$") for value in dimensions.values()),
+                    f"panel {panel['id']} has hardcoded CloudWatch dimensions: {dimensions}",
+                )
 
     def test_no_user_flow_deep_diagnostic_panels(self):
         # Plan04: rows 8-11 (flow starts/completed/E2E, flow_id/flow_step) are
