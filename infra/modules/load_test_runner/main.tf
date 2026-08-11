@@ -81,6 +81,31 @@ locals {
 }
 
 data "aws_iam_policy_document" "load_runner_runtime" {
+  # orchestrate-aws-b01.sh의 target stage는 승인된 ALB, Backend ASG와
+  # Runner EC2/SSM 상태를 실행 직전에 교차 검증한다. 아래 Describe/List
+  # Action은 resource-level IAM scoping을 지원하지 않으므로 Resource "*"를
+  # 사용하되, Runner가 다른 Region의 inventory를 조회하지 못하도록 실제
+  # 호출 Region을 dev-runtime Region으로 제한한다.
+  statement {
+    sid = "LoadTestTargetDiscovery"
+    actions = [
+      "autoscaling:DescribeAutoScalingInstances",
+      "autoscaling:DescribeScalingActivities",
+      "ec2:DescribeInstances",
+      "elasticloadbalancing:DescribeLoadBalancers",
+      "elasticloadbalancing:DescribeTargetGroups",
+      "elasticloadbalancing:DescribeTargetHealth",
+      "ssm:DescribeInstanceInformation",
+    ]
+    resources = ["*"]
+
+    condition {
+      test     = "StringEquals"
+      variable = "aws:RequestedRegion"
+      values   = [var.aws_region]
+    }
+  }
+
   statement {
     sid       = "LoadTestEvidenceObjects"
     actions   = ["s3:GetObject", "s3:PutObject"]
