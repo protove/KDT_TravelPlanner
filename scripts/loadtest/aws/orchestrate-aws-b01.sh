@@ -71,6 +71,17 @@ PROMETHEUS_URL=""
 SLO_FREEZE_APPROVED_BY=""
 PROFILE_SHA256=""
 SOURCE_COMMIT_SHA=""
+START_RATE="${START_RATE:-}"
+DURATION="${DURATION:-}"
+WARMUP="${WARMUP:-}"
+RAMP_PREALLOCATED_VUS="${RAMP_PREALLOCATED_VUS:-}"
+RAMP_MAX_VUS="${RAMP_MAX_VUS:-}"
+BASELINE_PREALLOCATED_VUS="${BASELINE_PREALLOCATED_VUS:-}"
+BASELINE_MAX_VUS="${BASELINE_MAX_VUS:-}"
+SPIKE_PREALLOCATED_VUS="${SPIKE_PREALLOCATED_VUS:-}"
+SPIKE_MAX_VUS="${SPIKE_MAX_VUS:-}"
+SPIKE_PEAK_MULTIPLIER="${SPIKE_PEAK_MULTIPLIER:-}"
+SPIKE_HOLD="${SPIKE_HOLD:-}"
 
 usage() {
   cat <<'USAGE'
@@ -232,7 +243,10 @@ stage_input_digest() {
     "$DB_INSTANCE_IDENTIFIER" "$REDIS_HOST" "$REDIS_PORT" "$REDIS_IAM_USER" \
     "$REDIS_REPLICATION_GROUP_ID" "$CACHE_CLUSTER_ID" "$S3_BUCKET" "$S3_PREFIX" \
     "$GRAFANA_URL" "$GRAFANA_ADMIN_USER" "$GRAFANA_ADMIN_PASSWORD" "$PROMETHEUS_URL" \
-    "$SLO_FREEZE_APPROVED_BY" "$(stage_confirmed_rate "$stage")" <<'PY'
+    "$SLO_FREEZE_APPROVED_BY" "$START_RATE" "$DURATION" "$WARMUP" \
+    "$RAMP_PREALLOCATED_VUS" "$RAMP_MAX_VUS" "$BASELINE_PREALLOCATED_VUS" "$BASELINE_MAX_VUS" \
+    "$SPIKE_PREALLOCATED_VUS" "$SPIKE_MAX_VUS" "$SPIKE_PEAK_MULTIPLIER" "$SPIKE_HOLD" \
+    "$(stage_confirmed_rate "$stage")" <<'PY'
 import hashlib
 import json
 import sys
@@ -245,7 +259,10 @@ import sys
     db_instance_identifier, redis_host, redis_port, redis_iam_user,
     redis_replication_group_id, cache_cluster_id, s3_bucket, s3_prefix,
     grafana_url, grafana_user, grafana_password, prometheus_url,
-    slo_freeze_approved_by, confirmed_rate,
+    slo_freeze_approved_by, start_rate, duration, warmup,
+    ramp_preallocated_vus, ramp_max_vus, baseline_preallocated_vus, baseline_max_vus,
+    spike_preallocated_vus, spike_max_vus, spike_peak_multiplier, spike_hold,
+    confirmed_rate,
 ) = sys.argv[1:]
 
 common = {
@@ -287,6 +304,26 @@ elif stage == "seed":
     })
 elif stage in {"smoke", "ramp", "spike"} or stage.startswith("baseline-"):
     payload["k6Image"] = k6_image
+    if stage == "ramp":
+        payload["effectiveK6Overrides"] = {
+            "startRate": start_rate,
+            "preAllocatedVUs": ramp_preallocated_vus,
+            "maxVUs": ramp_max_vus,
+        }
+    elif stage.startswith("baseline-"):
+        payload["effectiveK6Overrides"] = {
+            "warmup": warmup,
+            "duration": duration,
+            "preAllocatedVUs": baseline_preallocated_vus,
+            "maxVUs": baseline_max_vus,
+        }
+    elif stage == "spike":
+        payload["effectiveK6Overrides"] = {
+            "preAllocatedVUs": spike_preallocated_vus,
+            "maxVUs": spike_max_vus,
+            "peakMultiplier": spike_peak_multiplier,
+            "hold": spike_hold,
+        }
     if stage == "spike" or stage.startswith("baseline-"):
         payload["confirmedRate"] = confirmed_rate
 elif stage == "d005":

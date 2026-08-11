@@ -119,6 +119,11 @@ def classify_source(relative_path: str) -> str:
     return "s3-download"
 
 
+def _is_regular_evidence_file(path: Path) -> bool:
+    """Accept only self-contained regular files, not directories or symlinks."""
+    return path.is_file() and not path.is_symlink()
+
+
 def determine_png_status(evidence_root: Path) -> dict:
     # D-003-R1 requires every captured panel-<id>.png to be linked to its
     # runId/fromUtc/toUtc/dashboardUid+version/Query JSON path
@@ -131,8 +136,16 @@ def determine_png_status(evidence_root: Path) -> dict:
     if not panels_dir.exists():
         return {"pngStatus": "not-exported", "pngStatusReason": DEFAULT_PNG_STATUS_REASON}
 
-    png_panel_ids = {p.name.removeprefix("panel-").removesuffix(".png") for p in panels_dir.glob("panel-*.png")}
-    contract_panel_ids = {p.name.removeprefix("panel-").removesuffix(".capture.json") for p in panels_dir.glob("panel-*.capture.json")}
+    png_panel_ids = {
+        p.name.removeprefix("panel-").removesuffix(".png")
+        for p in panels_dir.glob("panel-*.png")
+        if _is_regular_evidence_file(p)
+    }
+    contract_panel_ids = {
+        p.name.removeprefix("panel-").removesuffix(".capture.json")
+        for p in panels_dir.glob("panel-*.capture.json")
+        if _is_regular_evidence_file(p)
+    }
 
     if not png_panel_ids:
         reason = DEFAULT_PNG_STATUS_REASON
@@ -200,7 +213,13 @@ def determine_query_status(evidence_root: Path) -> dict:
     or was written with ``status: error``.
     """
     panels_dir = evidence_root / "grafana" / "panels"
-    contract_paths = sorted(panels_dir.glob("panel-*.capture.json")) if panels_dir.exists() else []
+    contract_paths = (
+        sorted(
+            (p for p in panels_dir.glob("panel-*.capture.json") if _is_regular_evidence_file(p)),
+        )
+        if panels_dir.exists()
+        else []
+    )
     if not contract_paths:
         return {
             "queryStatus": "not-exported",

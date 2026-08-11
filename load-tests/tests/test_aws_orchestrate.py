@@ -1,9 +1,9 @@
 from __future__ import annotations
 
+import json
+import shlex
 import subprocess
 import tempfile
-import shlex
-import json
 from pathlib import Path
 import unittest
 
@@ -128,6 +128,17 @@ GRAFANA_ADMIN_PASSWORD=not-written-to-marker
 PROMETHEUS_URL=http://prometheus.internal
 SLO_FREEZE_APPROVED_BY=operator
 CONFIRMED_RATE=80
+START_RATE=1
+DURATION=10m
+WARMUP=3m
+RAMP_PREALLOCATED_VUS=20
+RAMP_MAX_VUS=21
+BASELINE_PREALLOCATED_VUS=20
+BASELINE_MAX_VUS=40
+SPIKE_PREALLOCATED_VUS=20
+SPIKE_MAX_VUS=80
+SPIKE_PEAK_MULTIPLIER=3
+SPIKE_HOLD=1m
 DRY_RUN=0
 STAGE_DIR={stage_dir}
 source {fragment}
@@ -167,6 +178,29 @@ source {fragment}
             )
             self.assertEqual(changed.returncode, 2)
             self.assertIn("safety input digest", changed.stderr)
+
+            override_cases = (
+                ("ramp", "RAMP_MAX_VUS=21", "RAMP_MAX_VUS=90"),
+                ("baseline-1", "BASELINE_MAX_VUS=40", "BASELINE_MAX_VUS=90"),
+                ("spike", "SPIKE_HOLD=1m", "SPIKE_HOLD=2m"),
+            )
+            for stage, original_input, changed_input in override_cases:
+                create_marker = subprocess.run(
+                    ["bash", "-c", setup_script + f"\nmark_stage_complete {stage}\n"],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                self.assertEqual(create_marker.returncode, 0, create_marker.stderr)
+                changed_override_setup = setup_script.replace(original_input, changed_input)
+                changed_override = subprocess.run(
+                    ["bash", "-c", changed_override_setup + f"\nrun_stage_once {stage} true\n"],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                self.assertEqual(changed_override.returncode, 2, changed_override.stderr)
+                self.assertIn("safety input digest", changed_override.stderr)
 
     def test_destroy_gate_requires_local_export_marker(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

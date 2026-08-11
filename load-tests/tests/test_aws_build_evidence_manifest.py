@@ -138,6 +138,19 @@ class DeterminePngStatusTest(unittest.TestCase):
             self.assertEqual(result["missingPanelIds"], ["7"])
             self.assertEqual(result["linkedPngCount"], 1)
 
+    def test_ignores_directories_named_like_png_files(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            panels_dir = root / "grafana" / "panels"
+            panels_dir.mkdir(parents=True)
+            (panels_dir / "panel-2.capture.json").write_text("{}", encoding="utf-8")
+            (panels_dir / "panel-2.png").mkdir()
+
+            result = MANIFEST.determine_png_status(root)
+
+            self.assertEqual(result["pngStatus"], "not-exported")
+            self.assertEqual(result["pendingCaptureContracts"], 1)
+
 
 class DetermineQueryStatusTest(unittest.TestCase):
     def _write_contract(self, root: Path, panel_id: int = 2, query_paths=None):
@@ -359,6 +372,35 @@ class MainIntegrationTest(unittest.TestCase):
                     json.dumps({"status": "collected", "result": {}}), encoding="utf-8",
                 )
             (panels_dir / "panel-2.png").write_bytes(b"\x89PNG")
+
+            import sys
+            original_argv = sys.argv
+            sys.argv = [
+                "build-evidence-manifest.py",
+                "--evidence-root", str(root),
+                "--run-id", "aws-b01-20260809-001",
+                "--require-png",
+            ]
+            try:
+                with self.assertRaises(MANIFEST.ManifestError):
+                    MANIFEST.main()
+            finally:
+                sys.argv = original_argv
+
+    def test_require_png_rejects_a_directory_named_like_a_png_file(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            panels_dir = root / "grafana" / "panels"
+            panels_dir.mkdir(parents=True)
+            queries_dir = root / "grafana" / "queries"
+            queries_dir.mkdir(parents=True)
+            (panels_dir / "panel-2.capture.json").write_text(
+                json.dumps({"panelId": 2, "queryJsonPaths": ["grafana/queries/panel-2-A.json"]}), encoding="utf-8",
+            )
+            (queries_dir / "panel-2-A.json").write_text(
+                json.dumps({"status": "collected", "result": {}}), encoding="utf-8",
+            )
+            (panels_dir / "panel-2.png").mkdir()
 
             import sys
             original_argv = sys.argv
