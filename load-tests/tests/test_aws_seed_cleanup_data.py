@@ -4,6 +4,7 @@ import json
 import re
 import stat
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -263,6 +264,112 @@ class SeedAwsLoadDataTest(unittest.TestCase):
         # But the expensive travel/timeline creation only ran for the 2
         # genuinely-new users.
         self.assertEqual(calls["create_travel"], 2)
+
+
+class CleanupResultFileTest(unittest.TestCase):
+    def test_write_result_is_a_noop_when_no_path_given(self):
+        # Must not raise even though None has no .resolve()/.write_text().
+        CLEANUP.write_result(None, {"runId": "x"})
+
+    def test_write_result_writes_json_with_completed_at(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "cleanup-result.json"
+            CLEANUP.write_result(path, {"runId": "aws-b01-20260811-001", "matchedUserCount": 3})
+            written = json.loads(path.read_text(encoding="utf-8"))
+            self.assertEqual(written["runId"], "aws-b01-20260811-001")
+            self.assertEqual(written["matchedUserCount"], 3)
+            self.assertIn("completedAtUtc", written)
+
+    def test_write_result_creates_parent_directories(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "nested" / "cleanup-result.json"
+            CLEANUP.write_result(path, {"runId": "x"})
+            self.assertTrue(path.exists())
+
+    def test_main_writes_zero_match_result(self):
+        original_verify = CLEANUP.verify_account
+        original_read_secret = CLEANUP.read_secret_credential
+        original_count = CLEANUP.matching_user_count
+        CLEANUP.verify_account = lambda *a, **k: None
+        CLEANUP.read_secret_credential = lambda *a, **k: ("u", "p")
+        CLEANUP.matching_user_count = lambda *a, **k: 0
+        try:
+            with tempfile.TemporaryDirectory() as directory:
+                result_path = Path(directory) / "cleanup-result.json"
+                sys.argv = [
+                    "cleanup-aws-load-data.py", "--run-id", "aws-b01-20260811-001",
+                    "--expected-account-id", "111111111111", "--region", "ap-northeast-2",
+                    "--database-host", "db.internal", "--database-name", "travel_diary_dev",
+                    "--database-secret-arn", "arn:aws:secretsmanager:...",
+                    "--result-file", str(result_path),
+                ]
+                self.assertEqual(CLEANUP.main(), 0)
+                written = json.loads(result_path.read_text(encoding="utf-8"))
+                self.assertEqual(written["matchedUserCount"], 0)
+                self.assertFalse(written["dbDeleted"])
+                self.assertEqual(written["redisSkippedReason"], "no-matching-data")
+        finally:
+            CLEANUP.verify_account = original_verify
+            CLEANUP.read_secret_credential = original_read_secret
+            CLEANUP.matching_user_count = original_count
+
+    def test_main_writes_dry_run_result(self):
+        original_verify = CLEANUP.verify_account
+        original_read_secret = CLEANUP.read_secret_credential
+        original_count = CLEANUP.matching_user_count
+        CLEANUP.verify_account = lambda *a, **k: None
+        CLEANUP.read_secret_credential = lambda *a, **k: ("u", "p")
+        CLEANUP.matching_user_count = lambda *a, **k: 5
+        try:
+            with tempfile.TemporaryDirectory() as directory:
+                result_path = Path(directory) / "cleanup-result.json"
+                sys.argv = [
+                    "cleanup-aws-load-data.py", "--run-id", "aws-b01-20260811-001",
+                    "--expected-account-id", "111111111111", "--region", "ap-northeast-2",
+                    "--database-host", "db.internal", "--database-name", "travel_diary_dev",
+                    "--database-secret-arn", "arn:aws:secretsmanager:...",
+                    "--result-file", str(result_path), "--dry-run",
+                ]
+                self.assertEqual(CLEANUP.main(), 0)
+                written = json.loads(result_path.read_text(encoding="utf-8"))
+                self.assertEqual(written["matchedUserCount"], 5)
+                self.assertTrue(written["dryRun"])
+                self.assertFalse(written["dbDeleted"])
+        finally:
+            CLEANUP.verify_account = original_verify
+            CLEANUP.read_secret_credential = original_read_secret
+            CLEANUP.matching_user_count = original_count
+
+    def test_main_writes_full_result_with_redis_skipped(self):
+        original_verify = CLEANUP.verify_account
+        original_read_secret = CLEANUP.read_secret_credential
+        original_count = CLEANUP.matching_user_count
+        original_delete = CLEANUP.delete_matching_rows
+        CLEANUP.verify_account = lambda *a, **k: None
+        CLEANUP.read_secret_credential = lambda *a, **k: ("u", "p")
+        CLEANUP.matching_user_count = lambda *a, **k: 2
+        CLEANUP.delete_matching_rows = lambda *a, **k: None
+        try:
+            with tempfile.TemporaryDirectory() as directory:
+                result_path = Path(directory) / "cleanup-result.json"
+                sys.argv = [
+                    "cleanup-aws-load-data.py", "--run-id", "aws-b01-20260811-001",
+                    "--expected-account-id", "111111111111", "--region", "ap-northeast-2",
+                    "--database-host", "db.internal", "--database-name", "travel_diary_dev",
+                    "--database-secret-arn", "arn:aws:secretsmanager:...",
+                    "--result-file", str(result_path),
+                ]
+                self.assertEqual(CLEANUP.main(), 0)
+                written = json.loads(result_path.read_text(encoding="utf-8"))
+                self.assertEqual(written["matchedUserCount"], 2)
+                self.assertTrue(written["dbDeleted"])
+                self.assertIsNone(written["redisKeysDeleted"])
+                self.assertEqual(written["redisSkippedReason"], "no-redis-args")
+        finally:
+            CLEANUP.verify_account = original_verify
+            CLEANUP.read_secret_credential = original_read_secret
+            CLEANUP.matching_user_count = original_count
+            CLEANUP.delete_matching_rows = original_delete
 
 
 class CleanupAwsLoadDataTest(unittest.TestCase):

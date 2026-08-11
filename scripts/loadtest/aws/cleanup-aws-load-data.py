@@ -43,6 +43,7 @@ import os
 import re
 import subprocess
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 RUN_ID_PATTERN = re.compile(r"^[A-Za-z0-9-]{1,40}$")
@@ -94,7 +95,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--redis-replication-group-id", default=None, help="ElastiCache replication group ID the IAM auth token is signed for")
     parser.add_argument("--data-file", type=Path, default=None, help="seed-aws-load-data.py's credential file; enables exact-match Redis key cleanup")
     parser.add_argument("--dry-run", action="store_true", help="Report how many synthetic users match, delete nothing")
+    parser.add_argument("--result-file", type=Path, default=None, help="Write a structured cleanup-result.json here (orchestrate-aws-b01.sh's cleanup-result record, TEAM_MEMBER_B01_ACTION_REQUEST.md §4.2)")
     return parser.parse_args()
+
+
+def write_result(result_file: Path | None, result: dict) -> None:
+    if result_file is None:
+        return
+    result = {**result, "completedAtUtc": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")}
+    result_file = result_file.resolve()
+    result_file.parent.mkdir(parents=True, exist_ok=True)
+    result_file.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
 
 
 def run(command: list[str], *, env: dict[str, str] | None = None) -> str:
@@ -273,23 +284,39 @@ def main() -> int:
     count = matching_user_count(args, database_username, database_password, args.run_id)
     if count == 0:
         print("[cleanup] no synthetic data found for this run-id; nothing to do")
+        write_result(args.result_file, {
+            "runId": args.run_id, "dryRun": args.dry_run, "matchedUserCount": 0,
+            "dbDeleted": False, "redisKeysDeleted": None, "redisSkippedReason": "no-matching-data",
+        })
         return 0
 
     if args.dry_run:
         print(f"[cleanup] dry-run: {count} synthetic user(s) match this run-id; would be deleted")
+        write_result(args.result_file, {
+            "runId": args.run_id, "dryRun": True, "matchedUserCount": count,
+            "dbDeleted": False, "redisKeysDeleted": None, "redisSkippedReason": "dry-run",
+        })
         return 0
 
     delete_matching_rows(args, database_username, database_password, args.run_id)
     print(f"[cleanup] deleted {count} synthetic user(s) and their owned travels/timeline items")
 
+    redis_deleted = None
+    redis_skipped_reason = None
     if not (args.redis_host and args.redis_iam_user and args.redis_replication_group_id):
+        redis_skipped_reason = "no-redis-args"
         print("[cleanup] no --redis-host/--redis-iam-user/--redis-replication-group-id given; skipping Redis key cleanup (keys expire on their own TTL)")
     elif not args.data_file:
+        redis_skipped_reason = "no-data-file"
         print("[cleanup] no --data-file given; skipping Redis key cleanup (keys expire on their own TTL)")
     else:
         redis_deleted = cleanup_redis(args, args.run_id)
         print(f"[cleanup] deleted {redis_deleted} Redis key(s)")
 
+    write_result(args.result_file, {
+        "runId": args.run_id, "dryRun": False, "matchedUserCount": count,
+        "dbDeleted": True, "redisKeysDeleted": redis_deleted, "redisSkippedReason": redis_skipped_reason,
+    })
     return 0
 
 
