@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Download an AWS B-01 evidence bundle from S3 to a local directory, then
-# (optionally) fill in grafana/* via export-grafana-evidence.py and finalize
-# manifest.json via build-evidence-manifest.py — the download direction of
+# (optionally) fill in grafana/* via export-grafana-evidence.py, then finalize
+# manifest.json via a second invocation after manual PNG capture — the download direction of
 # contracts/EVIDENCE_BUNDLE_CONTRACT.md, per
 # aws-load-test-handoff/plans/05_EVIDENCE_EXPORT_PLAN.md.
 #
@@ -27,6 +27,7 @@ REGION=""
 DATA_FILE=""
 DRY_RUN=0
 SKIP_GRAFANA=0
+FINALIZE_LOCAL=0
 GRAFANA_URL="${GRAFANA_URL:-}"
 GRAFANA_EVIDENCE_USER="${GRAFANA_EVIDENCE_USER:-}"
 GRAFANA_EVIDENCE_PASSWORD="${GRAFANA_EVIDENCE_PASSWORD:-}"
@@ -47,13 +48,15 @@ Required:
 Optional:
   --s3-prefix PREFIX             Default: evidence/aws-load-tests
   --evidence-root PATH           Default: evidence/aws-load-tests/<run-id> under the repo root
-  --data-file PATH               A securely-retained local copy of the run's data.json (never
-                                  sourced from S3 — see upload-aws-evidence.py's SKIP_FILENAMES).
-                                  Required unless --skip-grafana and you don't intend to run
-                                  build-evidence-manifest.py yourself afterwards.
+  --data-file PATH               Optional Runner-side credential copy for a value-aware local scan.
+                                  Normal flow omits this because upload-aws-evidence.py retires
+                                  data.json before S3 export.
   --dry-run                      Print the planned aws s3/ssm commands; download nothing
   --skip-grafana                 Skip export-grafana-evidence.py and build-evidence-manifest.py;
-                                  only sync files from S3
+                                  only sync files from S3 (unless --finalize-local is also given)
+  --finalize-local                After PNG capture, run the local safety/checksum manifest with
+                                  --require-png and write local-export-complete.json. This is a
+                                  separate invocation after the capture URLs have been completed.
 
 Grafana export (skipped with --skip-grafana or if these are omitted):
   --grafana-url URL              Default: $GRAFANA_URL, typically http://127.0.0.1:<port> once
@@ -78,6 +81,7 @@ while [[ "$#" -gt 0 ]]; do
     --data-file) DATA_FILE="$2"; shift 2 ;;
     --dry-run) DRY_RUN=1; shift ;;
     --skip-grafana) SKIP_GRAFANA=1; shift ;;
+    --finalize-local) FINALIZE_LOCAL=1; shift ;;
     --grafana-url) GRAFANA_URL="$2"; shift 2 ;;
     --grafana-user) GRAFANA_EVIDENCE_USER="$2"; shift 2 ;;
     --grafana-password) GRAFANA_EVIDENCE_PASSWORD="$2"; shift 2 ;;
@@ -136,12 +140,12 @@ else
   echo "[download] synced $S3_URI -> $EVIDENCE_ROOT/"
 fi
 
-if [[ "$SKIP_GRAFANA" == "1" ]]; then
+if [[ "$FINALIZE_LOCAL" == "0" && "$SKIP_GRAFANA" == "1" ]]; then
   echo "[download] --skip-grafana: not running export-grafana-evidence.py or build-evidence-manifest.py"
   exit 0
 fi
 
-if [[ -n "$MONITORING_INSTANCE_ID" ]]; then
+if [[ "$FINALIZE_LOCAL" == "0" && -n "$MONITORING_INSTANCE_ID" ]]; then
   cat <<EOF
 [download] Grafana is only reachable over SSM Port Forwarding (Plan05 step 1). Run this in
 another terminal, then re-run this script once the tunnel is up:
@@ -154,38 +158,64 @@ another terminal, then re-run this script once the tunnel is up:
 EOF
 fi
 
-if [[ -z "$GRAFANA_URL" || -z "$GRAFANA_EVIDENCE_USER" || -z "$GRAFANA_EVIDENCE_PASSWORD" ]]; then
+if [[ "$FINALIZE_LOCAL" == "0" && ( -z "$GRAFANA_URL" || -z "$GRAFANA_EVIDENCE_USER" || -z "$GRAFANA_EVIDENCE_PASSWORD" ) ]]; then
   echo "[download] --grafana-url/--grafana-user/--grafana-password (or \$GRAFANA_URL/\$GRAFANA_EVIDENCE_USER/\$GRAFANA_EVIDENCE_PASSWORD) not fully supplied; skipping Grafana export" >&2
   echo "[download] evidence downloaded but grafana/dashboard.json, grafana/annotations.json, grafana/queries/ are not yet populated" >&2
   exit 0
 fi
 
-grafana_args=(
-  --evidence-root "$EVIDENCE_ROOT" --grafana-url "$GRAFANA_URL"
-  --user "$GRAFANA_EVIDENCE_USER" --password "$GRAFANA_EVIDENCE_PASSWORD"
-  --dashboard-uid "$DASHBOARD_UID" --run-id "$RUN_ID" --region "$REGION"
-)
-if [[ "$DRY_RUN" == "1" ]]; then
-  grafana_args+=(--dry-run)
+if [[ "$FINALIZE_LOCAL" == "0" ]]; then
+  grafana_args=(
+    --evidence-root "$EVIDENCE_ROOT" --grafana-url "$GRAFANA_URL"
+    --user "$GRAFANA_EVIDENCE_USER" --password "$GRAFANA_EVIDENCE_PASSWORD"
+    --dashboard-uid "$DASHBOARD_UID" --run-id "$RUN_ID" --region "$REGION"
+  )
+  if [[ "$DRY_RUN" == "1" ]]; then
+    grafana_args+=(--dry-run)
+  fi
+  python3 "$REPOSITORY_ROOT/scripts/loadtest/aws/export-grafana-evidence.py" "${grafana_args[@]}"
 fi
-python3 "$REPOSITORY_ROOT/scripts/loadtest/aws/export-grafana-evidence.py" "${grafana_args[@]}"
 
-if [[ "$DRY_RUN" != "1" ]]; then
+if [[ "$FINALIZE_LOCAL" == "0" && "$DRY_RUN" != "1" ]]; then
   echo "[download] PNG capture is required (D-003-R1) but must be done manually: open each URL in"
   echo "[download] $EVIDENCE_ROOT/grafana/panels/panel-<id>.capture.json's captureUrl over the SSM tunnel"
   echo "[download] above, screenshot just that panel, and save it as the file's expectedPngPath."
+  echo "[download] after capture, re-run with --finalize-local --skip-grafana to build the final local manifest."
+  exit 0
 fi
 
 if [[ "$DRY_RUN" == "1" ]]; then
-  echo "[dry-run] build-evidence-manifest.py --evidence-root $EVIDENCE_ROOT --run-id $RUN_ID --data-file ${DATA_FILE:-<required>} --compare-s3-bucket $S3_BUCKET --s3-prefix $S3_PREFIX --region $REGION" >&2
+  echo "[dry-run] build-evidence-manifest.py --evidence-root $EVIDENCE_ROOT --run-id $RUN_ID --require-png --compare-s3-bucket $S3_BUCKET --s3-prefix $S3_PREFIX --region $REGION" >&2
   exit 0
 fi
 
-if [[ -z "$DATA_FILE" ]]; then
-  echo "[download] --data-file not supplied; skipping build-evidence-manifest.py (run it yourself once you have a securely-retained copy of this run's data.json)" >&2
-  exit 0
-fi
-
-python3 "$REPOSITORY_ROOT/scripts/loadtest/aws/build-evidence-manifest.py" \
-  --evidence-root "$EVIDENCE_ROOT" --run-id "$RUN_ID" --data-file "$DATA_FILE" \
+manifest_args=(
+  --evidence-root "$EVIDENCE_ROOT" --run-id "$RUN_ID" --require-png
   --compare-s3-bucket "$S3_BUCKET" --s3-prefix "$S3_PREFIX" --region "$REGION"
+)
+if [[ -n "$DATA_FILE" ]]; then
+  manifest_args+=(--data-file "$DATA_FILE")
+fi
+python3 "$REPOSITORY_ROOT/scripts/loadtest/aws/build-evidence-manifest.py" "${manifest_args[@]}"
+
+python3 - "$EVIDENCE_ROOT/local-export-complete.json" "$RUN_ID" "$EVIDENCE_ROOT/manifest.json" "$S3_BUCKET" "$S3_PREFIX" <<'PY'
+import hashlib
+import json
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+output, run_id, manifest_path, bucket, prefix = sys.argv[1:]
+manifest = Path(manifest_path)
+digest = hashlib.sha256(manifest.read_bytes()).hexdigest()
+Path(output).write_text(json.dumps({
+    "status": "complete",
+    "runId": run_id,
+    "manifestSha256": digest,
+    "s3Bucket": bucket,
+    "s3Prefix": prefix,
+    "completedAtUtc": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
+    "note": "S3 bundle downloaded, Grafana Query/PNG capture finalized locally, and require-png manifest passed.",
+}, indent=2) + "\n", encoding="utf-8")
+PY
+echo "[download] local-export-complete.json written; local evidence is ready for the destroy gate"

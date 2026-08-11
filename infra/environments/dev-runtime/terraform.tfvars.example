@@ -14,3 +14,8 @@ backend_image_uri = "123456789012.dkr.ecr.ap-northeast-2.amazonaws.com/kdt-trave
 # Infra owner separately (console or approved IaC) — never the RDS master
 # secret. See aws-load-test-handoff/decisions/DECISION_LOG.md.
 test_db_secret_arn = "arn:aws:secretsmanager:ap-northeast-2:123456789012:secret:kdt-travelplanner-dev/loadtest/db-XXXXXX"
+
+# Exact commit from the merged B-01 implementation PR. Replace before apply.
+load_runner_source_commit_sha = "0123456789abcdef0123456789abcdef01234567"
+load_runner_instance_type     = "t3.small"
+load_runner_botocore_version  = "1.43.68"

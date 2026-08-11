@@ -56,76 +56,7 @@
     },
     {
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "description": "Source: k6 Runner (Prometheus remote-write). Metric names are k6's experimental-prometheus-rw output for the Trend/Counter metrics defined in load-tests/k6/aws/lib/core-metrics.js and k6's own http_req_duration/dropped_iterations. NOT YET VERIFIED against a live receiver (D-002 not approved/wired) — re-check exact metric/label names against the real Prometheus /api/v1/label/__name__/values output once remote-write is enabled, per Plan04's own note that this plan isn't complete until D-002/D-003 are resolved.",
-      "fieldConfig": {
-        "defaults": {
-          "color": { "mode": "palette-classic" },
-          "custom": {
-            "axisCenteredZero": false, "axisColorMode": "text", "axisLabel": "", "axisPlacement": "auto",
-            "barAlignment": 0, "drawStyle": "line", "fillOpacity": 12, "gradientMode": "none",
-            "hideFrom": { "legend": false, "tooltip": false, "viz": false },
-            "lineInterpolation": "linear", "lineWidth": 2, "pointSize": 5,
-            "scaleDistribution": { "type": "linear" }, "showPoints": "never", "spanNulls": false,
-            "stacking": { "group": "A", "mode": "none" }, "thresholdsStyle": { "mode": "off" }
-          },
-          "mappings": [],
-          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] },
-          "unit": "s"
-        },
-        "overrides": []
-      },
-      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 5 },
-      "id": 2,
-      "options": {
-        "legend": { "calcs": [], "displayMode": "list", "placement": "bottom", "showLegend": true },
-        "tooltip": { "hideZeros": false, "mode": "single", "sort": "none" }
-      },
-      "pluginVersion": "13.1.0",
-      "targets": [
-        { "editorMode": "code", "expr": "k6_http_req_duration_p95", "legendFormat": "p95", "range": true, "refId": "A" },
-        { "editorMode": "code", "expr": "k6_http_req_duration_p99", "legendFormat": "p99", "range": true, "refId": "B" }
-      ],
-      "title": "k6 request duration p95/p99",
-      "type": "timeseries"
-    },
-    {
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "description": "Source: k6 Runner (Prometheus remote-write). core_successful_operations_total/core_completed_operations_total from load-tests/k6/aws/lib/core-metrics.js; dropped_iterations_total is k6-native.",
-      "fieldConfig": {
-        "defaults": {
-          "color": { "mode": "palette-classic" },
-          "custom": {
-            "axisCenteredZero": false, "axisColorMode": "text", "axisLabel": "", "axisPlacement": "auto",
-            "barAlignment": 0, "drawStyle": "line", "fillOpacity": 12, "gradientMode": "none",
-            "hideFrom": { "legend": false, "tooltip": false, "viz": false },
-            "lineInterpolation": "linear", "lineWidth": 2, "pointSize": 5,
-            "scaleDistribution": { "type": "linear" }, "showPoints": "never", "spanNulls": false,
-            "stacking": { "group": "A", "mode": "none" }, "thresholdsStyle": { "mode": "off" }
-          },
-          "mappings": [],
-          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] },
-          "unit": "reqps"
-        },
-        "overrides": []
-      },
-      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 5 },
-      "id": 3,
-      "options": {
-        "legend": { "calcs": [], "displayMode": "list", "placement": "bottom", "showLegend": true },
-        "tooltip": { "hideZeros": false, "mode": "single", "sort": "none" }
-      },
-      "pluginVersion": "13.1.0",
-      "targets": [
-        { "editorMode": "code", "expr": "sum(rate(core_successful_operations_total[1m]))", "legendFormat": "success RPS", "range": true, "refId": "A" },
-        { "editorMode": "code", "expr": "sum(rate(core_unexpected_errors_total[1m]))", "legendFormat": "unexpected error RPS", "range": true, "refId": "B" },
-        { "editorMode": "code", "expr": "sum(rate(dropped_iterations_total[1m]))", "legendFormat": "dropped iterations/s", "range": true, "refId": "C" }
-      ],
-      "title": "k6 success RPS / errors / dropped iterations",
-      "type": "timeseries"
-    },
-    {
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "description": "Source: Prometheus scrape of job=backend (Spring HTTP p95/5xx) combined with k6 remote-write's core_contract_failures_total (SLO_AND_METRIC_CONTRACT.md). p95 step/period differs from k6's (30s scrape vs k6's own resolution) — do not directly overlay without accounting for that.",
+      "description": "Source: Prometheus scrape of the backend (Spring HTTP p95). k6 raw and native summaries remain the authoritative client-side load evidence; this dashboard does not require a k6 remote-write receiver.",
       "fieldConfig": {
         "defaults": {
           "color": { "mode": "palette-classic" },
@@ -189,37 +120,6 @@
       "type": "stat"
     },
     {
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "fieldConfig": {
-        "defaults": {
-          "color": { "mode": "thresholds" },
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              { "color": "green", "value": null },
-              { "color": "red", "value": 1 }
-            ]
-          },
-          "unit": "short"
-        },
-        "overrides": []
-      },
-      "gridPos": { "h": 3, "w": 6, "x": 18, "y": 12 },
-      "id": 6,
-      "options": {
-        "colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto",
-        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
-        "showPercentChange": false, "textMode": "auto", "wideLayout": true
-      },
-      "pluginVersion": "13.1.0",
-      "targets": [
-        { "editorMode": "code", "expr": "sum(increase(core_contract_failures_total[$__range]))", "legendFormat": "contract failures", "range": true, "refId": "A" }
-      ],
-      "title": "Contract failures (this range)",
-      "type": "stat"
-    },
-    {
       "datasource": { "type": "cloudwatch", "uid": "cloudwatch" },
       "description": "Source: CloudWatch (ALB). period/step differs from k6/Prometheus (CloudWatch's own 1m granularity).",
       "fieldConfig": {
@@ -248,7 +148,7 @@
       "pluginVersion": "13.1.0",
       "targets": [
         {
-          "dimensions": {},
+          "dimensions": { "LoadBalancer": "$alb_dimension" },
           "expression": "",
           "metricName": "RequestCount",
           "namespace": "AWS/ApplicationELB",
@@ -289,7 +189,7 @@
       "pluginVersion": "13.1.0",
       "targets": [
         {
-          "dimensions": {},
+          "dimensions": { "LoadBalancer": "$alb_dimension", "TargetGroup": "$target_group_dimension" },
           "expression": "",
           "metricName": "TargetResponseTime",
           "namespace": "AWS/ApplicationELB",
@@ -329,7 +229,7 @@
       "pluginVersion": "13.1.0",
       "targets": [
         {
-          "dimensions": {},
+          "dimensions": { "LoadBalancer": "$alb_dimension", "TargetGroup": "$target_group_dimension" },
           "expression": "",
           "metricName": "HealthyHostCount",
           "namespace": "AWS/ApplicationELB",
@@ -370,9 +270,9 @@
       },
       "pluginVersion": "13.1.0",
       "targets": [
-        { "dimensions": {}, "expression": "", "metricName": "GroupDesiredCapacity", "namespace": "AWS/AutoScaling", "period": "60", "refId": "A", "region": "ap-northeast-2", "statistic": "Average" },
-        { "dimensions": {}, "expression": "", "metricName": "GroupInServiceInstances", "namespace": "AWS/AutoScaling", "period": "60", "refId": "B", "region": "ap-northeast-2", "statistic": "Average" },
-        { "dimensions": {}, "expression": "", "metricName": "GroupPendingInstances", "namespace": "AWS/AutoScaling", "period": "60", "refId": "C", "region": "ap-northeast-2", "statistic": "Average" }
+        { "dimensions": { "AutoScalingGroupName": "$autoscaling_group_name" }, "expression": "", "metricName": "GroupDesiredCapacity", "namespace": "AWS/AutoScaling", "period": "60", "refId": "A", "region": "ap-northeast-2", "statistic": "Average" },
+        { "dimensions": { "AutoScalingGroupName": "$autoscaling_group_name" }, "expression": "", "metricName": "GroupInServiceInstances", "namespace": "AWS/AutoScaling", "period": "60", "refId": "B", "region": "ap-northeast-2", "statistic": "Average" },
+        { "dimensions": { "AutoScalingGroupName": "$autoscaling_group_name" }, "expression": "", "metricName": "GroupPendingInstances", "namespace": "AWS/AutoScaling", "period": "60", "refId": "C", "region": "ap-northeast-2", "statistic": "Average" }
       ],
       "title": "ASG Desired / InService / Pending",
       "type": "timeseries"
@@ -469,8 +369,8 @@
       },
       "pluginVersion": "13.1.0",
       "targets": [
-        { "dimensions": {}, "expression": "", "metricName": "CPUUtilization", "namespace": "AWS/RDS", "period": "60", "refId": "A", "region": "ap-northeast-2", "statistic": "Average" },
-        { "dimensions": {}, "expression": "", "metricName": "EngineCPUUtilization", "namespace": "AWS/ElastiCache", "period": "60", "refId": "B", "region": "ap-northeast-2", "statistic": "Average" }
+        { "dimensions": { "DBInstanceIdentifier": "$db_instance_identifier" }, "expression": "", "metricName": "CPUUtilization", "namespace": "AWS/RDS", "period": "60", "refId": "A", "region": "ap-northeast-2", "statistic": "Average" },
+        { "dimensions": { "CacheClusterId": "$cache_cluster_id" }, "expression": "", "metricName": "EngineCPUUtilization", "namespace": "AWS/ElastiCache", "period": "60", "refId": "B", "region": "ap-northeast-2", "statistic": "Average" }
       ],
       "title": "RDS / Redis CPU",
       "type": "timeseries"
@@ -528,7 +428,12 @@
       { "name": "version", "type": "query", "query": "label_values(up{job=\"backend\"}, version)", "datasource": { "type": "prometheus", "uid": "prometheus" }, "refresh": 2, "sort": 1, "includeAll": true, "multi": true, "current": {} },
       { "name": "instance", "type": "query", "query": "label_values(up{job=\"backend\"}, instance_id)", "datasource": { "type": "prometheus", "uid": "prometheus" }, "refresh": 2, "sort": 1, "includeAll": true, "multi": true, "current": {} },
       { "name": "availability_zone", "type": "query", "query": "label_values(up{job=\"backend\"}, availability_zone)", "datasource": { "type": "prometheus", "uid": "prometheus" }, "refresh": 2, "sort": 1, "includeAll": true, "multi": true, "current": {} },
-      { "name": "route", "type": "query", "query": "label_values(http_server_requests_seconds_count{job=\"backend\"}, uri)", "datasource": { "type": "prometheus", "uid": "prometheus" }, "refresh": 2, "sort": 1, "includeAll": true, "multi": true, "current": {}, "description": "Plan04 calls this 'route'; Spring Boot Actuator's actual Prometheus label is 'uri' (verified against backend-overview.json's existing queries), not verified against a live target since D-002 isn't wired yet." }
+      { "name": "route", "type": "query", "query": "label_values(http_server_requests_seconds_count{job=\"backend\"}, uri)", "datasource": { "type": "prometheus", "uid": "prometheus" }, "refresh": 2, "sort": 1, "includeAll": true, "multi": true, "current": {}, "description": "Spring Boot Actuator's actual Prometheus label is 'uri'." },
+      { "name": "alb_dimension", "type": "custom", "query": "<resolve from aws/resource-dimensions.json>", "includeAll": false, "multi": false, "current": { "text": "<set from evidence>", "value": "<set from evidence>" }, "description": "ALB ARN suffix after loadbalancer/. Set from aws/resource-dimensions.json before capture." },
+      { "name": "target_group_dimension", "type": "custom", "query": "<resolve from aws/resource-dimensions.json>", "includeAll": false, "multi": false, "current": { "text": "<set from evidence>", "value": "<set from evidence>" }, "description": "Target group ARN suffix after targetgroup/. Set from aws/resource-dimensions.json before capture." },
+      { "name": "autoscaling_group_name", "type": "custom", "query": "<resolve from aws/resource-dimensions.json>", "includeAll": false, "multi": false, "current": { "text": "<set from evidence>", "value": "<set from evidence>" }, "description": "Backend ASG name. Set from aws/resource-dimensions.json before capture." },
+      { "name": "db_instance_identifier", "type": "custom", "query": "<resolve from aws/resource-dimensions.json>", "includeAll": false, "multi": false, "current": { "text": "<set from evidence>", "value": "<set from evidence>" }, "description": "RDS DBInstanceIdentifier. Set from aws/resource-dimensions.json before capture." },
+      { "name": "cache_cluster_id", "type": "custom", "query": "<resolve from aws/resource-dimensions.json>", "includeAll": false, "multi": false, "current": { "text": "<set from evidence>", "value": "<set from evidence>" }, "description": "ElastiCache CacheClusterId/member cluster ID. Set from aws/resource-dimensions.json before capture." }
     ]
   },
   "time": { "from": "now-1h", "to": "now" },

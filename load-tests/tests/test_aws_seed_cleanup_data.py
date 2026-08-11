@@ -6,6 +6,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import types
 import unittest
 from pathlib import Path
 
@@ -139,6 +140,84 @@ class SeedAwsLoadDataTest(unittest.TestCase):
         with self.assertRaises(SEED.SeedError) as ctx:
             SEED.generate_redis_iam_auth_token("loadtest-dev", "kdt-travelplanner-dev-redis", "ap-northeast-2")
         self.assertIn("botocore", str(ctx.exception))
+
+    def test_generate_redis_iam_auth_token_uses_sigv4_query_contract(self):
+        calls = []
+
+        class FakeSession:
+            def get_credentials(self):
+                return object()
+
+        class FakeRequest:
+            def __init__(self, *, method, url):
+                self.method = method
+                self.url = url
+                self.headers = {}
+
+        class FakeSigner:
+            def __init__(self, credentials, service_name, region, expires):
+                calls.append((credentials, service_name, region, expires))
+
+            def add_auth(self, request):
+                self.request = request
+                request.url += "&X-Amz-Signature=fake"
+
+        botocore_module = types.ModuleType("botocore")
+        botocore_module.__path__ = []
+        session_module = types.ModuleType("botocore.session")
+        session_module.get_session = lambda: FakeSession()
+        auth_module = types.ModuleType("botocore.auth")
+        auth_module.SigV4QueryAuth = FakeSigner
+        awsrequest_module = types.ModuleType("botocore.awsrequest")
+        awsrequest_module.AWSRequest = FakeRequest
+        botocore_module.session = session_module
+
+        original_modules = {name: sys.modules.get(name) for name in (
+            "botocore", "botocore.session", "botocore.auth", "botocore.awsrequest",
+        )}
+        sys.modules.update({
+            "botocore": botocore_module,
+            "botocore.session": session_module,
+            "botocore.auth": auth_module,
+            "botocore.awsrequest": awsrequest_module,
+        })
+        try:
+            seed_token = SEED.generate_redis_iam_auth_token(
+                "loadtest-dev", "kdt-travelplanner-dev-redis", "ap-northeast-2",
+            )
+            cleanup_token = CLEANUP.generate_redis_iam_auth_token(
+                "loadtest-dev", "kdt-travelplanner-dev-redis", "ap-northeast-2",
+            )
+        finally:
+            for name, original in original_modules.items():
+                if original is None:
+                    sys.modules.pop(name, None)
+                else:
+                    sys.modules[name] = original
+
+        self.assertIn("Action=connect", seed_token)
+        self.assertIn("User=loadtest-dev", seed_token)
+        self.assertIn("X-Amz-Signature=fake", seed_token)
+        self.assertEqual(seed_token, cleanup_token)
+        self.assertEqual(calls[0][1:], ("elasticache", "ap-northeast-2", 900))
+
+    def test_redis_key_guards_reject_broad_or_malformed_keys(self):
+        self.assertEqual(
+            SEED.redis_refresh_token_key("a" * 64),
+            "auth:refresh:token:" + "a" * 64,
+        )
+        self.assertEqual(
+            SEED.redis_refresh_family_key("A" * 43),
+            "auth:refresh:family:" + "A" * 43,
+        )
+        with self.assertRaises(SEED.SeedError):
+            SEED.redis_refresh_token_key("*")
+        with self.assertRaises(SEED.SeedError):
+            SEED.redis_refresh_family_key("auth:refresh:family:*")
+        with self.assertRaises(CLEANUP.CredentialFileError):
+            CLEANUP.redis_refresh_token_key("not-a-sha256")
+        with self.assertRaises(CLEANUP.CredentialFileError):
+            CLEANUP.redis_refresh_family_key("*")
 
     def test_credential_file_is_written_with_private_permissions(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -1,15 +1,28 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-dnf install -y docker python3-pip
+dnf install -y docker git python3-pip
 systemctl enable --now docker
 
-# botocore-only (no full boto3) install: scripts/loadtest/aws/{seed,cleanup}-aws-load-data.py
-# sign their own ElastiCache Redis IAM auth tokens (D-001-R1 후속 Seed/Cleanup
-# 최소권한 — RBAC user, no Redis Secret at all) using botocore's RequestSigner
-# directly, matching AWS's documented technique for IAM-authenticated Redis
-# OSS access. `aws` CLI itself is assumed already present on this AMI.
-pip3 install --no-cache-dir botocore
+# The Runner must execute the exact reviewed source commit. The repository is
+# public, so no GitHub credential is placed on the instance. The SHA is an
+# immutable provenance input supplied by the operator at apply time.
+install -d -m 0755 /opt
+if [[ ! -d /opt/travel-planner/.git ]]; then
+  git clone --filter=blob:none --no-checkout '${source_repository_url}' /opt/travel-planner
+fi
+git -C /opt/travel-planner fetch --depth 1 origin '${source_commit_sha}'
+git -C /opt/travel-planner checkout --detach '${source_commit_sha}'
+actual_source_sha="$(git -C /opt/travel-planner rev-parse HEAD)"
+if [[ "$actual_source_sha" != '${source_commit_sha}' ]]; then
+  echo "source commit verification failed" >&2
+  exit 1
+fi
+
+# botocore-only (no full boto3) install: the seed/cleanup scripts sign their
+# own ElastiCache Redis IAM auth tokens. Pin the version so the signer API does
+# not drift between ephemeral Runner instances.
+pip3 install --no-cache-dir 'botocore==${botocore_version}'
 
 # Pull the pinned k6 image once during bootstrap so a B-01 run is not
 # blocked on a registry pull. A version change is delivered through a new
@@ -28,4 +41,5 @@ install -d -m 0755 /var/lib/travel-planner/load-test-evidence
 # 참조할 고정 region. monitoring_ec2의 user-data가 aws_region을 넘기는 것과
 # 같은 패턴이며, 이 모듈 자체는 이 값을 다른 용도로 사용하지 않는다.
 install -d -m 0755 /etc/travel-planner
-printf 'AWS_DEFAULT_REGION=%s\n' '${aws_region}' > /etc/travel-planner/load-runner.env
+printf 'AWS_DEFAULT_REGION=%s\nLOAD_TEST_SOURCE_REPOSITORY=%s\nLOAD_TEST_SOURCE_REF=%s\n' \
+  '${aws_region}' '${source_repository_url}' '${source_commit_sha}' > /etc/travel-planner/load-runner.env

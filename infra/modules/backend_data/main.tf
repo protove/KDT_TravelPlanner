@@ -1,5 +1,12 @@
 locals {
   name = "${var.project_name}-${var.environment}"
+
+  # ElastiCache user IDs and names are limited to 40 characters. Keep the
+  # identity stable and unique for this project/environment while ensuring
+  # the IAM-authenticated user_id and user_name are exactly the same value.
+  redis_name_hash               = substr(sha1(local.name), 0, 8)
+  redis_default_user_id         = "${substr(local.name, 0, 24)}-${local.redis_name_hash}-def"
+  redis_load_test_user_identity = "${substr(local.name, 0, 20)}-${local.redis_name_hash}-loadtest"
 }
 
 resource "aws_db_subnet_group" "this" {
@@ -85,7 +92,7 @@ resource "aws_elasticache_subnet_group" "this" {
 # window; this was not tested against live AWS in this change (see PR body
 # "중요한 한계").
 resource "aws_elasticache_user" "default" {
-  user_id       = "${local.name}-redis-default"
+  user_id       = local.redis_default_user_id
   user_name     = "default"
   engine        = "REDIS"
   access_string = "on ~* +@all"
@@ -108,8 +115,8 @@ resource "aws_elasticache_user" "default" {
 # actual isolation boundary: this user cannot GET, SCAN, FLUSHALL, or run
 # any other command even though it can technically address any key.
 resource "aws_elasticache_user" "load_test" {
-  user_id       = "${local.name}-redis-loadtest"
-  user_name     = "loadtest-${var.environment}"
+  user_id       = local.redis_load_test_user_identity
+  user_name     = local.redis_load_test_user_identity
   engine        = "REDIS"
   access_string = "on ~* -@all +set +del"
 

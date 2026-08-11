@@ -91,8 +91,10 @@ module "load_test_runner" {
   aws_region               = var.aws_region
   environment              = local.environment
   evidence_bucket_name     = "${var.project_name}-${local.environment}-load-test-evidence-${data.aws_caller_identity.current.account_id}"
-  instance_type            = "t3.small" # D-001-R1 2026-08-11: default candidate, not a fixed value (aws-load-test-handoff/decisions/DECISION_LOG.md). Override with -var="instance_type=t3.medium" only after Runner-bottleneck evidence.
+  instance_type            = var.load_runner_instance_type
+  botocore_version         = var.load_runner_botocore_version
   k6_image_reference       = var.k6_image_reference
+  source_commit_sha        = var.load_runner_source_commit_sha
   project_name             = var.project_name
   runner_security_group_id = module.runtime_security.load_runner_security_group_id
   # D-001-R1 후속 "Seed/Cleanup 최소권한" (aws-load-test-handoff/decisions/

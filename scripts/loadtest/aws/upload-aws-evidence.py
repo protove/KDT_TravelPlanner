@@ -48,6 +48,7 @@ ACCOUNT_ID_PATTERN = re.compile(r"^\d{12}$")
 MANIFEST_FILENAME = "manifest.json"
 SAFETY_REPORT_FILENAME = "evidence-safety.json"
 CREDENTIAL_FILENAME = "data.json"
+RETIREMENT_REPORT_FILENAME = "credential-retirement.json"
 # data.json (seed-aws-load-data.py's --data-file, written at
 # $EVIDENCE_ROOT/data.json by orchestrate-aws-b01.sh) holds the raw synthetic
 # refreshToken/refreshFamilyId/userId values used as this scan's own
@@ -163,6 +164,32 @@ def run_safety_scan(safety_module, evidence_root: Path, data_file: Path) -> dict
     return result
 
 
+def retire_credential_file(evidence_root: Path, data_file: Path) -> Path:
+    """Delete the raw seed credential file after the value-aware scan.
+
+    The file must be the run's evidence-root/data.json. Keeping this exact
+    scope prevents a typo from deleting an unrelated operator file while
+    making the lifecycle explicit for the destroy/export gate.
+    """
+    evidence_root = evidence_root.resolve()
+    data_file = data_file.resolve()
+    expected = evidence_root / CREDENTIAL_FILENAME
+    if data_file != expected:
+        raise UploadError("--data-file must be evidence-root/data.json so runner credential retirement is unambiguous")
+    if data_file.exists():
+        data_file.unlink()
+    if data_file.exists():
+        raise UploadError("raw runner credential file still exists after retirement")
+    report = evidence_root / RETIREMENT_REPORT_FILENAME
+    report.write_text(json.dumps({
+        "status": "retired",
+        "file": CREDENTIAL_FILENAME,
+        "retiredAtUtc": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
+        "note": "data.json was value-scanned, checksum-verified for upload, and deleted on the Runner after S3 upload.",
+    }, indent=2) + "\n", encoding="utf-8")
+    return report
+
+
 def upload_file(bucket: str, key: str, local_path: Path, expected_sha256_hex: str) -> None:
     output = run([
         "aws", "s3api", "put-object",
@@ -234,6 +261,8 @@ def main() -> int:
         return 0
 
     uploaded = upload_bundle(evidence_root, args.run_id, args.s3_bucket, args.s3_prefix, manifest)
+    retire_credential_file(evidence_root, data_file)
+    print("[upload] raw runner credential file retired after checksum-verified upload")
     print(f"[upload] complete: {uploaded} file(s) uploaded and checksum-verified")
     return 0
 

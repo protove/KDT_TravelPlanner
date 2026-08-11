@@ -35,6 +35,38 @@ variable "k6_image_reference" {
   }
 }
 
+variable "load_runner_instance_type" {
+  type        = string
+  description = "Ephemeral B-01 Load Runner EC2 type. Default t3.small; increase only after Runner-bottleneck evidence."
+  default     = "t3.small"
+
+  validation {
+    condition     = can(regex("^t3\\.[a-z0-9]+$", var.load_runner_instance_type))
+    error_message = "load_runner_instance_type must be a valid t3 family instance type."
+  }
+}
+
+variable "load_runner_source_commit_sha" {
+  type        = string
+  description = "Exact merged commit SHA the ephemeral Runner must checkout."
+
+  validation {
+    condition     = can(regex("^[0-9a-f]{40}$", var.load_runner_source_commit_sha))
+    error_message = "load_runner_source_commit_sha must be an exact 40-character lowercase hexadecimal commit SHA."
+  }
+}
+
+variable "load_runner_botocore_version" {
+  type        = string
+  description = "Pinned botocore version for the Redis IAM signer on the Runner."
+  default     = "1.43.68"
+
+  validation {
+    condition     = can(regex("^[0-9]+\\.[0-9]+\\.[0-9]+$", var.load_runner_botocore_version))
+    error_message = "load_runner_botocore_version must be a pinned semantic version."
+  }
+}
+
 variable "monitoring_image_references" {
   type = object({
     prometheus = string

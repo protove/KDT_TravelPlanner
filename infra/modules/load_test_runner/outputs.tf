@@ -8,6 +8,16 @@ output "private_ip" {
   value       = aws_instance.load_runner.private_ip
 }
 
+output "instance_type" {
+  description = "Load Runner EC2 instance type applied to the ephemeral runtime."
+  value       = aws_instance.load_runner.instance_type
+}
+
+output "source_commit_sha" {
+  description = "Exact load-test repository commit configured for the Runner bootstrap."
+  value       = var.source_commit_sha
+}
+
 output "evidence_bucket_arn" {
   description = "Evidence S3 bucket ARN."
   value       = aws_s3_bucket.evidence.arn

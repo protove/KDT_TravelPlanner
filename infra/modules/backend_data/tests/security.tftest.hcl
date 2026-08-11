@@ -78,9 +78,16 @@ run "data_services_are_private_and_encrypted" {
   assert {
     condition = (
       aws_elasticache_user.load_test.authentication_mode[0].type == "iam" &&
+      aws_elasticache_user.load_test.user_id == aws_elasticache_user.load_test.user_name &&
+      length(aws_elasticache_user.load_test.user_id) <= 40 &&
       aws_elasticache_user.load_test.access_string == "on ~* -@all +set +del"
     )
-    error_message = "The load-test Redis RBAC user must authenticate via IAM (never a Secret) and be scoped to only SET/DEL (D-001-R1 후속 Seed/Cleanup 최소권한)."
+    error_message = "The load-test Redis RBAC user must use the same <=40-character IAM user_id/user_name (never a Secret) and be scoped to only SET/DEL (D-001-R1 후속 Seed/Cleanup 최소권한)."
+  }
+
+  assert {
+    condition     = length(aws_elasticache_user.default.user_id) <= 40
+    error_message = "The default Redis user ID must remain within ElastiCache's 40-character identity limit."
   }
 
   assert {
