@@ -103,7 +103,17 @@ K6_CONTAINER_NAME="loadtest-aws-k6-${RUN_ID//[^A-Za-z0-9_.-]/-}"
 # read OOMKilled/RestartCount for the Runner-bottleneck-vs-SUT-bottleneck
 # distinction D-001-R1 asks for (aws-load-test-handoff/decisions/DECISION_LOG.md).
 # It is removed explicitly further down instead.
+# The Runner invokes this script as root and deliberately keeps the seeded
+# credential file at 0600. The pinned k6 image defaults to uid/gid 12345, so
+# it cannot read that bind mount (or write the root-owned evidence directory)
+# unless the container uses the Runner's root identity. Keep the credential
+# mode private instead of chmod/chowning it for the image user, and remove all
+# Linux capabilities plus privilege escalation from the root container. It
+# receives no Docker socket and can write only the evidence bind mount.
 docker run -i --name "$K6_CONTAINER_NAME" \
+  --user 0:0 \
+  --cap-drop ALL \
+  --security-opt no-new-privileges \
   -v "$K6_DIR:/scripts:ro" \
   -v "$(dirname "$AWS_PROFILE_FILE"):/profiles:ro" \
   -v "$DATA_FILE:/data/data.json:ro" \
