@@ -22,4 +22,4 @@ reference/
 load-tests/k6/data/data.json
 evidence/load-tests/
 load-tests/**/__pycache__/
-scripts/loadtest/__pycache__/
+scripts/loadtest/**/__pycache__/
