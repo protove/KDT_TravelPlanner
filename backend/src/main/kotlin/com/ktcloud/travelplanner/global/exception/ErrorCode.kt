@@ -17,6 +17,7 @@ enum class ErrorCode(
 	RESOURCE_NOT_FOUND(HttpStatus.NOT_FOUND, "요청한 리소스를 찾을 수 없습니다."),
 	CONFLICT(HttpStatus.CONFLICT, "요청이 현재 상태와 충돌합니다."),
 	OAUTH_PROVIDER_ERROR(HttpStatus.BAD_GATEWAY, "OAuth 제공자 통신에 실패했습니다."),
+	WITHDRAWN_OAUTH_ACCOUNT(HttpStatus.CONFLICT, "이미 탈퇴한 계정입니다."),
 	EXTERNAL_STORAGE_ERROR(HttpStatus.BAD_GATEWAY, "파일 저장소 요청에 실패했습니다."),
 	GOOGLE_PLACES_ERROR(HttpStatus.BAD_GATEWAY, "Google Places 요청에 실패했습니다."),
 	GOOGLE_PLACES_TIMEOUT(HttpStatus.GATEWAY_TIMEOUT, "Google Places 응답 시간이 초과되었습니다."),
