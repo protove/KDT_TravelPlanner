@@ -311,7 +311,7 @@ class AwsSeed:
         if existing:
             return existing, True
         user_id = str(uuid.uuid4())
-        inserted = self.psql(
+        insert_output = self.psql(
             "INSERT INTO user_table "
             "(id, provider, provider_user_id, email, name, nickname, profile_completed, created_at, updated_at) VALUES "
             f"({sql_literal(user_id)}, 'GOOGLE', {sql_literal(provider_user_id(run_id, index))}, "
@@ -319,9 +319,14 @@ class AwsSeed:
             f"{sql_literal(synthetic_nickname(run_id, index))}, TRUE, now(), now()) "
             "ON CONFLICT (provider, provider_user_id) DO NOTHING "
             "RETURNING id"
-        ).strip()
-        if inserted:
-            return inserted, False
+        )
+        # psql can append a command-status line such as INSERT 0 1 even
+        # with tuples-only output. The UUID was generated locally, so use the
+        # RETURNING row only as proof that this process inserted it; never
+        # pass the full stdout into Redis as the refresh-token user payload.
+        returned_rows = {line.strip() for line in insert_output.splitlines() if line.strip()}
+        if user_id in returned_rows:
+            return user_id, False
         # Lost a race with another process seeding the same run_id/index; re-read.
         existing = self.find_existing_user_id(run_id, index)
         if not existing:
