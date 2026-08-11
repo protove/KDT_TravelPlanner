@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import shlex
 import subprocess
 import tempfile
@@ -13,9 +14,37 @@ SCRIPT = REPOSITORY_ROOT / "scripts/loadtest/aws/orchestrate-aws-b01.sh"
 PROFILE = REPOSITORY_ROOT / "load-tests/aws/profiles/ec2-b01.json"
 DESTROY_GATE = REPOSITORY_ROOT / "scripts/loadtest/aws/check-destroy-gate.sh"
 LOAD_RUNNER_TERRAFORM = REPOSITORY_ROOT / "infra/modules/load_test_runner/main.tf"
+AWS_K6_RUNNER = REPOSITORY_ROOT / "scripts/loadtest/aws/run-k6-aws-scenario.sh"
+K6_ROOT = REPOSITORY_ROOT / "load-tests/k6"
 
 
 class AwsOrchestrationContractTests(unittest.TestCase):
+    def test_aws_k6_runner_mounts_shared_modules_and_run_credentials(self) -> None:
+        runner_source = AWS_K6_RUNNER.read_text(encoding="utf-8")
+        orchestrator_source = SCRIPT.read_text(encoding="utf-8")
+
+        self.assertIn('K6_DIR="$REPOSITORY_ROOT/load-tests/k6"', runner_source)
+        self.assertNotIn('K6_DIR="$REPOSITORY_ROOT/load-tests/k6/aws"', runner_source)
+        self.assertIn('-v "$K6_DIR:/scripts:ro"', runner_source)
+        self.assertIn('-v "$DATA_FILE:/data/data.json:ro"', runner_source)
+        self.assertIn('-e DATA_FILE=/data/data.json', runner_source)
+        self.assertIn('"/scripts/aws/scenarios/$SCENARIO_FILE"', runner_source)
+        self.assertIn('DATA_FILE="${DATA_FILE:?', runner_source)
+        self.assertIn('export DATA_FILE', orchestrator_source)
+
+        import_pattern = re.compile(r"from ['\"](\.\./[^'\"]+)['\"]")
+        for scenario in sorted((K6_ROOT / "aws/scenarios").glob("*.js")):
+            for module_specifier in import_pattern.findall(scenario.read_text(encoding="utf-8")):
+                module_path = (scenario.parent / module_specifier).resolve()
+                self.assertTrue(
+                    module_path.is_file(),
+                    f"{scenario.relative_to(REPOSITORY_ROOT)} cannot resolve {module_specifier}",
+                )
+                self.assertTrue(
+                    module_path.is_relative_to(K6_ROOT.resolve()),
+                    f"{module_path} escapes the read-only k6 mount",
+                )
+
     def test_target_discovery_separates_multiple_healthy_instance_ids(self) -> None:
         source = SCRIPT.read_text(encoding="utf-8")
         self.assertIn(r'print("\n".join(', source)
