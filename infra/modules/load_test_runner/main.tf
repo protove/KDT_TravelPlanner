@@ -36,8 +36,8 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "evidence" {
   }
 }
 
-# D-004(보존기간·KMS)가 확정되기 전의 후보값. AES256(SSE-S3)만 쓰고 KMS는
-# 아직 적용하지 않는다 — D-004 승인 후 재검토 대상.
+# D-004(보존기간·KMS) 2026-08-11 승인: AES256(SSE-S3), 30일 보존 (KMS 미사용).
+# 근거는 aws-load-test-handoff/decisions/DECISION_LOG.md 참고.
 resource "aws_s3_bucket_lifecycle_configuration" "evidence" {
   bucket = aws_s3_bucket.evidence.id
 

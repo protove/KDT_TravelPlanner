@@ -22,9 +22,8 @@ variable "evidence_retention_days" {
   type        = number
   description = <<-EOT
     Days before evidence objects expire. D-004 (Evidence S3 retention/KMS)
-    is not decided yet; this default (30) mirrors the retention candidate in
-    aws-load-test-handoff/contracts/SECURITY_AND_RETENTION_POLICY.md and must
-    be revisited once D-004 is approved.
+    was approved 2026-08-11: SSE-S3 (no KMS), 30-day retention. See
+    aws-load-test-handoff/decisions/DECISION_LOG.md.
   EOT
   default     = 30
 
@@ -37,9 +36,10 @@ variable "evidence_retention_days" {
 variable "instance_type" {
   type        = string
   description = <<-EOT
-    Load Runner EC2 instance type. D-001 (Runner instance type/budget) is not
-    decided yet; this default is a placeholder pending infra owner approval,
-    not a sized recommendation for the actual B-01 arrival-rate.
+    Load Runner EC2 instance type. D-001 (Runner instance type/budget) was
+    approved 2026-08-11 with this default. See
+    aws-load-test-handoff/decisions/DECISION_LOG.md. Revisit if Smoke/Ramp
+    shows Runner-side CPU/memory bottlenecks.
   EOT
   default     = "t3.medium"
 }

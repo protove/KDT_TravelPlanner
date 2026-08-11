@@ -244,8 +244,11 @@ resource "aws_vpc_security_group_egress_rule" "monitoring_dns_tcp" {
 # k6는 공개 ALB DNS로 HTTPS를 쏘므로 ALB SG를 참조하지 않고 일반 443
 # egress를 쓴다 (backend_https/monitoring_https와 동일한 이유).
 # RDS/Redis는 seed·cleanup 스크립트가 직접 접속해야 하므로 SG 참조로
-# 좁힌다. Monitoring 연결은 D-002(remote-write 방식)가 정해지지 않아
-# 이 이슈에서 규칙을 추가하지 않는다 (aws-load-test-handoff/decisions/OPEN_DECISIONS.md).
+# 좁힌다. D-002(remote-write 방식)는 2026-08-11에 k6 내장
+# experimental-prometheus-rw로 Prometheus에 직접 remote-write하는 것으로
+# 결정됐다 (aws-load-test-handoff/decisions/DECISION_LOG.md). 다만 실제
+# Runner→Monitoring SG 규칙 추가는 여전히 Plan04(Grafana 대시보드) Issue의
+# 범위이므로 이 모듈에서는 아직 규칙을 추가하지 않는다.
 resource "aws_security_group" "load_runner" {
   name_prefix            = "${local.name}-load-runner-"
   description            = "SSM-only k6 load runner; no inbound, outbound restricted to ALB/RDS/Redis/AWS APIs"
