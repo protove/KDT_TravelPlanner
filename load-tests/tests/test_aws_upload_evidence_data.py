@@ -76,6 +76,29 @@ class ManifestTest(unittest.TestCase):
             names = {path.name for path in UPLOAD.iter_bundle_files(root)}
             self.assertEqual(names, {"metadata.json"})
 
+    def test_iter_bundle_files_skips_data_json(self):
+        # Regression test: data.json is seed-aws-load-data.py's raw credential
+        # file (accessToken/refreshToken/etc.) and is written inside
+        # $EVIDENCE_ROOT by orchestrate-aws-b01.sh. It must never be uploaded
+        # to S3 as evidence, and it must not appear in manifest.json either
+        # (both would happen if it weren't excluded here, since it lives in
+        # the same tree as every other evidence file).
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "metadata.json").write_text("{}", encoding="utf-8")
+            (root / "data.json").write_text('{"credentials": [{"refreshToken": "super-secret-token-value"}]}', encoding="utf-8")
+            names = {path.name for path in UPLOAD.iter_bundle_files(root)}
+            self.assertEqual(names, {"metadata.json"})
+
+    def test_build_manifest_never_includes_data_json(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "metadata.json").write_text('{"runId": "aws-b01-20260809-001"}', encoding="utf-8")
+            (root / "data.json").write_text('{"credentials": []}', encoding="utf-8")
+            manifest = UPLOAD.build_manifest(root, "aws-b01-20260809-001")
+            paths = {entry["path"] for entry in manifest["files"]}
+            self.assertNotIn("data.json", paths)
+
     def test_build_manifest_contains_sha256_and_bytes_for_every_file(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

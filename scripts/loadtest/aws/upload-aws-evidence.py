@@ -47,7 +47,15 @@ RUN_ID_PATTERN = re.compile(r"^[A-Za-z0-9-]{1,40}$")
 ACCOUNT_ID_PATTERN = re.compile(r"^\d{12}$")
 MANIFEST_FILENAME = "manifest.json"
 SAFETY_REPORT_FILENAME = "evidence-safety.json"
-SKIP_FILENAMES = {MANIFEST_FILENAME}
+CREDENTIAL_FILENAME = "data.json"
+# data.json (seed-aws-load-data.py's --data-file, written at
+# $EVIDENCE_ROOT/data.json by orchestrate-aws-b01.sh) holds the raw synthetic
+# refreshToken/refreshFamilyId/userId values used as this scan's own
+# secret_values. It must never be uploaded to S3 as "evidence" — it is read
+# directly (via --data-file, passed to run_safety_scan below) to know which
+# secret values to search for elsewhere in the bundle, not included in the
+# bundle itself.
+SKIP_FILENAMES = {MANIFEST_FILENAME, CREDENTIAL_FILENAME}
 
 
 class UploadError(RuntimeError):
