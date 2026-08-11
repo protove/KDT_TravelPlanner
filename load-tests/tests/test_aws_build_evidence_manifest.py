@@ -1,0 +1,213 @@
+import base64
+import hashlib
+import importlib.util
+import json
+import tempfile
+import unittest
+from pathlib import Path
+
+
+def _load(module_name: str, relative_path: str):
+    script_path = Path(__file__).parents[2] / relative_path
+    spec = importlib.util.spec_from_file_location(module_name, script_path)
+    module = importlib.util.module_from_spec(spec)
+    assert spec and spec.loader
+    spec.loader.exec_module(module)
+    return module
+
+
+MANIFEST = _load("build_evidence_manifest", "scripts/loadtest/aws/build-evidence-manifest.py")
+
+
+class ChecksumHelpersTest(unittest.TestCase):
+    def test_sha256_of_file_matches_hashlib(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "sample.json"
+            path.write_bytes(b'{"hello": "world"}')
+            digest, size = MANIFEST.sha256_of_file(path)
+            self.assertEqual(digest, hashlib.sha256(b'{"hello": "world"}').hexdigest())
+            self.assertEqual(size, len(b'{"hello": "world"}'))
+
+    def test_hex_to_base64_matches_known_value(self):
+        digest = hashlib.sha256(b"abc").hexdigest()
+        expected = base64.b64encode(hashlib.sha256(b"abc").digest()).decode("ascii")
+        self.assertEqual(MANIFEST.hex_to_base64(digest), expected)
+
+
+class ClassifySourceTest(unittest.TestCase):
+    def test_s3_download_is_the_default(self):
+        self.assertEqual(MANIFEST.classify_source("metadata.json"), "s3-download")
+        self.assertEqual(MANIFEST.classify_source("k6/summary.json"), "s3-download")
+        self.assertEqual(MANIFEST.classify_source("aws/target-health.json"), "s3-download")
+
+    def test_grafana_files_are_derived(self):
+        self.assertEqual(MANIFEST.classify_source("grafana/dashboard.json"), "grafana-export")
+        self.assertEqual(MANIFEST.classify_source("grafana/queries/panel-2-A.json"), "grafana-export")
+
+    def test_safety_report_is_generated_locally(self):
+        self.assertEqual(MANIFEST.classify_source("evidence-safety.json"), "generated-locally")
+
+
+class IterBundleFilesTest(unittest.TestCase):
+    def test_skips_manifest_json_only(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "metadata.json").write_text("{}", encoding="utf-8")
+            (root / "manifest.json").write_text("{}", encoding="utf-8")
+            names = {p.name for p in MANIFEST.iter_bundle_files(root)}
+            self.assertEqual(names, {"metadata.json"})
+
+
+class DeterminePngStatusTest(unittest.TestCase):
+    def test_not_exported_when_no_panels_directory(self):
+        with tempfile.TemporaryDirectory() as directory:
+            result = MANIFEST.determine_png_status(Path(directory))
+            self.assertEqual(result["pngStatus"], "not-exported")
+            self.assertIn("D-003", result["pngStatusReason"])
+
+    def test_not_exported_uses_status_json_reason_when_present(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            panels_dir = root / "grafana" / "panels"
+            panels_dir.mkdir(parents=True)
+            (panels_dir / "status.json").write_text(json.dumps({"status": "not-collected", "reason": "custom reason"}), encoding="utf-8")
+            result = MANIFEST.determine_png_status(root)
+            self.assertEqual(result["pngStatus"], "not-exported")
+            self.assertEqual(result["pngStatusReason"], "custom reason")
+
+    def test_exported_when_pngs_present(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            panels_dir = root / "grafana" / "panels"
+            panels_dir.mkdir(parents=True)
+            (panels_dir / "panel-2.png").write_bytes(b"\x89PNG")
+            (panels_dir / "panel-3.png").write_bytes(b"\x89PNG")
+            result = MANIFEST.determine_png_status(root)
+            self.assertEqual(result, {"pngStatus": "exported", "pngCount": 2})
+
+
+class BuildManifestTest(unittest.TestCase):
+    def test_contains_sha256_bytes_and_source_for_every_file(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "k6").mkdir()
+            (root / "k6" / "summary.json").write_text("{}", encoding="utf-8")
+            (root / "grafana" / "queries").mkdir(parents=True)
+            (root / "grafana" / "dashboard.json").write_text("{}", encoding="utf-8")
+            (root / "grafana" / "queries" / "panel-2-A.json").write_text("{}", encoding="utf-8")
+            (root / "metadata.json").write_text('{"runId": "aws-b01-20260809-001"}', encoding="utf-8")
+
+            manifest = MANIFEST.build_manifest(root, "aws-b01-20260809-001")
+
+            self.assertEqual(manifest["runId"], "aws-b01-20260809-001")
+            self.assertEqual(manifest["fileCount"], 4)
+            by_path = {entry["path"]: entry for entry in manifest["files"]}
+            self.assertEqual(by_path["metadata.json"]["source"], "s3-download")
+            self.assertEqual(by_path["k6/summary.json"]["source"], "s3-download")
+            self.assertEqual(by_path["grafana/dashboard.json"]["source"], "grafana-export")
+            self.assertEqual(by_path["grafana/queries/panel-2-A.json"]["source"], "grafana-export")
+            for entry in manifest["files"]:
+                self.assertEqual(len(entry["sha256"]), 64)
+                self.assertGreaterEqual(entry["bytes"], 0)
+            self.assertEqual(manifest["pngStatus"], "not-exported")
+
+
+class CompareWithS3Test(unittest.TestCase):
+    def test_all_match_when_checksums_agree(self):
+        sha256_hex = hashlib.sha256(b"{}").hexdigest()
+        expected_b64 = MANIFEST.hex_to_base64(sha256_hex)
+        files = [{"path": "metadata.json", "sha256": sha256_hex}]
+
+        original = MANIFEST.get_s3_checksum_base64
+        MANIFEST.get_s3_checksum_base64 = lambda bucket, key, region: expected_b64
+        try:
+            result = MANIFEST.compare_with_s3("run-1", "bucket", "evidence/aws-load-tests", "ap-northeast-2", files)
+        finally:
+            MANIFEST.get_s3_checksum_base64 = original
+
+        self.assertTrue(result["allMatch"])
+        self.assertEqual(result["files"], [{"path": "metadata.json", "matches": True}])
+
+    def test_flags_mismatch_without_raising(self):
+        sha256_hex = hashlib.sha256(b"{}").hexdigest()
+        files = [{"path": "metadata.json", "sha256": sha256_hex}]
+
+        original = MANIFEST.get_s3_checksum_base64
+        MANIFEST.get_s3_checksum_base64 = lambda bucket, key, region: "not-the-real-checksum"
+        try:
+            result = MANIFEST.compare_with_s3("run-1", "bucket", "evidence/aws-load-tests", "ap-northeast-2", files)
+        finally:
+            MANIFEST.get_s3_checksum_base64 = original
+
+        self.assertFalse(result["allMatch"])
+        self.assertFalse(result["files"][0]["matches"])
+
+    def test_a_lookup_error_counts_as_mismatch_not_a_crash(self):
+        files = [{"path": "metadata.json", "sha256": hashlib.sha256(b"{}").hexdigest()}]
+
+        def raising_lookup(bucket, key, region):
+            raise MANIFEST.ManifestError("simulated S3 error")
+
+        original = MANIFEST.get_s3_checksum_base64
+        MANIFEST.get_s3_checksum_base64 = raising_lookup
+        try:
+            result = MANIFEST.compare_with_s3("run-1", "bucket", "evidence/aws-load-tests", "ap-northeast-2", files)
+        finally:
+            MANIFEST.get_s3_checksum_base64 = original
+
+        self.assertFalse(result["allMatch"])
+        self.assertIn("detail", result["files"][0])
+
+
+class MainIntegrationTest(unittest.TestCase):
+    def test_main_writes_manifest_and_returns_zero_when_safe_and_no_s3_compare(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "metadata.json").write_text('{"runId": "aws-b01-20260809-001"}', encoding="utf-8")
+            data_file = root / "data.json"
+            data_file.write_text('{"credentials": []}', encoding="utf-8")
+
+            import sys
+            original_argv = sys.argv
+            sys.argv = [
+                "build-evidence-manifest.py",
+                "--evidence-root", str(root),
+                "--run-id", "aws-b01-20260809-001",
+                "--data-file", str(data_file),
+            ]
+            try:
+                exit_code = MANIFEST.main()
+            finally:
+                sys.argv = original_argv
+
+            self.assertEqual(exit_code, 0)
+            manifest_path = root / "manifest.json"
+            self.assertTrue(manifest_path.exists())
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            self.assertEqual(manifest["runId"], "aws-b01-20260809-001")
+            self.assertTrue((root / "evidence-safety.json").exists())
+
+    def test_main_raises_when_safety_scan_finds_a_leak(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            data_file = root / "data.json"
+            data_file.write_text(json.dumps({"credentials": [{"userId": "user-0000001", "refreshToken": "a-very-long-refresh-token-value"}]}), encoding="utf-8")
+            (root / "leak.json").write_text('{"leaked": "a-very-long-refresh-token-value"}', encoding="utf-8")
+
+            import sys
+            original_argv = sys.argv
+            sys.argv = [
+                "build-evidence-manifest.py",
+                "--evidence-root", str(root),
+                "--run-id", "aws-b01-20260809-001",
+                "--data-file", str(data_file),
+            ]
+            try:
+                with self.assertRaises(MANIFEST.ManifestError):
+                    MANIFEST.main()
+            finally:
+                sys.argv = original_argv
+
+
+if __name__ == "__main__":
+    unittest.main()

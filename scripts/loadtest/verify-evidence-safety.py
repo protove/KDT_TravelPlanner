@@ -35,7 +35,13 @@ def scan(evidence_root: Path, data_file: Path) -> dict:
     findings = []
     scanned_files = 0
     for path in sorted(evidence_root.rglob("*")):
-        if not path.is_file() or path.name in {"evidence-safety.json", "gate-report.json"}:
+        # data.json is the seed script's own raw credential file (its accessToken/
+        # refreshToken/etc. ARE the secret_values above) — scanning it against
+        # itself would always "find" its own contents. It must never be part of
+        # the evidence bundle in the first place (see upload-aws-evidence.py's
+        # SKIP_FILENAMES); this skip is a second line of defense, not a
+        # substitute for keeping it out of evidence_root.
+        if not path.is_file() or path.name in {"evidence-safety.json", "gate-report.json", "data.json"}:
             continue
         try:
             text = path.read_text(encoding="utf-8")

@@ -479,6 +479,20 @@ cleanup_stage() {
   echo '{"note":"Cost Explorer reflects usage with a reporting delay; treat any same-day figure as estimated (see B01_OPERATOR_RUNBOOK.md step 6)."}' \
     > "$EVIDENCE_ROOT/aws/cost-note.json"
   python3 "$REPOSITORY_ROOT/scripts/loadtest/record-rehearsal-event.py" "$EVIDENCE_ROOT" RUN_END "B-01 orchestration finished" --actor operator 2>/dev/null || true
+  # target_stage wrote metadata.json with endedAtUtc=null (the run wasn't over
+  # yet). Fill it in now that cleanup has run, so Plan05's export-grafana-evidence.py
+  # has a fixed UTC range to work from without requiring an explicit operator override.
+  python3 - "$EVIDENCE_ROOT/metadata.json" <<'PY'
+import json
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+path = Path(sys.argv[1])
+metadata = json.loads(path.read_text(encoding="utf-8"))
+metadata["endedAtUtc"] = datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+path.write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
+PY
 }
 
 provisional_review_stage() {
