@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+dnf install -y docker
+systemctl enable --now docker
+
+# Pull the pinned k6 image once during bootstrap so a B-01 run is not
+# blocked on a registry pull. A version change is delivered through a new
+# EC2 (user_data_replace_on_change = true), matching the monitoring EC2
+# bootstrap pattern.
+docker pull '${k6_image_reference}'
+
+# ── Evidence 작업 디렉터리 ───────────────────────────────────────
+# scripts/loadtest/aws/(Plan 03에서 추가될 오케스트레이션)가 이 경로 아래에
+# raw k6 결과, metadata, operations.jsonl을 쓰고 S3로 업로드한다. 이 모듈은
+# 디렉터리만 준비하고, 실행/업로드 로직은 만들지 않는다.
+install -d -m 0755 /var/lib/travel-planner/load-test-evidence
+
+# ── Region 설정 ─────────────────────────────────────────────────
+# Plan 03 오케스트레이션 스크립트(SSM Run Command로 실행)가 aws-cli 호출 시
+# 참조할 고정 region. monitoring_ec2의 user-data가 aws_region을 넘기는 것과
+# 같은 패턴이며, 이 모듈 자체는 이 값을 다른 용도로 사용하지 않는다.
+install -d -m 0755 /etc/travel-planner
+printf 'AWS_DEFAULT_REGION=%s\n' '${aws_region}' > /etc/travel-planner/load-runner.env

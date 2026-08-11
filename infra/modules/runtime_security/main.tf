@@ -239,3 +239,83 @@ resource "aws_vpc_security_group_egress_rule" "monitoring_dns_tcp" {
   to_port           = 53
   description       = "DNS fallback"
 }
+
+# ── Load Runner (SSM 전용, inbound 없음) ────────────────────────
+# k6는 공개 ALB DNS로 HTTPS를 쏘므로 ALB SG를 참조하지 않고 일반 443
+# egress를 쓴다 (backend_https/monitoring_https와 동일한 이유).
+# RDS/Redis는 seed·cleanup 스크립트가 직접 접속해야 하므로 SG 참조로
+# 좁힌다. D-002(remote-write 방식)는 2026-08-11에 k6 내장
+# experimental-prometheus-rw로 Prometheus에 직접 remote-write하는 것으로
+# 결정됐다 (aws-load-test-handoff/decisions/DECISION_LOG.md). 다만 실제
+# Runner→Monitoring SG 규칙 추가는 여전히 Plan04(Grafana 대시보드) Issue의
+# 범위이므로 이 모듈에서는 아직 규칙을 추가하지 않는다.
+resource "aws_security_group" "load_runner" {
+  name_prefix            = "${local.name}-load-runner-"
+  description            = "SSM-only k6 load runner; no inbound, outbound restricted to ALB/RDS/Redis/AWS APIs"
+  vpc_id                 = var.vpc_id
+  revoke_rules_on_delete = true
+  tags                   = merge(var.tags, { Name = "${local.name}-load-runner-sg" })
+}
+
+resource "aws_vpc_security_group_egress_rule" "load_runner_https" {
+  security_group_id = aws_security_group.load_runner.id
+  cidr_ipv4         = "0.0.0.0/0"
+  from_port         = 443
+  ip_protocol       = "tcp"
+  to_port           = 443
+  description       = "k6 HTTPS traffic to the public ALB, plus SSM/S3/ECR/DockerHub"
+}
+
+resource "aws_vpc_security_group_egress_rule" "load_runner_dns_udp" {
+  security_group_id = aws_security_group.load_runner.id
+  cidr_ipv4         = "${cidrhost(var.vpc_cidr, 2)}/32"
+  from_port         = 53
+  ip_protocol       = "udp"
+  to_port           = 53
+  description       = "DNS resolution"
+}
+
+resource "aws_vpc_security_group_egress_rule" "load_runner_dns_tcp" {
+  security_group_id = aws_security_group.load_runner.id
+  cidr_ipv4         = "${cidrhost(var.vpc_cidr, 2)}/32"
+  from_port         = 53
+  ip_protocol       = "tcp"
+  to_port           = 53
+  description       = "DNS fallback"
+}
+
+resource "aws_vpc_security_group_egress_rule" "load_runner_database" {
+  security_group_id            = aws_security_group.load_runner.id
+  referenced_security_group_id = aws_security_group.database.id
+  from_port                    = 5432
+  ip_protocol                  = "tcp"
+  to_port                      = 5432
+  description                  = "Seed and cleanup synthetic load-test data directly in PostgreSQL"
+}
+
+resource "aws_vpc_security_group_ingress_rule" "database_load_runner" {
+  security_group_id            = aws_security_group.database.id
+  referenced_security_group_id = aws_security_group.load_runner.id
+  from_port                    = 5432
+  ip_protocol                  = "tcp"
+  to_port                      = 5432
+  description                  = "PostgreSQL from the Load Runner for seed/cleanup only"
+}
+
+resource "aws_vpc_security_group_egress_rule" "load_runner_cache" {
+  security_group_id            = aws_security_group.load_runner.id
+  referenced_security_group_id = aws_security_group.cache.id
+  from_port                    = 6379
+  ip_protocol                  = "tcp"
+  to_port                      = 6379
+  description                  = "Seed and cleanup synthetic refresh-token data directly in Redis"
+}
+
+resource "aws_vpc_security_group_ingress_rule" "cache_load_runner" {
+  security_group_id            = aws_security_group.cache.id
+  referenced_security_group_id = aws_security_group.load_runner.id
+  from_port                    = 6379
+  ip_protocol                  = "tcp"
+  to_port                      = 6379
+  description                  = "Redis from the Load Runner for seed/cleanup only"
+}

@@ -18,6 +18,21 @@ output "launch_template_id" {
   value       = module.backend_service.launch_template_id
 }
 
+output "load_runner_instance_id" {
+  description = "Load Runner EC2 instance ID, the SSM target for AWS load-test orchestration."
+  value       = module.load_test_runner.instance_id
+}
+
+output "load_test_evidence_bucket_name" {
+  description = "S3 bucket name for raw AWS load-test evidence."
+  value       = module.load_test_runner.evidence_bucket_name
+}
+
+output "load_test_evidence_operator_read_policy_arn" {
+  description = "ARN of the unattached operator read-only policy for the load-test evidence prefix."
+  value       = module.load_test_runner.evidence_operator_read_policy_arn
+}
+
 output "redis_primary_endpoint" {
   description = "Private Redis primary endpoint."
   value       = module.backend_data.redis_primary_endpoint

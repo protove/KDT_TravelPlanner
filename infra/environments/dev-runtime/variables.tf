@@ -24,6 +24,17 @@ variable "backend_image_uri" {
   }
 }
 
+variable "k6_image_reference" {
+  type        = string
+  description = "Official DockerHub k6 image pinned to an exact digest, matching the version already vetted by the Compose Gate (load-tests/gate-profile.json)."
+  default     = "grafana/k6:0.54.0@sha256:1f40432b1cbe7234e977f96c362c9bc550a2d2b583d014dd8669fe40d3e9e755"
+
+  validation {
+    condition     = can(regex("^grafana/k6:[0-9]+\\.[0-9]+\\.[0-9]+@sha256:[0-9a-f]{64}$", var.k6_image_reference))
+    error_message = "k6_image_reference must be grafana/k6 with an exact X.Y.Z tag pinned by @sha256 digest."
+  }
+}
+
 variable "monitoring_image_references" {
   type = object({
     prometheus = string

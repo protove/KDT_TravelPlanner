@@ -84,6 +84,24 @@ module "monitoring_ec2" {
   ]
 }
 
+module "load_test_runner" {
+  source = "../../modules/load_test_runner"
+
+  app_subnet_id            = data.terraform_remote_state.persistent.outputs.app_subnet_ids[0]
+  aws_region               = var.aws_region
+  environment              = local.environment
+  evidence_bucket_name     = "${var.project_name}-${local.environment}-load-test-evidence-${data.aws_caller_identity.current.account_id}"
+  instance_type            = "t3.medium" # D-001 approved 2026-08-11 (aws-load-test-handoff/decisions/DECISION_LOG.md)
+  k6_image_reference       = var.k6_image_reference
+  project_name             = var.project_name
+  runner_security_group_id = module.runtime_security.load_runner_security_group_id
+  tags                     = local.common_tags
+
+  depends_on = [
+    aws_route.app_default,
+  ]
+}
+
 module "backend_data" {
   source = "../../modules/backend_data"
 
