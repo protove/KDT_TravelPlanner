@@ -15,10 +15,18 @@ list (not just publish results), and a range query per panel (Prometheus/Loki
 via Grafana's datasource proxy, CloudWatch via the AWS CLI directly) over the
 run's fixed startedAtUtc/endedAtUtc window — never the dashboard's live "now".
 
-Grafana PNG export is out of scope until D-003 (renderer) is decided (see
-Plan04/Plan05); this script writes grafana/panels/status.json noting that
-rather than fabricating PNG evidence. Query JSON is the evidence of record
-until then.
+D-003-R1 (see aws-load-test-handoff/decisions/DECISION_LOG.md) decided PNG
+capture is required and settled the method: no renderer sidecar/plugin, an
+operator opens an SSM port-forward tunnel to Grafana and captures each fixed
+Panel ID with a browser, per TEAM_MEMBER_B01_ACTION_REQUEST.md section 4.4.
+This script cannot drive that capture itself (no headless browser dependency,
+and there is no live Grafana to test against yet) — what it does instead is
+write the *capture contract* section 4.4 requires: for every panel, a
+grafana/panels/panel-<id>.capture.json with the runId/fromUtc/toUtc/dashboard
+UID+version/Panel ID/Query JSON path already resolved, plus the exact
+`?viewPanel=` URL to open for the screenshot. Once an operator saves
+panel-<id>.png next to it, build-evidence-manifest.py's determine_png_status()
+treats that pairing as this panel being captured.
 
 Auth values (--password / GRAFANA_EVIDENCE_PASSWORD) are used only in an HTTP
 Basic Authorization header and are never written to any output file or
@@ -222,6 +230,58 @@ def collect_panel_queries(grafana_url: str, auth_header: str, panel_queries: lis
     return collected, failed
 
 
+def build_panel_capture_contracts(dashboard_payload: dict, panel_queries: list[dict], grafana_url: str, run_id: str, from_utc: str, to_utc: str) -> list[dict]:
+    """Pure/offline: one capture contract per panel (TEAM_MEMBER_B01_ACTION_REQUEST.md
+    section 4.4's "고정 UTC 범위·Panel ID·Query JSON을 캡처 계약에 포함"). Groups
+    panel_queries (one entry per target/refId) by panelId, since a panel with
+    multiple targets still gets exactly one PNG. No network calls — safe to
+    unit test without mocking HTTP."""
+    dashboard = dashboard_payload.get("dashboard", {})
+    dashboard_uid = dashboard.get("uid", "")
+    dashboard_version = dashboard.get("version")
+    from_ms = to_epoch_seconds(from_utc) * 1000
+    to_ms = to_epoch_seconds(to_utc) * 1000
+
+    by_panel: dict[int, dict] = {}
+    for entry in panel_queries:
+        panel_id = entry["panelId"]
+        panel = by_panel.setdefault(panel_id, {
+            "panelId": panel_id,
+            "panelTitle": entry.get("panelTitle"),
+            "queryJsonPaths": [],
+        })
+        panel["queryJsonPaths"].append(f"grafana/queries/panel-{panel_id}-{entry['refId']}.json")
+
+    contracts = []
+    for panel_id in sorted(by_panel):
+        panel = by_panel[panel_id]
+        contracts.append({
+            "runId": run_id,
+            "fromUtc": from_utc,
+            "toUtc": to_utc,
+            "dashboardUid": dashboard_uid,
+            "dashboardVersion": dashboard_version,
+            "panelId": panel_id,
+            "panelTitle": panel["panelTitle"],
+            "queryJsonPaths": panel["queryJsonPaths"],
+            "captureUrl": f"{grafana_url.rstrip('/')}/d/{dashboard_uid}?viewPanel={panel_id}&from={from_ms}&to={to_ms}&tz=utc",
+            "expectedPngPath": f"grafana/panels/panel-{panel_id}.png",
+            "instructions": (
+                "SSM port-forward to the Monitoring EC2's Grafana (see download-aws-evidence.sh), "
+                "open captureUrl in a browser signed in as the read-only Evidence Exporter account, "
+                "and save a screenshot of just this panel as expectedPngPath. Secrets/cookies/tokens "
+                "must not be visible in the capture (TEAM_MEMBER_B01_ACTION_REQUEST.md 4.4)."
+            ),
+        })
+    return contracts
+
+
+def write_panel_capture_contracts(contracts: list[dict], panels_dir: Path) -> None:
+    for contract in contracts:
+        path = panels_dir / f"panel-{contract['panelId']}.capture.json"
+        path.write_text(json.dumps(contract, indent=2) + "\n", encoding="utf-8")
+
+
 def main() -> int:
     args = parse_args()
     evidence_root = args.evidence_root.resolve()
@@ -264,12 +324,21 @@ def main() -> int:
     panel_queries = extract_panel_queries(dashboard_payload)
     collected, failed = collect_panel_queries(args.grafana_url, auth_header, panel_queries, from_utc, to_utc, args.region, queries_dir)
 
+    contracts = build_panel_capture_contracts(dashboard_payload, panel_queries, args.grafana_url, run_id, from_utc, to_utc)
+    write_panel_capture_contracts(contracts, panels_dir)
     (panels_dir / "status.json").write_text(json.dumps({
-        "status": "not-collected",
-        "reason": "PNG rendering requires a D-003 renderer decision (see Plan04/Plan05); the Query JSON under grafana/queries/ is the evidence of record until then.",
+        "status": "pending-manual-capture",
+        "reason": (
+            "D-003-R1 decided PNG capture is required, via SSM port-forward + browser screenshot "
+            "(no renderer sidecar). This script wrote one panel-<id>.capture.json per panel with the "
+            "exact URL, fixed UTC range, and Query JSON path to capture against — see download-aws-evidence.sh "
+            "for the SSM tunnel command. Query JSON under grafana/queries/ remains the evidence of record "
+            "until the corresponding panel-<id>.png is saved."
+        ),
+        "panelCount": len(contracts),
     }, indent=2) + "\n", encoding="utf-8")
 
-    print(f"[grafana-export] dashboard + annotations written; panel queries collected={collected} failed={failed}")
+    print(f"[grafana-export] dashboard + annotations written; panel queries collected={collected} failed={failed}; capture contracts written={len(contracts)}")
     return 0 if failed == 0 else 1
 
 

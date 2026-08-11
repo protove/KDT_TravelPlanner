@@ -170,6 +170,12 @@ if [[ "$DRY_RUN" == "1" ]]; then
 fi
 python3 "$REPOSITORY_ROOT/scripts/loadtest/aws/export-grafana-evidence.py" "${grafana_args[@]}"
 
+if [[ "$DRY_RUN" != "1" ]]; then
+  echo "[download] PNG capture is required (D-003-R1) but must be done manually: open each URL in"
+  echo "[download] $EVIDENCE_ROOT/grafana/panels/panel-<id>.capture.json's captureUrl over the SSM tunnel"
+  echo "[download] above, screenshot just that panel, and save it as the file's expectedPngPath."
+fi
+
 if [[ "$DRY_RUN" == "1" ]]; then
   echo "[dry-run] build-evidence-manifest.py --evidence-root $EVIDENCE_ROOT --run-id $RUN_ID --data-file ${DATA_FILE:-<required>} --compare-s3-bucket $S3_BUCKET --s3-prefix $S3_PREFIX --region $REGION" >&2
   exit 0

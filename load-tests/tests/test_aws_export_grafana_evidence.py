@@ -235,5 +235,74 @@ class CollectPanelQueriesTest(unittest.TestCase):
             self.assertEqual(record["status"], "error")
 
 
+class BuildPanelCaptureContractsTest(unittest.TestCase):
+    def test_one_contract_per_panel_not_per_target(self):
+        panel_queries = EXPORT.extract_panel_queries(SAMPLE_DASHBOARD_PAYLOAD)
+        contracts = EXPORT.build_panel_capture_contracts(
+            SAMPLE_DASHBOARD_PAYLOAD, panel_queries, "http://127.0.0.1:3000", "aws-b01-20260811-090000",
+            "2026-08-11T09:00:00Z", "2026-08-11T10:00:00Z",
+        )
+        panel_ids = [c["panelId"] for c in contracts]
+        self.assertEqual(panel_ids, [2, 7, 14])  # panel 2 has two targets (A, B) but one contract
+
+    def test_multi_target_panel_lists_every_query_json_path(self):
+        panel_queries = EXPORT.extract_panel_queries(SAMPLE_DASHBOARD_PAYLOAD)
+        contracts = EXPORT.build_panel_capture_contracts(
+            SAMPLE_DASHBOARD_PAYLOAD, panel_queries, "http://127.0.0.1:3000", "aws-b01-20260811-090000",
+            "2026-08-11T09:00:00Z", "2026-08-11T10:00:00Z",
+        )
+        panel_2 = next(c for c in contracts if c["panelId"] == 2)
+        self.assertEqual(
+            sorted(panel_2["queryJsonPaths"]),
+            ["grafana/queries/panel-2-A.json", "grafana/queries/panel-2-B.json"],
+        )
+
+    def test_contract_carries_run_id_and_fixed_utc_range(self):
+        panel_queries = EXPORT.extract_panel_queries(SAMPLE_DASHBOARD_PAYLOAD)
+        contracts = EXPORT.build_panel_capture_contracts(
+            SAMPLE_DASHBOARD_PAYLOAD, panel_queries, "http://127.0.0.1:3000", "aws-b01-20260811-090000",
+            "2026-08-11T09:00:00Z", "2026-08-11T10:00:00Z",
+        )
+        for contract in contracts:
+            self.assertEqual(contract["runId"], "aws-b01-20260811-090000")
+            self.assertEqual(contract["fromUtc"], "2026-08-11T09:00:00Z")
+            self.assertEqual(contract["toUtc"], "2026-08-11T10:00:00Z")
+            self.assertEqual(contract["dashboardUid"], "aws-load-test-b01")
+            self.assertEqual(contract["expectedPngPath"], f"grafana/panels/panel-{contract['panelId']}.png")
+
+    def test_capture_url_encodes_panel_id_and_fixed_epoch_ms_range(self):
+        panel_queries = EXPORT.extract_panel_queries(SAMPLE_DASHBOARD_PAYLOAD)
+        contracts = EXPORT.build_panel_capture_contracts(
+            SAMPLE_DASHBOARD_PAYLOAD, panel_queries, "http://127.0.0.1:3000", "aws-b01-20260811-090000",
+            "1970-01-01T00:00:00Z", "1970-01-01T01:00:00Z",
+        )
+        panel_7 = next(c for c in contracts if c["panelId"] == 7)
+        self.assertEqual(
+            panel_7["captureUrl"],
+            "http://127.0.0.1:3000/d/aws-load-test-b01?viewPanel=7&from=0&to=3600000&tz=utc",
+        )
+
+    def test_empty_panel_queries_yields_no_contracts(self):
+        self.assertEqual(
+            EXPORT.build_panel_capture_contracts(SAMPLE_DASHBOARD_PAYLOAD, [], "http://x", "run-1", "2026-08-11T09:00:00Z", "2026-08-11T10:00:00Z"),
+            [],
+        )
+
+
+class WritePanelCaptureContractsTest(unittest.TestCase):
+    def test_writes_one_file_per_contract_named_by_panel_id(self):
+        with tempfile.TemporaryDirectory() as directory:
+            panels_dir = Path(directory)
+            contracts = [
+                {"panelId": 2, "panelTitle": "k6 duration"},
+                {"panelId": 7, "panelTitle": "ALB RequestCount"},
+            ]
+            EXPORT.write_panel_capture_contracts(contracts, panels_dir)
+            written = sorted(p.name for p in panels_dir.glob("*.capture.json"))
+            self.assertEqual(written, ["panel-2.capture.json", "panel-7.capture.json"])
+            content = json.loads((panels_dir / "panel-2.capture.json").read_text(encoding="utf-8"))
+            self.assertEqual(content["panelTitle"], "k6 duration")
+
+
 if __name__ == "__main__":
     unittest.main()

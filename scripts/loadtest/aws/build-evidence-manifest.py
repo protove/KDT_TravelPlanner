@@ -115,18 +115,48 @@ def classify_source(relative_path: str) -> str:
 
 
 def determine_png_status(evidence_root: Path) -> dict:
+    # D-003-R1 requires every captured panel-<id>.png to be linked to its
+    # runId/fromUtc/toUtc/dashboardUid+version/Query JSON path
+    # (TEAM_MEMBER_B01_ACTION_REQUEST.md 4.4). export-grafana-evidence.py
+    # writes that link as panel-<id>.capture.json next to where the operator
+    # is expected to save the PNG; a PNG without a matching contract file
+    # fails that linkage requirement and is flagged rather than silently
+    # counted as valid evidence.
     panels_dir = evidence_root / "grafana" / "panels"
-    png_files = sorted(p.name for p in panels_dir.glob("*.png")) if panels_dir.exists() else []
-    if png_files:
-        return {"pngStatus": "exported", "pngCount": len(png_files)}
-    reason = DEFAULT_PNG_STATUS_REASON
-    status_path = panels_dir / "status.json"
-    if status_path.exists():
-        try:
-            reason = json.loads(status_path.read_text(encoding="utf-8")).get("reason", reason)
-        except json.JSONDecodeError:
-            pass
-    return {"pngStatus": "not-exported", "pngStatusReason": reason}
+    if not panels_dir.exists():
+        return {"pngStatus": "not-exported", "pngStatusReason": DEFAULT_PNG_STATUS_REASON}
+
+    png_panel_ids = {p.name.removeprefix("panel-").removesuffix(".png") for p in panels_dir.glob("panel-*.png")}
+    contract_panel_ids = {p.name.removeprefix("panel-").removesuffix(".capture.json") for p in panels_dir.glob("panel-*.capture.json")}
+
+    if not png_panel_ids:
+        reason = DEFAULT_PNG_STATUS_REASON
+        status_path = panels_dir / "status.json"
+        if status_path.exists():
+            try:
+                reason = json.loads(status_path.read_text(encoding="utf-8")).get("reason", reason)
+            except json.JSONDecodeError:
+                pass
+        return {
+            "pngStatus": "not-exported",
+            "pngStatusReason": reason,
+            "pendingCaptureContracts": len(contract_panel_ids),
+        }
+
+    unlinked = sorted(png_panel_ids - contract_panel_ids, key=lambda panel_id: (len(panel_id), panel_id))
+    result = {
+        "pngStatus": "exported" if not unlinked else "exported-with-unlinked-files",
+        "pngCount": len(png_panel_ids),
+        "linkedPngCount": len(png_panel_ids) - len(unlinked),
+    }
+    if unlinked:
+        result["unlinkedPanelIds"] = unlinked
+        result["pngStatusReason"] = (
+            "Every captured panel-<id>.png must have a matching panel-<id>.capture.json "
+            "(runId/fromUtc/toUtc/dashboardUid+version/Query JSON path) per "
+            "TEAM_MEMBER_B01_ACTION_REQUEST.md section 4.4; these PNGs do not."
+        )
+    return result
 
 
 def build_manifest(evidence_root: Path, run_id: str) -> dict:
