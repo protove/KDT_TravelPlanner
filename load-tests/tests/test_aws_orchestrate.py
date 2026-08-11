@@ -36,6 +36,7 @@ class AwsOrchestrationContractTests(unittest.TestCase):
         self.assertIn('EFFECTIVE_MAX_VUS="${EFFECTIVE_MAX_VUS:?', runner_source)
         self.assertIn('len(credentials) < required', runner_source)
         self.assertIn('payload.get("seedState") != "complete"', runner_source)
+        self.assertIn('payload.get("fixtureState") != "verified"', runner_source)
         self.assertIn('--user 0:0', runner_source)
         self.assertIn('--cap-drop ALL', runner_source)
         self.assertIn('--security-opt no-new-privileges', runner_source)
@@ -103,7 +104,9 @@ class AwsOrchestrationContractTests(unittest.TestCase):
         phase_runner_source = AWS_PHASE_RUNNER.read_text(encoding="utf-8")
 
         self.assertIn("USERS=80", orchestrator_source)
-        self.assertIn('seed_credentials\n  export REPOSITORY_ROOT', orchestrator_source)
+        self.assertIn('seed_credentials "seed"', orchestrator_source)
+        self.assertIn('--reset-fixture --fixture-id "$fixture_id"', orchestrator_source)
+        self.assertIn('--fixture-result-file "$FIXTURES_DIR/$fixture_id.json"', orchestrator_source)
         self.assertIn('validate_phase_credential_capacity "$phase"', orchestrator_source)
         self.assertIn('configure_phase_max_vus ramp "${RAMP_MAX_VUS:-}"', phase_runner_source)
         self.assertIn('configure_phase_max_vus baseline "${BASELINE_MAX_VUS:-}"', phase_runner_source)

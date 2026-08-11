@@ -167,6 +167,16 @@ Baseline은 읽기와 Timeline 쓰기를 함께 검증하고, Recovery는 재기
 이는 쓰기 기능을 제외한다는 뜻이 아니라, 장애 복구 시간창의 판정 변수를 줄이기 위한
 리허설 전용 workload 선택이다.
 
+### AWS B-01 phase fixture
+
+AWS B-01은 Smoke·Ramp·Baseline 각 phase 시작 전에 같은 Run ID의 synthetic
+planner를 삭제하고 FK cascade로 timeline을 정리한 뒤, 사용자별 planner 1개와
+timeline 3개를 다시 seed한다. `seed-aws-load-data.py`는 DB count를 확인한 뒤에만
+`seedState=complete`를 기록한다. 검증 결과는 credentials 파일과 별도의
+`evidence/aws-load-tests/<run-id>/fixtures/<phase>.json`에 저장하며, 이 파일에는
+자격증명이나 사용자 ID를 넣지 않는다. fixture 검증이 실패하면 해당 k6 phase는
+실행되지 않고 `seedState=in-progress`로 남는다.
+
 ## 검증 명령
 
 ```bash

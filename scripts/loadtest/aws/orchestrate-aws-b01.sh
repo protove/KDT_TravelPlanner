@@ -204,6 +204,7 @@ python3 "$REPOSITORY_ROOT/scripts/loadtest/aws/validate-aws-profile.py" "$PROFIL
 RUN_ID="${RUN_ID:-aws-b01-$(date -u +%Y%m%d-%H%M%S)}"
 EVIDENCE_ROOT="$REPOSITORY_ROOT/evidence/aws-load-tests/$RUN_ID"
 DATA_FILE="$EVIDENCE_ROOT/data.json"
+FIXTURES_DIR="$EVIDENCE_ROOT/fixtures"
 PROFILE_SHA256="$(python3 -c "import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],'rb').read()).hexdigest())" "$PROFILE")"
 SOURCE_COMMIT_SHA="$(git -C "$REPOSITORY_ROOT" rev-parse HEAD)"
 mkdir -p "$EVIDENCE_ROOT"
@@ -612,8 +613,9 @@ PY
 }
 
 seed_credentials() {
+  local fixture_id="${1:-seed}"
   if [[ "$DRY_RUN" == "1" ]]; then
-    echo "[dry-run] seed-aws-load-data.py --run-id $RUN_ID --users $USERS" >&2
+    echo "[dry-run] seed-aws-load-data.py --run-id $RUN_ID --users $USERS --reset-fixture --fixture-id $fixture_id" >&2
     return 0
   fi
   for required in DATABASE_HOST DATABASE_NAME DATABASE_SECRET_ARN S3_BUCKET REDIS_HOST REDIS_IAM_USER REDIS_REPLICATION_GROUP_ID; do
@@ -628,13 +630,16 @@ seed_credentials() {
     --redis-host "$REDIS_HOST" --redis-port "$REDIS_PORT"
     --redis-iam-user "$REDIS_IAM_USER" --redis-replication-group-id "$REDIS_REPLICATION_GROUP_ID"
     --base-url "$BASE_URL" --data-file "$DATA_FILE"
+    --reset-fixture --fixture-id "$fixture_id"
+    --fixture-result-file "$FIXTURES_DIR/$fixture_id.json"
   )
+  mkdir -p "$FIXTURES_DIR"
   python3 "$REPOSITORY_ROOT/scripts/loadtest/aws/seed-aws-load-data.py" "${seed_args[@]}"
 }
 
 seed_stage() {
   echo "[b01] seed: run-id=$RUN_ID users=$USERS"
-  seed_credentials
+  seed_credentials "seed"
 }
 
 phase_max_vus_override() {
@@ -702,8 +707,9 @@ k6_phase_stage() {
   for required in K6_IMAGE; do
     if [[ -z "${!required}" ]]; then echo "--k6-image is required for $phase" >&2; exit 2; fi
   done
-  echo "[b01] refreshing credentials before $phase${baseline_rep:+-$baseline_rep}"
-  seed_credentials
+  local fixture_id="$phase${baseline_rep:+-$baseline_rep}"
+  echo "[b01] resetting and refreshing fixture before $fixture_id"
+  seed_credentials "$fixture_id"
   export REPOSITORY_ROOT EVIDENCE_ROOT BASE_URL REGION ENVIRONMENT MAX_RATE MAX_VUS
   export K6_IMAGE_DIGEST="$K6_IMAGE" AWS_PROFILE_FILE="$PROFILE" RUN_ID="$RUN_ID"
   export DATA_FILE

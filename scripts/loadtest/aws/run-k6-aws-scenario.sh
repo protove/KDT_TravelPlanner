@@ -70,6 +70,8 @@ except (OSError, json.JSONDecodeError):
 credentials = payload.get("credentials") if isinstance(payload, dict) else None
 if not isinstance(payload, dict) or payload.get("seedState") != "complete":
     raise SystemExit("generated credential file seedState must be complete")
+if payload.get("fixtureState") != "verified":
+    raise SystemExit("generated credential file fixtureState must be verified")
 if not isinstance(credentials, list) or len(credentials) < required:
     observed = len(credentials) if isinstance(credentials, list) else 0
     raise SystemExit(
