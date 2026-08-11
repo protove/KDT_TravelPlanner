@@ -36,12 +36,15 @@ variable "evidence_retention_days" {
 variable "instance_type" {
   type        = string
   description = <<-EOT
-    Load Runner EC2 instance type. D-001 (Runner instance type/budget) was
-    approved 2026-08-11 with this default. See
-    aws-load-test-handoff/decisions/DECISION_LOG.md. Revisit if Smoke/Ramp
-    shows Runner-side CPU/memory bottlenecks.
+    Load Runner EC2 instance type. D-001 was reversed by D-001-R1
+    (aws-load-test-handoff/decisions/DECISION_LOG.md, 2026-08-11): no size is
+    a permanent/required fixed value. t3.small is the default candidate;
+    re-test with t3.medium only after Runner-side CPU/memory/network/OOM or
+    dropped_iterations evidence (see scripts/loadtest/aws/run-k6-aws-scenario.sh's
+    runner-stats.jsonl and validate-aws-run.py's runnerBottleneckSuspected)
+    shows a bottleneck. t3.micro is a Smoke-only choice, not for Ramp/Baseline.
   EOT
-  default     = "t3.medium"
+  default     = "t3.small"
 }
 
 variable "k6_image_reference" {

@@ -93,7 +93,12 @@ python3 "$REPOSITORY_ROOT/scripts/loadtest/record-rehearsal-event.py" "$RUN_DIR"
 set +e
 K6_CONTAINER_NAME="loadtest-aws-k6-${RUN_ID//[^A-Za-z0-9_.-]/-}"
 : > "$RUN_DIR/runner-stats.jsonl"
-docker run --rm -i --name "$K6_CONTAINER_NAME" \
+# No --rm here (unlike ../run-k6-scenario.sh's Compose equivalent): the
+# container must still exist after it exits so `docker inspect` below can
+# read OOMKilled/RestartCount for the Runner-bottleneck-vs-SUT-bottleneck
+# distinction D-001-R1 asks for (aws-load-test-handoff/decisions/DECISION_LOG.md).
+# It is removed explicitly further down instead.
+docker run -i --name "$K6_CONTAINER_NAME" \
   -v "$K6_DIR:/scripts:ro" \
   -v "$(dirname "$AWS_PROFILE_FILE"):/profiles:ro" \
   -v "$RUN_DIR:/out" \
@@ -129,11 +134,25 @@ k6_status=$?
 set -e
 cat "$RUN_DIR/stdout.log"
 
-python3 - "$RUN_DIR/run-status.json" "$k6_status" <<'PY'
+oom_killed="false"
+restart_count="0"
+inspect_json="$(docker inspect "$K6_CONTAINER_NAME" 2>/dev/null || true)"
+if [[ -n "$inspect_json" ]]; then
+  oom_killed="$(echo "$inspect_json" | python3 -c "import json,sys; print(str(json.load(sys.stdin)[0]['State'].get('OOMKilled', False)).lower())" 2>/dev/null || echo "false")"
+  restart_count="$(echo "$inspect_json" | python3 -c "import json,sys; print(json.load(sys.stdin)[0].get('RestartCount', 0))" 2>/dev/null || echo "0")"
+fi
+docker rm -f "$K6_CONTAINER_NAME" >/dev/null 2>&1 || true
+
+python3 - "$RUN_DIR/run-status.json" "$k6_status" "$oom_killed" "$restart_count" <<'PY'
 import json
 import sys
 from pathlib import Path
-Path(sys.argv[1]).write_text(json.dumps({"k6ExitCode": int(sys.argv[2])}, indent=2) + "\n", encoding="utf-8")
+output, k6_status, oom_killed, restart_count = sys.argv[1:]
+Path(output).write_text(json.dumps({
+    "k6ExitCode": int(k6_status),
+    "k6ContainerOomKilled": oom_killed == "true",
+    "k6ContainerRestartCount": int(restart_count),
+}, indent=2) + "\n", encoding="utf-8")
 PY
 python3 "$REPOSITORY_ROOT/scripts/loadtest/record-rehearsal-event.py" "$RUN_DIR" RUN_END "AWS k6 exit code $k6_status" --actor automation
 echo "[k6-aws] $SCENARIO run directory: $RUN_DIR"
