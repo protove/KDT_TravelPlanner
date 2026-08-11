@@ -52,7 +52,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--evidence-root", type=Path, required=True, help="Local evidence bundle directory, e.g. evidence/aws-load-tests/<run-id>")
     parser.add_argument("--run-id", required=True)
     parser.add_argument("--data-file", type=Path, default=None, help="Runner-side seed credential file; omit after data.json has been retired")
-    parser.add_argument("--require-png", action="store_true", help="Fail unless every Grafana capture contract has a matching panel PNG")
+    parser.add_argument(
+        "--require-png",
+        action="store_true",
+        help="Fail unless every Grafana capture contract has a matching panel PNG and collected Query JSON",
+    )
     parser.add_argument("--compare-s3-bucket", default="", help="If given, cross-check s3-download-sourced files' checksums against this bucket via s3api get-object-attributes")
     parser.add_argument("--s3-prefix", default="evidence/aws-load-tests", help="Bucket prefix before <run-id>/ (matches upload-aws-evidence.py's default)")
     parser.add_argument("--region", default="", help="Required with --compare-s3-bucket")
@@ -144,18 +148,109 @@ def determine_png_status(evidence_root: Path) -> dict:
             "pendingCaptureContracts": len(contract_panel_ids),
         }
 
+    missing = sorted(contract_panel_ids - png_panel_ids, key=lambda panel_id: (len(panel_id), panel_id))
     unlinked = sorted(png_panel_ids - contract_panel_ids, key=lambda panel_id: (len(panel_id), panel_id))
+    if missing and unlinked:
+        status = "exported-with-missing-and-unlinked-files"
+    elif missing:
+        status = "exported-with-missing-files"
+    elif unlinked:
+        status = "exported-with-unlinked-files"
+    else:
+        status = "exported"
     result = {
-        "pngStatus": "exported" if not unlinked else "exported-with-unlinked-files",
+        "pngStatus": status,
         "pngCount": len(png_panel_ids),
         "linkedPngCount": len(png_panel_ids) - len(unlinked),
     }
+    if missing:
+        result["missingPanelIds"] = missing
+        result["pngStatusReason"] = (
+            "Every panel-<id>.capture.json must have a matching panel-<id>.png "
+            "before local export can be finalized; these capture contracts are still missing PNGs."
+        )
     if unlinked:
         result["unlinkedPanelIds"] = unlinked
         result["pngStatusReason"] = (
             "Every captured panel-<id>.png must have a matching panel-<id>.capture.json "
             "(runId/fromUtc/toUtc/dashboardUid+version/Query JSON path) per "
             "TEAM_MEMBER_B01_ACTION_REQUEST.md section 4.4; these PNGs do not."
+        )
+    return result
+
+
+def _safe_query_path(evidence_root: Path, raw_path: object) -> Path | None:
+    """Resolve a contract query path only when it stays inside the bundle."""
+    if not isinstance(raw_path, str) or not raw_path or Path(raw_path).is_absolute():
+        return None
+    candidate = (evidence_root / raw_path).resolve()
+    try:
+        candidate.relative_to(evidence_root.resolve())
+    except ValueError:
+        return None
+    return candidate
+
+
+def determine_query_status(evidence_root: Path) -> dict:
+    """Check that every capture contract points at a collected Query JSON file.
+
+    The Grafana exporter writes one capture contract per dashboard panel and
+    records every target's Query JSON path in that contract. A final local
+    export must not be considered complete when a query is missing, malformed,
+    or was written with ``status: error``.
+    """
+    panels_dir = evidence_root / "grafana" / "panels"
+    contract_paths = sorted(panels_dir.glob("panel-*.capture.json")) if panels_dir.exists() else []
+    if not contract_paths:
+        return {
+            "queryStatus": "not-exported",
+            "queryStatusReason": "No Grafana capture contracts exist; Query JSON cannot be proven complete.",
+        }
+
+    missing_paths: list[str] = []
+    failed_paths: list[str] = []
+    invalid_contracts: list[str] = []
+    expected_count = 0
+    for contract_path in contract_paths:
+        relative_contract = str(contract_path.relative_to(evidence_root))
+        try:
+            contract = json.loads(contract_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            invalid_contracts.append(relative_contract)
+            continue
+        query_paths = contract.get("queryJsonPaths") if isinstance(contract, dict) else None
+        if not isinstance(query_paths, list) or not query_paths:
+            invalid_contracts.append(relative_contract)
+            continue
+        for raw_path in query_paths:
+            expected_count += 1
+            query_path = _safe_query_path(evidence_root, raw_path)
+            display_path = raw_path if isinstance(raw_path, str) else str(raw_path)
+            if query_path is None or not query_path.is_file():
+                missing_paths.append(display_path)
+                continue
+            try:
+                query_record = json.loads(query_path.read_text(encoding="utf-8"))
+            except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+                failed_paths.append(display_path)
+                continue
+            if not isinstance(query_record, dict) or query_record.get("status") != "collected":
+                failed_paths.append(display_path)
+
+    result = {
+        "queryStatus": "collected" if expected_count and not missing_paths and not failed_paths and not invalid_contracts else "incomplete",
+        "queryCount": expected_count,
+    }
+    if missing_paths:
+        result["missingQueryJsonPaths"] = sorted(set(missing_paths))
+    if failed_paths:
+        result["uncollectedQueryJsonPaths"] = sorted(set(failed_paths))
+    if invalid_contracts:
+        result["invalidCaptureContracts"] = sorted(invalid_contracts)
+    if result["queryStatus"] != "collected":
+        result["queryStatusReason"] = (
+            "Every capture contract must list existing Query JSON files whose status is collected; "
+            "local export remains blocked until the complete Query set is present."
         )
     return result
 
@@ -178,6 +273,7 @@ def build_manifest(evidence_root: Path, run_id: str) -> dict:
         "files": files,
     }
     manifest.update(determine_png_status(evidence_root))
+    manifest.update(determine_query_status(evidence_root))
     return manifest
 
 
@@ -242,9 +338,12 @@ def main() -> int:
 
     manifest = build_manifest(evidence_root, args.run_id)
 
-    if args.require_png and manifest.get("pngStatus") != "exported":
+    if args.require_png and (
+        manifest.get("pngStatus") != "exported" or manifest.get("queryStatus") != "collected"
+    ):
         raise ManifestError(
-            f"--require-png requested but pngStatus={manifest.get('pngStatus')}; capture every contracted panel before finalizing local export"
+            f"--require-png requested but pngStatus={manifest.get('pngStatus')} "
+            f"queryStatus={manifest.get('queryStatus')}; complete every contracted panel and collected Query JSON before finalizing local export"
         )
 
     checksum_mismatch = False

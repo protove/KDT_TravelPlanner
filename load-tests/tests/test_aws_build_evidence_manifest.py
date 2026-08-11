@@ -121,6 +121,68 @@ class DeterminePngStatusTest(unittest.TestCase):
             self.assertEqual(result["unlinkedPanelIds"], ["9"])
             self.assertIn("capture.json", result["pngStatusReason"])
 
+    def test_flags_capture_contracts_with_no_matching_png(self):
+        # A partial PNG set used to pass because the old check only computed
+        # png_panel_ids - contract_panel_ids. The inverse must be checked too.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            panels_dir = root / "grafana" / "panels"
+            panels_dir.mkdir(parents=True)
+            (panels_dir / "panel-2.png").write_bytes(b"\x89PNG")
+            for panel_id in (2, 7):
+                (panels_dir / f"panel-{panel_id}.capture.json").write_text("{}", encoding="utf-8")
+
+            result = MANIFEST.determine_png_status(root)
+
+            self.assertEqual(result["pngStatus"], "exported-with-missing-files")
+            self.assertEqual(result["missingPanelIds"], ["7"])
+            self.assertEqual(result["linkedPngCount"], 1)
+
+
+class DetermineQueryStatusTest(unittest.TestCase):
+    def _write_contract(self, root: Path, panel_id: int = 2, query_paths=None):
+        panels_dir = root / "grafana" / "panels"
+        panels_dir.mkdir(parents=True, exist_ok=True)
+        contract = {"panelId": panel_id, "queryJsonPaths": query_paths or [f"grafana/queries/panel-{panel_id}-A.json"]}
+        (panels_dir / f"panel-{panel_id}.capture.json").write_text(json.dumps(contract), encoding="utf-8")
+
+    def test_collected_when_every_contract_query_exists_and_is_collected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._write_contract(root)
+            query_path = root / "grafana" / "queries" / "panel-2-A.json"
+            query_path.parent.mkdir(parents=True)
+            query_path.write_text(json.dumps({"status": "collected", "result": {}}), encoding="utf-8")
+
+            result = MANIFEST.determine_query_status(root)
+
+            self.assertEqual(result, {"queryStatus": "collected", "queryCount": 1})
+
+    def test_incomplete_when_contract_query_is_missing_or_failed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._write_contract(root, panel_id=2)
+            self._write_contract(root, panel_id=7)
+            failed = root / "grafana" / "queries" / "panel-7-A.json"
+            failed.parent.mkdir(parents=True, exist_ok=True)
+            failed.write_text(json.dumps({"status": "error", "detail": "upstream unavailable"}), encoding="utf-8")
+
+            result = MANIFEST.determine_query_status(root)
+
+            self.assertEqual(result["queryStatus"], "incomplete")
+            self.assertEqual(result["missingQueryJsonPaths"], ["grafana/queries/panel-2-A.json"])
+            self.assertEqual(result["uncollectedQueryJsonPaths"], ["grafana/queries/panel-7-A.json"])
+
+    def test_rejects_query_path_that_escapes_the_evidence_root(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._write_contract(root, query_paths=["../outside.json"])
+
+            result = MANIFEST.determine_query_status(root)
+
+            self.assertEqual(result["queryStatus"], "incomplete")
+            self.assertEqual(result["missingQueryJsonPaths"], ["../outside.json"])
+
 
 class BuildManifestTest(unittest.TestCase):
     def test_contains_sha256_bytes_and_source_for_every_file(self):
@@ -280,6 +342,68 @@ class MainIntegrationTest(unittest.TestCase):
                     MANIFEST.main()
             finally:
                 sys.argv = original_argv
+
+    def test_require_png_rejects_a_partial_png_set_even_when_one_png_is_linked(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            panels_dir = root / "grafana" / "panels"
+            panels_dir.mkdir(parents=True)
+            queries_dir = root / "grafana" / "queries"
+            queries_dir.mkdir(parents=True)
+            for panel_id in (2, 7):
+                (panels_dir / f"panel-{panel_id}.capture.json").write_text(
+                    json.dumps({"panelId": panel_id, "queryJsonPaths": [f"grafana/queries/panel-{panel_id}-A.json"]}),
+                    encoding="utf-8",
+                )
+                (queries_dir / f"panel-{panel_id}-A.json").write_text(
+                    json.dumps({"status": "collected", "result": {}}), encoding="utf-8",
+                )
+            (panels_dir / "panel-2.png").write_bytes(b"\x89PNG")
+
+            import sys
+            original_argv = sys.argv
+            sys.argv = [
+                "build-evidence-manifest.py",
+                "--evidence-root", str(root),
+                "--run-id", "aws-b01-20260809-001",
+                "--require-png",
+            ]
+            try:
+                with self.assertRaises(MANIFEST.ManifestError):
+                    MANIFEST.main()
+            finally:
+                sys.argv = original_argv
+
+    def test_require_png_accepts_complete_png_and_collected_query_set(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            panels_dir = root / "grafana" / "panels"
+            panels_dir.mkdir(parents=True)
+            queries_dir = root / "grafana" / "queries"
+            queries_dir.mkdir(parents=True)
+            (panels_dir / "panel-2.capture.json").write_text(
+                json.dumps({"panelId": 2, "queryJsonPaths": ["grafana/queries/panel-2-A.json"]}), encoding="utf-8",
+            )
+            (panels_dir / "panel-2.png").write_bytes(b"\x89PNG")
+            (queries_dir / "panel-2-A.json").write_text(
+                json.dumps({"status": "collected", "result": {}}), encoding="utf-8",
+            )
+
+            import sys
+            original_argv = sys.argv
+            sys.argv = [
+                "build-evidence-manifest.py",
+                "--evidence-root", str(root),
+                "--run-id", "aws-b01-20260809-001",
+                "--require-png",
+            ]
+            try:
+                self.assertEqual(MANIFEST.main(), 0)
+            finally:
+                sys.argv = original_argv
+            manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
+            self.assertEqual(manifest["pngStatus"], "exported")
+            self.assertEqual(manifest["queryStatus"], "collected")
 
 
 if __name__ == "__main__":

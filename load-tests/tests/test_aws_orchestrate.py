@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import subprocess
 import tempfile
+import shlex
+import json
 from pathlib import Path
 import unittest
 
@@ -77,8 +79,94 @@ class AwsOrchestrationContractTests(unittest.TestCase):
         self.assertIn('payload.get("runId") != run_id', source)
         self.assertIn('payload.get("profileSha256") != profile_sha', source)
         self.assertIn('(payload.get("confirmedRate") or "") != confirmed_rate', source)
+        self.assertIn('payload.get("inputDigest") != input_digest', source)
+        self.assertIn('"albArn": alb_arn', source)
+        self.assertIn('"baseUrl": base_url', source)
+        self.assertIn('"runnerId": runner_id', source)
+        self.assertIn('"expectedAccountId": expected_account_id', source)
+        self.assertIn('"region": region', source)
         self.assertIn('baseline-*|d005|spike', source)
         self.assertIn('stage exists but profile/rate inputs differ', source)
+
+    def test_stage_marker_skips_with_same_inputs_and_rejects_changed_safety_input(self) -> None:
+        source = SCRIPT.read_text(encoding="utf-8")
+        start = source.index("stage_confirmed_rate()")
+        end = source.index("\nverify_account()", start)
+        function_fragment = source[start:end]
+
+        common_setup = """
+set -euo pipefail
+RUN_ID=aws-b01-marker-test
+PROFILE_SHA256=profile-sha
+SOURCE_COMMIT_SHA=commit-sha
+REGION=ap-northeast-2
+ENVIRONMENT=dev
+EXPECTED_ACCOUNT_ID=111111111111
+ALB_ARN=arn:aws:elasticloadbalancing:ap-northeast-2:111111111111:loadbalancer/app/example/old
+BASE_URL=https://b01.example.com
+RUNNER_ID=i-0123456789abcdef0
+RUNNER_INSTANCE_TYPE=t3.small
+MAX_RATE=100
+MAX_VUS=20
+K6_IMAGE=sha256:k6
+USERS=20
+DATABASE_HOST=db.internal
+DATABASE_PORT=5432
+DATABASE_NAME=travel
+DATABASE_SECRET_ARN=arn:aws:secretsmanager:ap-northeast-2:111111111111:secret:b01-test
+DB_INSTANCE_IDENTIFIER=travel-db
+REDIS_HOST=redis.internal
+REDIS_PORT=6379
+REDIS_IAM_USER=b01-test
+REDIS_REPLICATION_GROUP_ID=travel-redis
+CACHE_CLUSTER_ID=travel-redis-001
+S3_BUCKET=b01-evidence
+S3_PREFIX=evidence/aws-load-tests
+GRAFANA_URL=http://grafana.internal
+GRAFANA_ADMIN_USER=evidence
+GRAFANA_ADMIN_PASSWORD=not-written-to-marker
+PROMETHEUS_URL=http://prometheus.internal
+SLO_FREEZE_APPROVED_BY=operator
+CONFIRMED_RATE=80
+DRY_RUN=0
+STAGE_DIR={stage_dir}
+source {fragment}
+"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            fragment_path = root / "marker-functions.sh"
+            fragment_path.write_text(function_fragment, encoding="utf-8")
+            stage_dir = root / "stages"
+            setup_script = common_setup.format(stage_dir=shlex.quote(str(stage_dir)), fragment=shlex.quote(str(fragment_path)))
+            first_script = setup_script + "\nmark_stage_complete smoke\n"
+            first = subprocess.run(["bash", "-c", first_script], capture_output=True, text=True, check=False)
+            self.assertEqual(first.returncode, 0, first.stderr)
+
+            marker = json.loads((stage_dir / "smoke.json").read_text(encoding="utf-8"))
+            self.assertEqual(len(marker["inputDigest"]), 64)
+            self.assertNotIn("not-written-to-marker", (stage_dir / "smoke.json").read_text(encoding="utf-8"))
+
+            same = subprocess.run(
+                ["bash", "-c", setup_script + "\nrun_stage_once smoke true\n"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(same.returncode, 0, same.stderr)
+            self.assertIn("already complete", same.stdout)
+
+            changed_setup = setup_script.replace(
+                "loadbalancer/app/example/old", "loadbalancer/app/example/new",
+            )
+            changed = subprocess.run(
+                ["bash", "-c", changed_setup + "\nrun_stage_once smoke true\n"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(changed.returncode, 2)
+            self.assertIn("safety input digest", changed.stderr)
 
     def test_destroy_gate_requires_local_export_marker(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

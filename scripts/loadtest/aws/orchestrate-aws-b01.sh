@@ -70,6 +70,7 @@ GRAFANA_ADMIN_PASSWORD="${GRAFANA_ADMIN_PASSWORD:-}"
 PROMETHEUS_URL=""
 SLO_FREEZE_APPROVED_BY=""
 PROFILE_SHA256=""
+SOURCE_COMMIT_SHA=""
 
 usage() {
   cat <<'USAGE'
@@ -193,6 +194,7 @@ RUN_ID="${RUN_ID:-aws-b01-$(date -u +%Y%m%d-%H%M%S)}"
 EVIDENCE_ROOT="$REPOSITORY_ROOT/evidence/aws-load-tests/$RUN_ID"
 DATA_FILE="$EVIDENCE_ROOT/data.json"
 PROFILE_SHA256="$(python3 -c "import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],'rb').read()).hexdigest())" "$PROFILE")"
+SOURCE_COMMIT_SHA="$(git -C "$REPOSITORY_ROOT" rev-parse HEAD)"
 mkdir -p "$EVIDENCE_ROOT"
 
 AWS_CMD=(aws)
@@ -221,22 +223,123 @@ stage_confirmed_rate() {
   esac
 }
 
+stage_input_digest() {
+  local stage="$1"
+  python3 - "$stage" "$RUN_ID" "$PROFILE_SHA256" "$SOURCE_COMMIT_SHA" \
+    "$REGION" "$ENVIRONMENT" "$EXPECTED_ACCOUNT_ID" "$ALB_ARN" "$BASE_URL" \
+    "$RUNNER_ID" "$RUNNER_INSTANCE_TYPE" "$MAX_RATE" "$MAX_VUS" "$K6_IMAGE" "$USERS" \
+    "$DATABASE_HOST" "$DATABASE_PORT" "$DATABASE_NAME" "$DATABASE_SECRET_ARN" \
+    "$DB_INSTANCE_IDENTIFIER" "$REDIS_HOST" "$REDIS_PORT" "$REDIS_IAM_USER" \
+    "$REDIS_REPLICATION_GROUP_ID" "$CACHE_CLUSTER_ID" "$S3_BUCKET" "$S3_PREFIX" \
+    "$GRAFANA_URL" "$GRAFANA_ADMIN_USER" "$GRAFANA_ADMIN_PASSWORD" "$PROMETHEUS_URL" \
+    "$SLO_FREEZE_APPROVED_BY" "$(stage_confirmed_rate "$stage")" <<'PY'
+import hashlib
+import json
+import sys
+
+(
+    stage, run_id, profile_sha, source_commit_sha,
+    region, environment, expected_account_id, alb_arn, base_url,
+    runner_id, runner_instance_type, max_rate, max_vus, k6_image, users,
+    database_host, database_port, database_name, database_secret_arn,
+    db_instance_identifier, redis_host, redis_port, redis_iam_user,
+    redis_replication_group_id, cache_cluster_id, s3_bucket, s3_prefix,
+    grafana_url, grafana_user, grafana_password, prometheus_url,
+    slo_freeze_approved_by, confirmed_rate,
+) = sys.argv[1:]
+
+common = {
+    "region": region,
+    "environment": environment,
+    "expectedAccountId": expected_account_id,
+    "albArn": alb_arn,
+    "baseUrl": base_url,
+    "runnerId": runner_id,
+    "runnerInstanceType": runner_instance_type,
+    "maxRate": max_rate,
+    "maxVus": max_vus,
+}
+payload = {
+    "stage": stage,
+    "runId": run_id,
+    "profileSha256": profile_sha,
+    "sourceCommitSha": source_commit_sha,
+    **common,
+}
+
+if stage == "target":
+    payload.update({
+        "dbInstanceIdentifier": db_instance_identifier,
+        "cacheClusterId": cache_cluster_id,
+    })
+elif stage == "seed":
+    payload.update({
+        "users": users,
+        "s3Bucket": s3_bucket,
+        "databaseHost": database_host,
+        "databasePort": database_port,
+        "databaseName": database_name,
+        "databaseSecretArn": database_secret_arn,
+        "redisHost": redis_host,
+        "redisPort": redis_port,
+        "redisIamUser": redis_iam_user,
+        "redisReplicationGroupId": redis_replication_group_id,
+    })
+elif stage in {"smoke", "ramp", "spike"} or stage.startswith("baseline-"):
+    payload["k6Image"] = k6_image
+    if stage == "spike" or stage.startswith("baseline-"):
+        payload["confirmedRate"] = confirmed_rate
+elif stage == "d005":
+    payload["confirmedRate"] = confirmed_rate
+elif stage == "evidence":
+    payload.update({
+        "grafanaUrl": grafana_url,
+        "grafanaUser": grafana_user,
+        # Store only a fingerprint; the Grafana password never enters the
+        # marker or digest output as a raw value.
+        "grafanaPasswordSha256": hashlib.sha256(grafana_password.encode()).hexdigest(),
+        "prometheusUrl": prometheus_url,
+    })
+elif stage == "cleanup":
+    payload.update({
+        "databaseHost": database_host,
+        "databasePort": database_port,
+        "databaseName": database_name,
+        "databaseSecretArn": database_secret_arn,
+        "redisHost": redis_host,
+        "redisPort": redis_port,
+        "redisIamUser": redis_iam_user,
+        "redisReplicationGroupId": redis_replication_group_id,
+    })
+elif stage == "freeze":
+    payload["sloFreezeApprovedBy"] = slo_freeze_approved_by
+elif stage == "export":
+    payload.update({"s3Bucket": s3_bucket, "s3Prefix": s3_prefix})
+
+canonical = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+print(hashlib.sha256(canonical.encode("utf-8")).hexdigest())
+PY
+}
+
 stage_is_complete() {
   local stage="$1" marker="$STAGE_DIR/$stage.json"
   [[ "$DRY_RUN" == "1" ]] && return 1
   [[ -f "$marker" ]] || return 1
-  local stage_rate
+  local stage_rate stage_digest
   stage_rate="$(stage_confirmed_rate "$stage")"
-  python3 - "$marker" "$RUN_ID" "$PROFILE_SHA256" "$stage_rate" <<'PY'
+  stage_digest="$(stage_input_digest "$stage")"
+  python3 - "$marker" "$RUN_ID" "$PROFILE_SHA256" "$stage_rate" "$stage_digest" <<'PY'
 import json
 import sys
 from pathlib import Path
 
-marker, run_id, profile_sha, confirmed_rate = sys.argv[1:]
+marker, run_id, profile_sha, confirmed_rate, input_digest = sys.argv[1:]
 payload = json.loads(Path(marker).read_text(encoding="utf-8"))
 if payload.get("runId") != run_id or payload.get("profileSha256") != profile_sha:
     raise SystemExit(1)
 if (payload.get("confirmedRate") or "") != confirmed_rate:
+    raise SystemExit(1)
+if payload.get("inputDigest") != input_digest:
     raise SystemExit(1)
 PY
 }
@@ -245,20 +348,22 @@ mark_stage_complete() {
   local stage="$1"
   [[ "$DRY_RUN" == "1" ]] && return 0
   mkdir -p "$STAGE_DIR"
-  local stage_rate
+  local stage_rate stage_digest
   stage_rate="$(stage_confirmed_rate "$stage")"
-  python3 - "$STAGE_DIR/$stage.json" "$stage" "$RUN_ID" "$PROFILE_SHA256" "$stage_rate" <<'PY'
+  stage_digest="$(stage_input_digest "$stage")"
+  python3 - "$STAGE_DIR/$stage.json" "$stage" "$RUN_ID" "$PROFILE_SHA256" "$stage_rate" "$stage_digest" <<'PY'
 import json
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-output, stage, run_id, profile_sha, confirmed_rate = sys.argv[1:]
+output, stage, run_id, profile_sha, confirmed_rate, input_digest = sys.argv[1:]
 Path(output).write_text(json.dumps({
     "stage": stage,
     "runId": run_id,
     "profileSha256": profile_sha,
     "confirmedRate": confirmed_rate or None,
+    "inputDigest": input_digest,
     "completedAtUtc": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
 }, indent=2) + "\n", encoding="utf-8")
 PY
@@ -271,7 +376,7 @@ run_stage_once() {
     echo "[b01] stage=$stage already complete for this run/profile/rate; skipping"
     return 0
   elif [[ -f "$STAGE_DIR/$stage.json" ]]; then
-    echo "[b01] stage=$stage exists but profile/rate inputs differ; use a new --run-id instead of rerunning" >&2
+    echo "[b01] stage=$stage exists but profile/rate inputs differ; use a new --run-id instead of rerunning (safety input digest also changed or is missing)" >&2
     exit 2
   fi
   "$@"
