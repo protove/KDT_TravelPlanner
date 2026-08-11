@@ -11,5 +11,12 @@ const meta = {
 export default meta;
 type Story = StoryObj<typeof meta>;
 
-export const LoggedIn: Story = { args: { loggedIn: true, userInitial: "지" } };
+export const LoggedIn: Story = {
+  args: {
+    loggedIn: true,
+    userInitial: "인",
+    nickname: "인서",
+  },
+};
+
 export const LoggedOut: Story = { args: { loggedIn: false } };

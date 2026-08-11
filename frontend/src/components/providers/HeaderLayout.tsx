@@ -32,6 +32,7 @@ function HeaderLayout({ children }: HeaderLayoutProps) {
         <AppHeader
           loggedIn={isLoggedIn}
           userInitial={user?.initial}
+          nickname={user?.nickname}
           avatarColor={user?.avatarColor}
           avatarSrc={user?.profileImageUrl ?? undefined}
           onLogoClick={() => router.push(isLoggedIn ? "/trips" : "/")}
