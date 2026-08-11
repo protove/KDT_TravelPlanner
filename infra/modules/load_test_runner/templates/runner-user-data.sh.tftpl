@@ -1,8 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-dnf install -y docker
+dnf install -y docker python3-pip
 systemctl enable --now docker
+
+# botocore-only (no full boto3) install: scripts/loadtest/aws/{seed,cleanup}-aws-load-data.py
+# sign their own ElastiCache Redis IAM auth tokens (D-001-R1 후속 Seed/Cleanup
+# 최소권한 — RBAC user, no Redis Secret at all) using botocore's RequestSigner
+# directly, matching AWS's documented technique for IAM-authenticated Redis
+# OSS access. `aws` CLI itself is assumed already present on this AMI.
+pip3 install --no-cache-dir botocore
 
 # Pull the pinned k6 image once during bootstrap so a B-01 run is not
 # blocked on a registry pull. A version change is delivered through a new

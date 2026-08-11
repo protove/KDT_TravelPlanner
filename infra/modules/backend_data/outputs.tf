@@ -32,3 +32,18 @@ output "redis_port" {
   description = "Redis TLS port."
   value       = aws_elasticache_replication_group.this.port
 }
+
+output "redis_load_test_user_name" {
+  description = "ElastiCache RBAC username the load-test Runner authenticates as via IAM (D-001-R1 후속 Seed/Cleanup 최소권한). Not secret — pass to orchestrate-aws-b01.sh --redis-iam-user."
+  value       = aws_elasticache_user.load_test.user_name
+}
+
+output "redis_load_test_user_arn" {
+  description = "ARN of the load-test RBAC user, for the Runner's elasticache:Connect IAM policy."
+  value       = aws_elasticache_user.load_test.arn
+}
+
+output "redis_replication_group_arn" {
+  description = "ARN of the Redis replication group, for the Runner's elasticache:Connect IAM policy (both the user and the replication group ARN are required)."
+  value       = aws_elasticache_replication_group.this.arn
+}

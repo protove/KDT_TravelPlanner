@@ -43,11 +43,11 @@ USERS=20
 DATABASE_HOST=""
 DATABASE_PORT=5432
 DATABASE_NAME=""
-DATABASE_USER=""
 DATABASE_SECRET_ARN=""
 REDIS_HOST=""
 REDIS_PORT=6379
-REDIS_SECRET_ARN=""
+REDIS_IAM_USER=""
+REDIS_REPLICATION_GROUP_ID=""
 GRAFANA_URL="${GRAFANA_URL:-}"
 GRAFANA_ADMIN_USER="${GRAFANA_ADMIN_USER:-}"
 GRAFANA_ADMIN_PASSWORD="${GRAFANA_ADMIN_PASSWORD:-}"
@@ -72,8 +72,12 @@ Required:
 Also required for most modes:
   --s3-bucket NAME                (seed/export/all) evidence S3 bucket
   --k6-image DIGEST                (smoke/ramp/baseline/spike/all) digest-pinned k6 image
-  --database-host/--database-name/--database-user/--database-secret-arn   (seed/cleanup/all)
-  --redis-host/--redis-secret-arn                                        (seed/cleanup/all; omit together to skip Redis)
+  --database-host/--database-name/--database-secret-arn   (seed/cleanup/all)
+                                    --database-secret-arn must be a dedicated test-only Secret,
+                                    JSON {"username":..,"password":..} (never the RDS master secret)
+  --redis-host/--redis-iam-user/--redis-replication-group-id
+                                    (seed/cleanup/all; omit all three together to skip Redis in cleanup —
+                                    seed always requires Redis). ElastiCache RBAC + IAM auth, never a Secret.
   --confirmed-rate RATE            (baseline/spike/export "all" after Ramp) D-005 operator-confirmed arrival-rate
 
 Optional:
@@ -107,11 +111,11 @@ while [[ "$#" -gt 0 ]]; do
     --database-host) DATABASE_HOST="$2"; shift 2 ;;
     --database-port) DATABASE_PORT="$2"; shift 2 ;;
     --database-name) DATABASE_NAME="$2"; shift 2 ;;
-    --database-user) DATABASE_USER="$2"; shift 2 ;;
     --database-secret-arn) DATABASE_SECRET_ARN="$2"; shift 2 ;;
     --redis-host) REDIS_HOST="$2"; shift 2 ;;
     --redis-port) REDIS_PORT="$2"; shift 2 ;;
-    --redis-secret-arn) REDIS_SECRET_ARN="$2"; shift 2 ;;
+    --redis-iam-user) REDIS_IAM_USER="$2"; shift 2 ;;
+    --redis-replication-group-id) REDIS_REPLICATION_GROUP_ID="$2"; shift 2 ;;
     --grafana-url) GRAFANA_URL="$2"; shift 2 ;;
     --grafana-user) GRAFANA_ADMIN_USER="$2"; shift 2 ;;
     --grafana-password) GRAFANA_ADMIN_PASSWORD="$2"; shift 2 ;;
@@ -259,20 +263,19 @@ seed_stage() {
     echo "[dry-run] seed-aws-load-data.py --run-id $RUN_ID --users $USERS" >&2
     return 0
   fi
-  for required in DATABASE_HOST DATABASE_NAME DATABASE_USER DATABASE_SECRET_ARN S3_BUCKET; do
+  for required in DATABASE_HOST DATABASE_NAME DATABASE_SECRET_ARN S3_BUCKET REDIS_HOST REDIS_IAM_USER REDIS_REPLICATION_GROUP_ID; do
     if [[ -z "${!required}" ]]; then echo "--${required,,} is required for seed" >&2; exit 2; fi
   done
   local -a seed_args=(
     --run-id "$RUN_ID" --users "$USERS"
     --expected-account-id "$EXPECTED_ACCOUNT_ID" --region "$REGION"
     --database-host "$DATABASE_HOST" --database-port "$DATABASE_PORT"
-    --database-name "$DATABASE_NAME" --database-user "$DATABASE_USER"
+    --database-name "$DATABASE_NAME"
     --database-secret-arn "$DATABASE_SECRET_ARN"
+    --redis-host "$REDIS_HOST" --redis-port "$REDIS_PORT"
+    --redis-iam-user "$REDIS_IAM_USER" --redis-replication-group-id "$REDIS_REPLICATION_GROUP_ID"
     --base-url "$BASE_URL" --data-file "$DATA_FILE"
   )
-  if [[ -n "$REDIS_HOST" && -n "$REDIS_SECRET_ARN" ]]; then
-    seed_args+=(--redis-host "$REDIS_HOST" --redis-port "$REDIS_PORT" --redis-secret-arn "$REDIS_SECRET_ARN")
-  fi
   python3 "$REPOSITORY_ROOT/scripts/loadtest/aws/seed-aws-load-data.py" "${seed_args[@]}"
 }
 
@@ -403,17 +406,21 @@ cleanup_stage() {
     echo "[dry-run] cleanup-aws-load-data.py --run-id $RUN_ID" >&2
     return 0
   fi
-  for required in DATABASE_HOST DATABASE_NAME DATABASE_USER DATABASE_SECRET_ARN; do
+  for required in DATABASE_HOST DATABASE_NAME DATABASE_SECRET_ARN; do
     if [[ -z "${!required}" ]]; then echo "--${required,,} is required for cleanup" >&2; exit 2; fi
   done
   local -a cleanup_args=(
     --run-id "$RUN_ID" --expected-account-id "$EXPECTED_ACCOUNT_ID" --region "$REGION"
     --database-host "$DATABASE_HOST" --database-port "$DATABASE_PORT"
-    --database-name "$DATABASE_NAME" --database-user "$DATABASE_USER"
+    --database-name "$DATABASE_NAME"
     --database-secret-arn "$DATABASE_SECRET_ARN"
   )
-  if [[ -n "$REDIS_HOST" && -n "$REDIS_SECRET_ARN" ]]; then
-    cleanup_args+=(--redis-host "$REDIS_HOST" --redis-port "$REDIS_PORT" --redis-secret-arn "$REDIS_SECRET_ARN" --data-file "$DATA_FILE")
+  if [[ -n "$REDIS_HOST" && -n "$REDIS_IAM_USER" && -n "$REDIS_REPLICATION_GROUP_ID" ]]; then
+    cleanup_args+=(
+      --redis-host "$REDIS_HOST" --redis-port "$REDIS_PORT"
+      --redis-iam-user "$REDIS_IAM_USER" --redis-replication-group-id "$REDIS_REPLICATION_GROUP_ID"
+      --data-file "$DATA_FILE"
+    )
   fi
   python3 "$REPOSITORY_ROOT/scripts/loadtest/aws/cleanup-aws-load-data.py" "${cleanup_args[@]}"
   echo '{"note":"Cost Explorer reflects usage with a reporting delay; treat any same-day figure as estimated (see B01_OPERATOR_RUNBOOK.md step 6)."}' \
