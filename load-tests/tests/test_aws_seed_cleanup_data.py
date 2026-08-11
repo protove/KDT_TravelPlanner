@@ -23,6 +23,7 @@ def _load(module_name: str, relative_path: str):
 
 SEED = _load("seed_aws_load_data", "scripts/loadtest/aws/seed-aws-load-data.py")
 CLEANUP = _load("cleanup_aws_load_data", "scripts/loadtest/aws/cleanup-aws-load-data.py")
+LIFECYCLE = sys.modules["refresh_credential_lifecycle"]
 
 # Mirrors scripts/loadtest/verify-evidence-safety.py's synthetic_email pattern
 # so the existing evidence safety scanner also covers AWS-seeded emails
@@ -35,6 +36,68 @@ class FakeCompletedProcess:
         self.returncode = returncode
         self.stdout = stdout
         self.stderr = stderr
+
+
+class RefreshCredentialLifecycleTest(unittest.TestCase):
+    def credential(self):
+        return LIFECYCLE.RefreshCredential("a" * 43, "b" * 43)
+
+    def test_active_token_is_rotated_then_reused_to_revoke_family(self):
+        statuses = iter((200, 401))
+        refresh_tokens = []
+        deleted_keys = []
+
+        result = LIFECYCLE.revoke_refresh_credentials(
+            [self.credential()],
+            lambda token: refresh_tokens.append(token) or next(statuses),
+            lambda keys: deleted_keys.extend(keys) or 3,
+        )
+
+        self.assertEqual(refresh_tokens, ["a" * 43, "a" * 43])
+        self.assertEqual(result.refresh_request_count, 2)
+        self.assertEqual(result.redis_deleted_count, 3)
+        token_hash = hashlib.sha256(("a" * 43).encode("utf-8")).hexdigest()
+        self.assertEqual(
+            deleted_keys,
+            [
+                f"auth:refresh:token:{token_hash}",
+                "auth:refresh:family:" + "b" * 43,
+                f"auth:refresh:used:{token_hash}",
+            ],
+        )
+
+    def test_already_rotated_token_revokes_family_on_first_reuse(self):
+        refresh_tokens = []
+        result = LIFECYCLE.revoke_refresh_credentials(
+            [self.credential()],
+            lambda token: refresh_tokens.append(token) or 401,
+            lambda keys: 0,
+        )
+        self.assertEqual(len(refresh_tokens), 1)
+        self.assertEqual(result.refresh_request_count, 1)
+
+    def test_unexpected_status_fails_without_exposing_token(self):
+        with self.assertRaises(LIFECYCLE.CredentialLifecycleError) as context:
+            LIFECYCLE.revoke_refresh_credentials(
+                [self.credential()], lambda token: 500, lambda keys: 0,
+            )
+        self.assertNotIn("a" * 43, str(context.exception))
+        self.assertNotIn("b" * 43, str(context.exception))
+
+    def test_invalid_credential_file_fails_before_any_external_call(self):
+        calls = []
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "data.json"
+            path.write_text(json.dumps({
+                "runId": "run-a",
+                "credentials": [{"refreshToken": "invalid", "refreshFamilyId": "b" * 43}],
+            }), encoding="utf-8")
+            with self.assertRaises(LIFECYCLE.CredentialLifecycleError):
+                LIFECYCLE.revoke_credential_file(
+                    path, "run-a", lambda token: calls.append(token) or 401,
+                    lambda keys: calls.append(keys) or 0,
+                )
+        self.assertEqual(calls, [])
 
 
 class SeedAwsLoadDataTest(unittest.TestCase):
@@ -312,9 +375,9 @@ class SeedAwsLoadDataTest(unittest.TestCase):
         def fake_find_existing_timeline_items(travel_id):
             return ["existing-item-1", "existing-item-2", "existing-item-3"]
 
-        def fake_seed_redis_token(user_id, ttl_ms):
+        def fake_seed_redis_token(user_id, ttl_ms, token, family_id):
             calls["seed_redis_token"].append(user_id)
-            return (f"fresh-token-{user_id}", f"fresh-family-{user_id}")
+            return (token, family_id)
 
         def fake_refresh(token):
             calls["refresh"].append(token)
@@ -358,7 +421,7 @@ class SeedAwsLoadDataTest(unittest.TestCase):
         self.assertEqual(skipped_entry["timelineItemIds"], ["existing-item-1", "existing-item-2", "existing-item-3"])
         # A fresh token was minted for the skipped user too, not carried
         # over from whatever token it had when first seeded.
-        self.assertEqual(skipped_entry["refreshToken"], "fresh-token-user-2")
+        self.assertRegex(skipped_entry["refreshToken"], r"^[A-Za-z0-9_-]{43}$")
 
         # seed_redis_token/refresh ran for all 3 users, including the skip.
         self.assertEqual(sorted(calls["seed_redis_token"]), ["user-1", "user-2", "user-3"])
@@ -366,6 +429,84 @@ class SeedAwsLoadDataTest(unittest.TestCase):
         # But the expensive travel/timeline creation only ran for the 2
         # genuinely-new users.
         self.assertEqual(calls["create_travel"], 2)
+
+    def test_seed_checkpoints_token_before_redis_mutation(self):
+        runtime = object.__new__(SEED.AwsSeed)
+        events = []
+        writes = []
+        runtime.insert_user = lambda run_id, index: ("user-1", False)
+        runtime.seed_redis_token = (
+            lambda user_id, ttl_ms, token, family_id:
+            events.append(("redis", token, family_id)) or (token, family_id)
+        )
+        runtime.refresh = lambda token: ("access-token", "r" * 43)
+        runtime.has_existing_travel = lambda user_id: False
+        runtime.create_travel = lambda access_token, index: "travel-1"
+        runtime.create_timeline_items = lambda access_token, travel_id: ["timeline-1"]
+
+        def write_credentials(payload, path):
+            writes.append(json.loads(json.dumps(payload)))
+            events.append(("write", payload["credentials"][-1]["refreshToken"]))
+
+        runtime.write_credentials = write_credentials
+        args = type("Args", (), {
+            "run_id": "aws-b01-checkpoint", "users": 1, "refresh_ttl_ms": 1000,
+            "data_file": Path("/tmp/unused.json"),
+        })()
+
+        SEED.seed_all(runtime, args)
+
+        self.assertEqual(events[0][0], "write")
+        self.assertEqual(events[1][0], "redis")
+        self.assertEqual(events[0][1], events[1][1])
+        self.assertEqual(writes[0]["seedState"], "in-progress")
+        self.assertEqual(writes[-1]["seedState"], "complete")
+        self.assertEqual(writes[-1]["seedVersion"], "aws-s2")
+
+    def test_seed_failure_keeps_private_in_progress_credential_checkpoint(self):
+        runtime = object.__new__(SEED.AwsSeed)
+        runtime.insert_user = lambda run_id, index: ("user-1", False)
+        runtime.seed_redis_token = mock.Mock(side_effect=SEED.SeedError("redis unavailable"))
+        runtime.write_credentials = SEED.AwsSeed.write_credentials.__get__(runtime, SEED.AwsSeed)
+
+        with tempfile.TemporaryDirectory() as directory:
+            data_file = Path(directory) / "data.json"
+            args = type("Args", (), {
+                "run_id": "aws-b01-partial", "users": 1, "refresh_ttl_ms": 1000,
+                "data_file": data_file,
+            })()
+            with self.assertRaises(SEED.SeedError):
+                SEED.seed_all(runtime, args)
+
+            payload = json.loads(data_file.read_text(encoding="utf-8"))
+            self.assertEqual(payload["seedState"], "in-progress")
+            self.assertEqual(len(payload["credentials"]), 1)
+            self.assertRegex(payload["credentials"][0]["refreshToken"], r"^[A-Za-z0-9_-]{43}$")
+            self.assertEqual(stat.S_IMODE(data_file.stat().st_mode), stat.S_IRUSR | stat.S_IWUSR)
+
+    def test_previous_credential_file_is_revoked_before_reseeding(self):
+        runtime = type("Runtime", (), {
+            "refresh_status": lambda self, token: 401,
+            "delete_exact_refresh_keys": lambda self, keys: 0,
+        })()
+        result = type("Result", (), {
+            "credential_count": 1, "redis_deleted_count": 3, "redis_key_count": 3,
+        })()
+        with tempfile.TemporaryDirectory() as directory:
+            data_file = Path(directory) / "data.json"
+            data_file.write_text("{}", encoding="utf-8")
+            args = type("Args", (), {
+                "data_file": data_file, "run_id": "aws-b01-lifecycle-test",
+            })()
+            with mock.patch.object(SEED, "revoke_credential_file", return_value=result) as revoke:
+                SEED.revoke_previous_credentials(runtime, args)
+
+        revoke.assert_called_once_with(
+            data_file,
+            "aws-b01-lifecycle-test",
+            runtime.refresh_status,
+            runtime.delete_exact_refresh_keys,
+        )
 
 
 class CleanupResultFileTest(unittest.TestCase):
@@ -473,6 +614,42 @@ class CleanupResultFileTest(unittest.TestCase):
             CLEANUP.matching_user_count = original_count
             CLEANUP.delete_matching_rows = original_delete
 
+    def test_main_revokes_refresh_families_before_database_delete(self):
+        calls = []
+        with tempfile.TemporaryDirectory() as directory:
+            data_file = Path(directory) / "data.json"
+            data_file.write_text("{}", encoding="utf-8")
+            result_file = Path(directory) / "cleanup-result.json"
+            argv = [
+                "cleanup-aws-load-data.py", "--run-id", "aws-b01-20260811-001",
+                "--expected-account-id", "111111111111", "--region", "ap-northeast-2",
+                "--database-host", "db.internal", "--database-name", "travel_diary_dev",
+                "--database-secret-arn", "arn:aws:secretsmanager:...",
+                "--redis-host", "redis.internal", "--redis-iam-user", "loadtest-dev",
+                "--redis-replication-group-id", "travel-redis", "--data-file", str(data_file),
+                "--base-url", "https://api.example.com", "--result-file", str(result_file),
+            ]
+            with (
+                mock.patch.object(CLEANUP, "verify_account"),
+                mock.patch.object(CLEANUP, "read_secret_credential", return_value=("u", "p")),
+                mock.patch.object(CLEANUP, "matching_user_count", return_value=2),
+                mock.patch.object(
+                    CLEANUP, "cleanup_redis",
+                    side_effect=lambda *args: calls.append("credentials") or (2, 6, 6),
+                ),
+                mock.patch.object(
+                    CLEANUP, "delete_matching_rows",
+                    side_effect=lambda *args: calls.append("database"),
+                ),
+                mock.patch.object(sys, "argv", argv),
+            ):
+                self.assertEqual(CLEANUP.main(), 0)
+
+            self.assertEqual(calls, ["credentials", "database"])
+            written = json.loads(result_file.read_text(encoding="utf-8"))
+            self.assertEqual(written["refreshFamiliesRevoked"], 2)
+            self.assertEqual(written["redisExactKeyCount"], 6)
+
 
 class CleanupAwsLoadDataTest(unittest.TestCase):
     def test_like_pattern_prefix_is_hardcoded(self):
@@ -570,20 +747,29 @@ class CleanupAwsLoadDataTest(unittest.TestCase):
             args = type("Args", (), {
                 "data_file": path, "redis_host": "redis.internal", "redis_port": 6379,
                 "redis_iam_user": "loadtest-dev", "redis_replication_group_id": "kdt-travelplanner-dev-redis",
+                "base_url": "https://api.example.com",
             })()
 
             captured_keys = []
             original_redis = CLEANUP.redis
-            CLEANUP.redis = lambda a, *arguments: captured_keys.append(arguments) or "1"
+            original_refresh_status = CLEANUP.refresh_status
+            CLEANUP.refresh_status = lambda a, token: 401
+            CLEANUP.redis = lambda a, *arguments: captured_keys.append(arguments) or "3"
             try:
-                deleted = CLEANUP.cleanup_redis(args, "aws-b01-20260809-001")
+                family_count, deleted, exact_key_count = CLEANUP.cleanup_redis(
+                    args, "aws-b01-20260809-001"
+                )
             finally:
                 CLEANUP.redis = original_redis
+                CLEANUP.refresh_status = original_refresh_status
 
-            self.assertEqual(deleted, 2)
+            self.assertEqual((family_count, deleted, exact_key_count), (1, 3, 3))
             expected_token_hash = hashlib.sha256(refresh_token.encode("utf-8")).hexdigest()
-            self.assertIn(("DEL", f"auth:refresh:token:{expected_token_hash}"), captured_keys)
-            self.assertIn(("DEL", f"auth:refresh:family:{family_id}"), captured_keys)
+            self.assertEqual(len(captured_keys), 1)
+            self.assertEqual(captured_keys[0][0], "DEL")
+            self.assertIn(f"auth:refresh:token:{expected_token_hash}", captured_keys[0])
+            self.assertIn(f"auth:refresh:family:{family_id}", captured_keys[0])
+            self.assertIn(f"auth:refresh:used:{expected_token_hash}", captured_keys[0])
 
     def test_docker_invocations_never_put_password_or_token_in_argv(self):
         captured = {}

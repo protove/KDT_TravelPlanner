@@ -24,7 +24,7 @@ REP="${2:-}"
 : "${REGION:?REGION is required}"
 : "${ENVIRONMENT:?ENVIRONMENT is required}"
 MAX_RATE="${MAX_RATE:?MAX_RATE is required}"
-MAX_VUS="${MAX_VUS:?MAX_VUS is required}"
+OPERATOR_MAX_VUS="${MAX_VUS:?MAX_VUS is required}"
 
 case "$PHASE" in
   smoke|ramp|baseline|spike) ;;
@@ -43,13 +43,54 @@ phase_run_id="$RUN_ID-$suffix"
 export REPOSITORY_ROOT BASE_URL K6_IMAGE_DIGEST AWS_PROFILE_FILE REGION ENVIRONMENT
 export RUN_ID="$phase_run_id"
 
+configure_phase_max_vus() {
+  local phase="$1"
+  local override="$2"
+  EFFECTIVE_MAX_VUS="$(python3 - "$AWS_PROFILE_FILE" "$phase" "$OPERATOR_MAX_VUS" "$override" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+profile_path, phase, ceiling_raw, override_raw = sys.argv[1:]
+profile = json.loads(Path(profile_path).read_text(encoding="utf-8"))
+scenario = profile.get("scenarios", {}).get(phase, {})
+profile_vus = scenario.get("vus") if phase == "smoke" else scenario.get("maxVUs")
+
+def positive_integer(raw, label):
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        raise SystemExit(f"{label} must be a positive integer")
+    if value < 1 or str(value) != str(raw):
+        raise SystemExit(f"{label} must be a positive integer")
+    return value
+
+ceiling = positive_integer(ceiling_raw, "MAX_VUS operator ceiling")
+effective = positive_integer(override_raw or profile_vus, f"{phase} maxVUs")
+profile_limit = positive_integer(profile.get("limits", {}).get("maxVUs"), "profile limits.maxVUs")
+if effective > profile_limit:
+    raise SystemExit(f"{phase} maxVUs {effective} exceeds profile limits.maxVUs {profile_limit}")
+if effective > ceiling:
+    raise SystemExit(f"{phase} maxVUs {effective} exceeds operator ceiling {ceiling}")
+print(effective)
+PY
+)"
+  if [[ -n "$override" ]]; then
+    export MAX_VUS="$override"
+  else
+    unset MAX_VUS
+  fi
+  export EFFECTIVE_MAX_VUS
+}
+
 case "$PHASE" in
   smoke)
+    configure_phase_max_vus smoke ""
     ALLOW_K6_FAILURE=0 "$REPOSITORY_ROOT/scripts/loadtest/aws/run-k6-aws-scenario.sh" smoke "$run_dir"
     ;;
   ramp)
     export PREALLOCATED_VUS="${RAMP_PREALLOCATED_VUS:-20}"
-    export MAX_VUS="${RAMP_MAX_VUS:-$MAX_VUS}"
+    configure_phase_max_vus ramp "${RAMP_MAX_VUS:-}"
     # Ramp's own targetRate stages come from the profile and are already
     # bounded by profile.limits.maxRate inside load-tests/k6/aws/config.js
     # (enforceRateLimit). --max-rate/--max-vus here are the operator's
@@ -64,7 +105,7 @@ case "$PHASE" in
     fi
     export RATE="$CONFIRMED_RATE"
     export PREALLOCATED_VUS="${BASELINE_PREALLOCATED_VUS:-20}"
-    export MAX_VUS="${BASELINE_MAX_VUS:-$MAX_VUS}"
+    configure_phase_max_vus baseline "${BASELINE_MAX_VUS:-}"
     # Baseline reps are allowed to miss SLO thresholds (that is a legitimate,
     # expected outcome — see D-005 in aws-load-test-handoff/decisions/OPEN_DECISIONS.md,
     # "3회 중 하나라도 99% 미만이면 해당 arrival-rate 후보를 동결하지 않는다").
@@ -76,7 +117,7 @@ case "$PHASE" in
     : "${CONFIRMED_RATE:?CONFIRMED_RATE is required for spike (peaks off the D-005 baseline rate)}"
     export RATE="$CONFIRMED_RATE"
     export PREALLOCATED_VUS="${SPIKE_PREALLOCATED_VUS:-20}"
-    export MAX_VUS="${SPIKE_MAX_VUS:-$MAX_VUS}"
+    configure_phase_max_vus spike "${SPIKE_MAX_VUS:-}"
     # Spike is diagnostic (b01SpikeThresholds is empty) — intentional peak
     # overload is expected, not a failure signal by itself.
     ALLOW_K6_FAILURE=1 "$REPOSITORY_ROOT/scripts/loadtest/aws/run-k6-aws-scenario.sh" spike "$run_dir"

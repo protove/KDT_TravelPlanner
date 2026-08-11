@@ -53,7 +53,7 @@ MAX_VUS=""
 RUN_ID=""
 K6_IMAGE=""
 CONFIRMED_RATE=""
-USERS=20
+USERS=80
 DATABASE_HOST=""
 DATABASE_PORT=5432
 DATABASE_NAME=""
@@ -117,7 +117,7 @@ Also required for most modes:
 
 Optional:
   --run-id ID                     Default: aws-b01-<UTC timestamp>
-  --users N                       Default: 20
+  --users N                       Default: 80 (Spike maxVUs; one credential per AWS VU)
   --database-port PORT            Default: 5432
   --redis-port PORT               Default: 6379
   --grafana-url / --grafana-user / --grafana-password   (evidence/all) skip annotation publish if omitted
@@ -304,6 +304,17 @@ elif stage == "seed":
     })
 elif stage in {"smoke", "ramp", "spike"} or stage.startswith("baseline-"):
     payload["k6Image"] = k6_image
+    payload["credentialLifecycle"] = {
+        "users": users,
+        "databaseHost": database_host,
+        "databasePort": database_port,
+        "databaseName": database_name,
+        "databaseSecretArn": database_secret_arn,
+        "redisHost": redis_host,
+        "redisPort": redis_port,
+        "redisIamUser": redis_iam_user,
+        "redisReplicationGroupId": redis_replication_group_id,
+    }
     if stage == "ramp":
         payload["effectiveK6Overrides"] = {
             "startRate": start_rate,
@@ -600,8 +611,7 @@ PY
   echo "[b01] target verified: BASE_URL=$BASE_URL evidenceRoot=$EVIDENCE_ROOT"
 }
 
-seed_stage() {
-  echo "[b01] seed: run-id=$RUN_ID users=$USERS"
+seed_credentials() {
   if [[ "$DRY_RUN" == "1" ]]; then
     echo "[dry-run] seed-aws-load-data.py --run-id $RUN_ID --users $USERS" >&2
     return 0
@@ -622,17 +632,78 @@ seed_stage() {
   python3 "$REPOSITORY_ROOT/scripts/loadtest/aws/seed-aws-load-data.py" "${seed_args[@]}"
 }
 
+seed_stage() {
+  echo "[b01] seed: run-id=$RUN_ID users=$USERS"
+  seed_credentials
+}
+
+phase_max_vus_override() {
+  case "$1" in
+    smoke) printf '' ;;
+    ramp) printf '%s' "$RAMP_MAX_VUS" ;;
+    baseline) printf '%s' "$BASELINE_MAX_VUS" ;;
+    spike) printf '%s' "$SPIKE_MAX_VUS" ;;
+    *) echo "unsupported phase for VU capacity validation: $1" >&2; return 2 ;;
+  esac
+}
+
+validate_phase_credential_capacity() {
+  local phase="$1"
+  local override
+  override="$(phase_max_vus_override "$phase")"
+  python3 - "$PROFILE" "$phase" "$USERS" "$MAX_VUS" "$override" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+profile_path, phase, users_raw, ceiling_raw, override_raw = sys.argv[1:]
+profile = json.loads(Path(profile_path).read_text(encoding="utf-8"))
+scenario = profile.get("scenarios", {}).get(phase)
+if not isinstance(scenario, dict):
+    raise SystemExit(f"profile.scenarios.{phase} is missing")
+
+def positive_integer(raw, label):
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        raise SystemExit(f"{label} must be a positive integer")
+    if value < 1 or str(value) != str(raw):
+        raise SystemExit(f"{label} must be a positive integer")
+    return value
+
+users = positive_integer(users_raw, "--users")
+ceiling = positive_integer(ceiling_raw, "--max-vus")
+profile_vus = scenario.get("vus") if phase == "smoke" else scenario.get("maxVUs")
+effective_vus = positive_integer(override_raw or profile_vus, f"{phase} maxVUs")
+profile_limit = positive_integer(profile.get("limits", {}).get("maxVUs"), "profile limits.maxVUs")
+if effective_vus > profile_limit:
+    raise SystemExit(f"{phase} maxVUs {effective_vus} exceeds profile limits.maxVUs {profile_limit}")
+if effective_vus > ceiling:
+    raise SystemExit(f"{phase} maxVUs {effective_vus} exceeds operator --max-vus ceiling {ceiling}")
+if users < effective_vus:
+    raise SystemExit(
+        f"--users {users} is smaller than {phase} maxVUs {effective_vus}; "
+        "AWS VUs may not share refresh credentials"
+    )
+print(f"[b01] credential capacity verified: phase={phase} users={users} maxVUs={effective_vus}")
+PY
+}
+
 k6_phase_stage() {
   local phase="$1"
   local baseline_rep="${2:-}"
   echo "[b01] $phase"
+  validate_phase_credential_capacity "$phase"
   if [[ "$DRY_RUN" == "1" ]]; then
+    echo "[dry-run] refresh credentials before $phase" >&2
     echo "[dry-run] run-aws-b01.sh $phase (RUN_ID=$RUN_ID rate=${CONFIRMED_RATE:-<profile>})" >&2
     return 0
   fi
   for required in K6_IMAGE; do
     if [[ -z "${!required}" ]]; then echo "--k6-image is required for $phase" >&2; exit 2; fi
   done
+  echo "[b01] refreshing credentials before $phase${baseline_rep:+-$baseline_rep}"
+  seed_credentials
   export REPOSITORY_ROOT EVIDENCE_ROOT BASE_URL REGION ENVIRONMENT MAX_RATE MAX_VUS
   export K6_IMAGE_DIGEST="$K6_IMAGE" AWS_PROFILE_FILE="$PROFILE" RUN_ID="$RUN_ID"
   export DATA_FILE
@@ -800,7 +871,7 @@ cleanup_stage() {
     cleanup_args+=(
       --redis-host "$REDIS_HOST" --redis-port "$REDIS_PORT"
       --redis-iam-user "$REDIS_IAM_USER" --redis-replication-group-id "$REDIS_REPLICATION_GROUP_ID"
-      --data-file "$DATA_FILE"
+      --data-file "$DATA_FILE" --base-url "$BASE_URL"
     )
   fi
   python3 "$REPOSITORY_ROOT/scripts/loadtest/aws/cleanup-aws-load-data.py" "${cleanup_args[@]}"

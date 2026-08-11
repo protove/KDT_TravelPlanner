@@ -4,7 +4,7 @@
   "environment": "dev-runtime",
   "region": "ap-northeast-2",
   "sloVersion": "v0.2-candidate",
-  "seedVersion": "s1",
+  "seedVersion": "s2",
   "requestMixVersion": "aws-b01-v1",
 
   "target": {
