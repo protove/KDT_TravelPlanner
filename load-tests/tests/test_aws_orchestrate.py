@@ -16,6 +16,11 @@ LOAD_RUNNER_TERRAFORM = REPOSITORY_ROOT / "infra/modules/load_test_runner/main.t
 
 
 class AwsOrchestrationContractTests(unittest.TestCase):
+    def test_target_discovery_separates_multiple_healthy_instance_ids(self) -> None:
+        source = SCRIPT.read_text(encoding="utf-8")
+        self.assertIn(r'print("\n".join(', source)
+        self.assertNotIn(r'print("\\n".join(', source)
+
     def test_runner_role_can_read_every_target_discovery_dependency_in_region(self) -> None:
         source = LOAD_RUNNER_TERRAFORM.read_text(encoding="utf-8")
         self.assertIn('sid = "LoadTestTargetDiscovery"', source)
