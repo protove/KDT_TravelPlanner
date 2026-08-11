@@ -91,7 +91,7 @@ module "load_test_runner" {
   aws_region               = var.aws_region
   environment              = local.environment
   evidence_bucket_name     = "${var.project_name}-${local.environment}-load-test-evidence-${data.aws_caller_identity.current.account_id}"
-  instance_type            = "t3.medium" # D-001 approved 2026-08-11 (aws-load-test-handoff/decisions/DECISION_LOG.md)
+  instance_type            = "t3.small" # D-001-R1 2026-08-11: default candidate, not a fixed value (aws-load-test-handoff/decisions/DECISION_LOG.md). Override with -var="instance_type=t3.medium" only after Runner-bottleneck evidence.
   k6_image_reference       = var.k6_image_reference
   project_name             = var.project_name
   runner_security_group_id = module.runtime_security.load_runner_security_group_id

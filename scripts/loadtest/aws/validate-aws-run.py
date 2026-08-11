@@ -172,6 +172,25 @@ def runner_stats(run_dir: Path) -> dict:
     }
 
 
+# D-001-R1 (aws-load-test-handoff/decisions/DECISION_LOG.md): t3.small is the
+# default Runner candidate, re-tested with t3.medium only once Runner-side
+# CPU/memory/OOM/restart evidence shows a bottleneck. These thresholds are
+# what "shows a bottleneck" means operationally — a run this hot on the
+# Runner side should not be read as a SUT/backend SLO miss.
+RUNNER_BOTTLENECK_CPU_PERCENT = 90.0
+RUNNER_BOTTLENECK_MEMORY_PERCENT = 90.0
+
+
+def runner_bottleneck_suspected(stats: dict, oom_killed: bool, restart_count: int) -> bool:
+    if oom_killed or restart_count > 0:
+        return True
+    if stats["maxCpuPercent"] is not None and stats["maxCpuPercent"] >= RUNNER_BOTTLENECK_CPU_PERCENT:
+        return True
+    if stats["maxMemoryPercent"] is not None and stats["maxMemoryPercent"] >= RUNNER_BOTTLENECK_MEMORY_PERCENT:
+        return True
+    return False
+
+
 def evaluate_phase(run_dir: Path) -> dict:
     metadata = read_json(run_dir / "metadata.json")
     status = read_json(run_dir / "run-status.json")
@@ -193,6 +212,20 @@ def evaluate_phase(run_dir: Path) -> dict:
 
     dropped_iterations = summary.get("metrics", {}).get("dropped_iterations", {}).get("count", 0)
     k6_exit_code = status.get("k6ExitCode")
+    oom_killed = bool(status.get("k6ContainerOomKilled", False))
+    restart_count = int(status.get("k6ContainerRestartCount", 0))
+    stats = runner_stats(run_dir)
+    bottleneck_suspected = runner_bottleneck_suspected(stats, oom_killed, restart_count)
+
+    slo_pass = (
+        k6_exit_code == 0
+        and dropped_iterations == 0
+        and completed > 0
+        and p95_ms is not None and p95_ms <= P95_MS
+        and success_rate is not None and success_rate >= SUCCESS_RATE_FLOOR
+        and unexpected_error_rate is not None and unexpected_error_rate < UNEXPECTED_ERROR_RATE
+        and not bottleneck_suspected
+    )
 
     return {
         "directory": str(run_dir),
@@ -201,21 +234,20 @@ def evaluate_phase(run_dir: Path) -> dict:
         "warmupSeconds": warmup_seconds,
         "excludedWarmupFromCoreCounts": since_ts is not None,
         "k6ExitCode": k6_exit_code,
+        "k6ContainerOomKilled": oom_killed,
+        "k6ContainerRestartCount": restart_count,
         "droppedIterations": dropped_iterations,
         "coreCounts": counts,
         "p95Ms": p95_ms,
         "successRate": round(success_rate, 4) if success_rate is not None else None,
         "unexpectedErrorRate": round(unexpected_error_rate, 4) if unexpected_error_rate is not None else None,
         "contractFailureRate": round(contract_failure_rate, 4) if contract_failure_rate is not None else None,
-        "runnerStats": runner_stats(run_dir),
-        "sloPass": (
-            k6_exit_code == 0
-            and dropped_iterations == 0
-            and completed > 0
-            and p95_ms is not None and p95_ms <= P95_MS
-            and success_rate is not None and success_rate >= SUCCESS_RATE_FLOOR
-            and unexpected_error_rate is not None and unexpected_error_rate < UNEXPECTED_ERROR_RATE
-        ),
+        "runnerStats": stats,
+        # True means this run's failure (if any) should be attributed to the
+        # Runner (retest at a bigger instance_type), not read as evidence
+        # that the SUT/backend itself missed SLO.
+        "runnerBottleneckSuspected": bottleneck_suspected,
+        "sloPass": slo_pass,
     }
 
 

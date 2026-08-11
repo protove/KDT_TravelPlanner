@@ -32,13 +32,30 @@ def write_phase_dir(
     successful: int,
     unexpected: int,
     contract_failures: int,
+    oom_killed: bool = False,
+    restart_count: int = 0,
+    cpu_percent_samples: list[float] | None = None,
 ) -> Path:
     phase_dir = root / "k6" / name
     phase_dir.mkdir(parents=True, exist_ok=True)
     (phase_dir / "metadata.json").write_text(json.dumps({
         "runId": f"run-{name}", "rate": rate, "warmupSeconds": warmup_seconds,
     }), encoding="utf-8")
-    (phase_dir / "run-status.json").write_text(json.dumps({"k6ExitCode": k6_exit_code}), encoding="utf-8")
+    (phase_dir / "run-status.json").write_text(json.dumps({
+        "k6ExitCode": k6_exit_code,
+        "k6ContainerOomKilled": oom_killed,
+        "k6ContainerRestartCount": restart_count,
+    }), encoding="utf-8")
+    if cpu_percent_samples:
+        (phase_dir / "runner-stats.jsonl").write_text(
+            "\n".join(
+                json.dumps({"ts": after_ts, "docker": {"CPUPerc": f"{value}%", "MemPerc": "10.0%"}})
+                for after_ts, value in zip(
+                    [run_start.isoformat().replace("+00:00", "Z")] * len(cpu_percent_samples), cpu_percent_samples,
+                )
+            ) + "\n",
+            encoding="utf-8",
+        )
     (phase_dir / "summary.json").write_text(json.dumps({
         "metrics": {"dropped_iterations": {"count": dropped_iterations}},
     }), encoding="utf-8")
@@ -145,6 +162,55 @@ class EvaluatePhaseTest(unittest.TestCase):
 
             self.assertFalse(result["excludedWarmupFromCoreCounts"])
             self.assertEqual(result["coreCounts"]["core_completed_operations_total"], 4)
+
+
+class RunnerBottleneckTest(unittest.TestCase):
+    def test_not_suspected_under_normal_load(self):
+        stats = {"maxCpuPercent": 40.0, "maxMemoryPercent": 30.0}
+        self.assertFalse(VALIDATE.runner_bottleneck_suspected(stats, oom_killed=False, restart_count=0))
+
+    def test_suspected_on_oom_kill(self):
+        stats = {"maxCpuPercent": None, "maxMemoryPercent": None}
+        self.assertTrue(VALIDATE.runner_bottleneck_suspected(stats, oom_killed=True, restart_count=0))
+
+    def test_suspected_on_restart(self):
+        stats = {"maxCpuPercent": None, "maxMemoryPercent": None}
+        self.assertTrue(VALIDATE.runner_bottleneck_suspected(stats, oom_killed=False, restart_count=1))
+
+    def test_suspected_on_high_cpu(self):
+        stats = {"maxCpuPercent": 95.0, "maxMemoryPercent": 20.0}
+        self.assertTrue(VALIDATE.runner_bottleneck_suspected(stats, oom_killed=False, restart_count=0))
+
+    def test_evaluate_phase_fails_slo_when_bottleneck_suspected_even_with_good_ratios(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            start = datetime(2026, 1, 1, tzinfo=timezone.utc)
+            phase_dir = write_phase_dir(
+                root, "baseline-1", run_start=start, warmup_seconds=180, rate=12,
+                k6_exit_code=0, dropped_iterations=0, p95_ms=100,
+                completed=1000, successful=999, unexpected=0, contract_failures=0,
+                cpu_percent_samples=[95.0, 96.0],
+            )
+            result = VALIDATE.evaluate_phase(phase_dir)
+
+            self.assertTrue(result["runnerBottleneckSuspected"])
+            self.assertFalse(result["sloPass"])
+
+    def test_evaluate_phase_records_oom_and_restart_from_run_status(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            start = datetime(2026, 1, 1, tzinfo=timezone.utc)
+            phase_dir = write_phase_dir(
+                root, "smoke", run_start=start, warmup_seconds=0, rate=None,
+                k6_exit_code=0, dropped_iterations=0, p95_ms=80,
+                completed=4, successful=4, unexpected=0, contract_failures=0,
+                oom_killed=True, restart_count=2,
+            )
+            result = VALIDATE.evaluate_phase(phase_dir)
+
+            self.assertTrue(result["k6ContainerOomKilled"])
+            self.assertEqual(result["k6ContainerRestartCount"], 2)
+            self.assertTrue(result["runnerBottleneckSuspected"])
 
 
 class BaselineCandidateTest(unittest.TestCase):
