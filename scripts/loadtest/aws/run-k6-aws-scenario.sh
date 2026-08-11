@@ -1,0 +1,143 @@
+#!/usr/bin/env bash
+# AWS counterpart to ../run-k6-scenario.sh. Runs one AWS k6 scenario
+# (smoke|ramp|baseline|spike) against a real ALB target instead of a Compose
+# stack, and writes the same evidence shape (metadata.json, raw.json,
+# summary.json, k6-native-summary.json, runner-stats.jsonl, run-status.json,
+# operations.jsonl) into RUN_DIR so run-aws-b01.sh/validate-aws-run.py can
+# read it the same way summarize-gate.py reads Compose run directories.
+#
+# Unlike the Compose script, this does not manage any docker compose
+# lifecycle (the AWS target is already running) and does not need
+# --add-host=host.docker.internal (BASE_URL is a real HTTPS ALB origin, not a
+# host-local port). The Runner EC2 only has Docker installed (see
+# infra/modules/load_test_runner/templates/runner-user-data.sh.tftpl), so k6
+# itself still runs via `docker run` with the digest-pinned image, matching
+# the pattern already established by seed-aws-load-data.py/cleanup-aws-load-data.py.
+set -euo pipefail
+
+SCENARIO="${1:?usage: run-k6-aws-scenario.sh <smoke|ramp|baseline|spike> <run-dir>}"
+RUN_DIR="${2:?usage: run-k6-aws-scenario.sh <scenario> <run-dir>}"
+REPOSITORY_ROOT="${REPOSITORY_ROOT:?REPOSITORY_ROOT is required}"
+K6_DIR="$REPOSITORY_ROOT/load-tests/k6/aws"
+BASE_URL="${BASE_URL:?BASE_URL is required (approved ALB HTTPS origin)}"
+K6_IMAGE_DIGEST="${K6_IMAGE_DIGEST:?K6_IMAGE_DIGEST is required (digest-pinned k6 image)}"
+RUN_ID="${RUN_ID:?RUN_ID is required}"
+AWS_PROFILE_FILE="${AWS_PROFILE_FILE:?AWS_PROFILE_FILE is required}"
+REGION="${REGION:?REGION is required}"
+ENVIRONMENT="${ENVIRONMENT:?ENVIRONMENT is required}"
+
+declare -A SCENARIO_FILES=(
+  [smoke]="smoke.js"
+  [ramp]="b01-ramp.js"
+  [baseline]="b01-baseline.js"
+  [spike]="b01-spike.js"
+)
+SCENARIO_FILE="${SCENARIO_FILES[$SCENARIO]:-}"
+if [[ -z "$SCENARIO_FILE" ]]; then
+  echo "unsupported AWS k6 scenario: $SCENARIO" >&2
+  exit 2
+fi
+if [[ "$K6_IMAGE_DIGEST" != *@sha256:* ]]; then
+  echo "K6_IMAGE_DIGEST must include a digest: $K6_IMAGE_DIGEST" >&2
+  exit 2
+fi
+if [[ ! -f "$AWS_PROFILE_FILE" ]]; then
+  echo "missing AWS profile file: $AWS_PROFILE_FILE" >&2
+  exit 2
+fi
+
+mkdir -p "$RUN_DIR"
+started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+git_sha="$(git -C "$REPOSITORY_ROOT" rev-parse HEAD)"
+warmup_seconds=0
+if [[ "$SCENARIO" == "baseline" ]]; then
+  warmup_value="${WARMUP:-3m}"
+  if [[ "$warmup_value" =~ ^([0-9]+)m$ ]]; then
+    warmup_seconds="$((BASH_REMATCH[1] * 60))"
+  elif [[ "$warmup_value" =~ ^([0-9]+)s$ ]]; then
+    warmup_seconds="${BASH_REMATCH[1]}"
+  else
+    echo "WARMUP must be a whole-minute or whole-second value, e.g. 3m or 90s" >&2
+    exit 2
+  fi
+fi
+python3 - "$RUN_DIR/metadata.json" "$RUN_ID" "$SCENARIO" "$started_at" "$BASE_URL" "$git_sha" \
+  "$K6_IMAGE_DIGEST" "${RATE:-0}" "$REGION" "$ENVIRONMENT" "$warmup_seconds" "$AWS_PROFILE_FILE" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+(output, run_id, scenario, started_at, target, commit_sha, image, rate, region,
+ environment, warmup_seconds, profile_path) = sys.argv[1:]
+profile = json.loads(Path(profile_path).read_text(encoding="utf-8"))
+Path(output).write_text(json.dumps({
+    "runId": run_id,
+    "scenario": scenario,
+    "startedAtUtc": started_at,
+    "target": target,
+    "platform": "ec2",
+    "region": region,
+    "environment": environment,
+    "commitSha": commit_sha,
+    "k6Image": image,
+    "rate": float(rate) if float(rate) else None,
+    "warmupSeconds": int(warmup_seconds),
+    "seedVersion": profile.get("seedVersion", "unknown"),
+    "requestMixVersion": profile.get("requestMixVersion", "unknown"),
+    "sloVersion": profile.get("sloVersion", "unknown"),
+    "profileVersion": profile.get("profileVersion", "unknown"),
+}, indent=2) + "\n", encoding="utf-8")
+PY
+
+python3 "$REPOSITORY_ROOT/scripts/loadtest/record-rehearsal-event.py" "$RUN_DIR" RUN_START "AWS k6 scenario $SCENARIO started" --actor automation
+set +e
+K6_CONTAINER_NAME="loadtest-aws-k6-${RUN_ID//[^A-Za-z0-9_.-]/-}"
+: > "$RUN_DIR/runner-stats.jsonl"
+docker run --rm -i --name "$K6_CONTAINER_NAME" \
+  -v "$K6_DIR:/scripts:ro" \
+  -v "$(dirname "$AWS_PROFILE_FILE"):/profiles:ro" \
+  -v "$RUN_DIR:/out" \
+  -e BASE_URL="$BASE_URL" \
+  -e AWS_PROFILE_FILE="/profiles/$(basename "$AWS_PROFILE_FILE")" \
+  -e K6_IMAGE_DIGEST="$K6_IMAGE_DIGEST" \
+  -e RATE="${RATE:-}" \
+  -e START_RATE="${START_RATE:-}" \
+  -e RUN_ID="$RUN_ID" \
+  -e RUN_STARTED_AT="$started_at" \
+  -e OUT_DIR=/out \
+  -e DURATION="${DURATION:-}" \
+  -e WARMUP="${WARMUP:-}" \
+  -e PREALLOCATED_VUS="${PREALLOCATED_VUS:-20}" \
+  -e MAX_VUS="${MAX_VUS:-20}" \
+  -e SPIKE_PEAK_MULTIPLIER="${SPIKE_PEAK_MULTIPLIER:-}" \
+  -e SPIKE_HOLD="${SPIKE_HOLD:-}" \
+  "$K6_IMAGE_DIGEST" run \
+  --out json=/out/raw.json \
+  --summary-export=/out/k6-native-summary.json \
+  "/scripts/scenarios/$SCENARIO_FILE" >"$RUN_DIR/stdout.log" 2>&1 &
+k6_pid=$!
+while kill -0 "$k6_pid" 2>/dev/null; do
+  stats="$(docker stats --no-stream --format '{{json .}}' "$K6_CONTAINER_NAME" 2>/dev/null || true)"
+  if [[ -n "$stats" ]]; then
+    now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    printf '{"ts":"%s","docker":%s}\n' "$now" "$stats" >> "$RUN_DIR/runner-stats.jsonl"
+  fi
+  sleep 5
+done
+wait "$k6_pid"
+k6_status=$?
+set -e
+cat "$RUN_DIR/stdout.log"
+
+python3 - "$RUN_DIR/run-status.json" "$k6_status" <<'PY'
+import json
+import sys
+from pathlib import Path
+Path(sys.argv[1]).write_text(json.dumps({"k6ExitCode": int(sys.argv[2])}, indent=2) + "\n", encoding="utf-8")
+PY
+python3 "$REPOSITORY_ROOT/scripts/loadtest/record-rehearsal-event.py" "$RUN_DIR" RUN_END "AWS k6 exit code $k6_status" --actor automation
+echo "[k6-aws] $SCENARIO run directory: $RUN_DIR"
+
+if [[ "$k6_status" -ne 0 && "${ALLOW_K6_FAILURE:-0}" != "1" ]]; then
+  exit "$k6_status"
+fi
