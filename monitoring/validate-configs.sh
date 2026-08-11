@@ -31,3 +31,7 @@ docker run --rm \
 python3 -m json.tool \
   "$SCRIPT_DIR/grafana/dashboards/backend-overview.json" \
   >/dev/null
+
+python3 -m json.tool \
+  "$SCRIPT_DIR/grafana/dashboards/aws-load-test.json" \
+  >/dev/null

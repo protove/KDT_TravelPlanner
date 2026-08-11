@@ -78,6 +78,15 @@ run "monitoring_ec2_is_private_and_encrypted" {
     condition     = length(output.monitoring_config_revision) == 64
     error_message = "Monitoring configuration revision must be a SHA-256 hash of the uploaded configuration files."
   }
+
+  assert {
+    condition = (
+      aws_s3_object.grafana_dashboard_aws_load_test.bucket == aws_s3_bucket.monitoring_config.id &&
+      aws_s3_object.grafana_dashboard_aws_load_test.key == "grafana/dashboards/aws-load-test.json" &&
+      strcontains(aws_instance.monitoring.user_data, "grafana/dashboards/aws-load-test.json")
+    )
+    error_message = "B-01 evidence dashboard must be uploaded under the provisioned dashboards path and downloaded by the Monitoring EC2 bootstrap script."
+  }
 }
 
 run "monitoring_config_bucket_blocks_public_access" {
