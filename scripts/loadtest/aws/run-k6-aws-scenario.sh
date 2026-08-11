@@ -18,11 +18,12 @@ set -euo pipefail
 SCENARIO="${1:?usage: run-k6-aws-scenario.sh <smoke|ramp|baseline|spike> <run-dir>}"
 RUN_DIR="${2:?usage: run-k6-aws-scenario.sh <scenario> <run-dir>}"
 REPOSITORY_ROOT="${REPOSITORY_ROOT:?REPOSITORY_ROOT is required}"
-K6_DIR="$REPOSITORY_ROOT/load-tests/k6/aws"
+K6_DIR="$REPOSITORY_ROOT/load-tests/k6"
 BASE_URL="${BASE_URL:?BASE_URL is required (approved ALB HTTPS origin)}"
 K6_IMAGE_DIGEST="${K6_IMAGE_DIGEST:?K6_IMAGE_DIGEST is required (digest-pinned k6 image)}"
 RUN_ID="${RUN_ID:?RUN_ID is required}"
 AWS_PROFILE_FILE="${AWS_PROFILE_FILE:?AWS_PROFILE_FILE is required}"
+DATA_FILE="${DATA_FILE:?DATA_FILE is required (seeded credential file for this run)}"
 REGION="${REGION:?REGION is required}"
 ENVIRONMENT="${ENVIRONMENT:?ENVIRONMENT is required}"
 
@@ -43,6 +44,10 @@ if [[ "$K6_IMAGE_DIGEST" != *@sha256:* ]]; then
 fi
 if [[ ! -f "$AWS_PROFILE_FILE" ]]; then
   echo "missing AWS profile file: $AWS_PROFILE_FILE" >&2
+  exit 2
+fi
+if [[ ! -f "$DATA_FILE" ]]; then
+  echo "missing generated credential file: $DATA_FILE" >&2
   exit 2
 fi
 
@@ -101,9 +106,11 @@ K6_CONTAINER_NAME="loadtest-aws-k6-${RUN_ID//[^A-Za-z0-9_.-]/-}"
 docker run -i --name "$K6_CONTAINER_NAME" \
   -v "$K6_DIR:/scripts:ro" \
   -v "$(dirname "$AWS_PROFILE_FILE"):/profiles:ro" \
+  -v "$DATA_FILE:/data/data.json:ro" \
   -v "$RUN_DIR:/out" \
   -e BASE_URL="$BASE_URL" \
   -e AWS_PROFILE_FILE="/profiles/$(basename "$AWS_PROFILE_FILE")" \
+  -e DATA_FILE=/data/data.json \
   -e K6_IMAGE_DIGEST="$K6_IMAGE_DIGEST" \
   -e RATE="${RATE:-}" \
   -e START_RATE="${START_RATE:-}" \
@@ -119,7 +126,7 @@ docker run -i --name "$K6_CONTAINER_NAME" \
   "$K6_IMAGE_DIGEST" run \
   --out json=/out/raw.json \
   --summary-export=/out/k6-native-summary.json \
-  "/scripts/scenarios/$SCENARIO_FILE" >"$RUN_DIR/stdout.log" 2>&1 &
+  "/scripts/aws/scenarios/$SCENARIO_FILE" >"$RUN_DIR/stdout.log" 2>&1 &
 k6_pid=$!
 while kill -0 "$k6_pid" 2>/dev/null; do
   stats="$(docker stats --no-stream --format '{{json .}}' "$K6_CONTAINER_NAME" 2>/dev/null || true)"

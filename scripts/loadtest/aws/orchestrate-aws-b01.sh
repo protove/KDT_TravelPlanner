@@ -635,6 +635,7 @@ k6_phase_stage() {
   done
   export REPOSITORY_ROOT EVIDENCE_ROOT BASE_URL REGION ENVIRONMENT MAX_RATE MAX_VUS
   export K6_IMAGE_DIGEST="$K6_IMAGE" AWS_PROFILE_FILE="$PROFILE" RUN_ID="$RUN_ID"
+  export DATA_FILE
   if [[ -n "$CONFIRMED_RATE" ]]; then export CONFIRMED_RATE; fi
   if [[ "$phase" == "baseline" ]]; then
     if [[ -n "$baseline_rep" ]]; then

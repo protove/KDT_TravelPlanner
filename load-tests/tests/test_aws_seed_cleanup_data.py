@@ -9,6 +9,7 @@ import tempfile
 import types
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 def _load(module_name: str, relative_path: str):
@@ -134,11 +135,15 @@ class SeedAwsLoadDataTest(unittest.TestCase):
             subprocess.run = original_run
 
     def test_generate_redis_iam_auth_token_fails_cleanly_without_botocore(self):
-        # This sandbox has no botocore installed (network-restricted), which
-        # doubles as a real test of the fallback path: it must raise a
-        # SeedError with an actionable message, not a raw ImportError.
-        with self.assertRaises(SEED.SeedError) as ctx:
-            SEED.generate_redis_iam_auth_token("loadtest-dev", "kdt-travelplanner-dev-redis", "ap-northeast-2")
+        missing_modules = {
+            "botocore": None,
+            "botocore.session": None,
+            "botocore.auth": None,
+            "botocore.awsrequest": None,
+        }
+        with mock.patch.dict(sys.modules, missing_modules):
+            with self.assertRaises(SEED.SeedError) as ctx:
+                SEED.generate_redis_iam_auth_token("loadtest-dev", "kdt-travelplanner-dev-redis", "ap-northeast-2")
         self.assertIn("botocore", str(ctx.exception))
 
     def test_generate_redis_iam_auth_token_uses_sigv4_query_contract(self):
@@ -511,8 +516,15 @@ class CleanupAwsLoadDataTest(unittest.TestCase):
             subprocess.run = original_run
 
     def test_generate_redis_iam_auth_token_fails_cleanly_without_botocore(self):
-        with self.assertRaises(CLEANUP.CleanupError) as ctx:
-            CLEANUP.generate_redis_iam_auth_token("loadtest-dev", "kdt-travelplanner-dev-redis", "ap-northeast-2")
+        missing_modules = {
+            "botocore": None,
+            "botocore.session": None,
+            "botocore.auth": None,
+            "botocore.awsrequest": None,
+        }
+        with mock.patch.dict(sys.modules, missing_modules):
+            with self.assertRaises(CLEANUP.CleanupError) as ctx:
+                CLEANUP.generate_redis_iam_auth_token("loadtest-dev", "kdt-travelplanner-dev-redis", "ap-northeast-2")
         self.assertIn("botocore", str(ctx.exception))
 
     def test_matching_user_count_parses_psql_output(self):
