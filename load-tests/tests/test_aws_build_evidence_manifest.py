@@ -75,15 +75,51 @@ class DeterminePngStatusTest(unittest.TestCase):
             self.assertEqual(result["pngStatus"], "not-exported")
             self.assertEqual(result["pngStatusReason"], "custom reason")
 
-    def test_exported_when_pngs_present(self):
+    def test_not_exported_reports_pending_capture_contract_count(self):
+        # export-grafana-evidence.py writes panel-<id>.capture.json for every
+        # panel before any PNG exists (D-003-R1's capture contract). While no
+        # PNGs are saved yet, that count should be visible in the manifest.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            panels_dir = root / "grafana" / "panels"
+            panels_dir.mkdir(parents=True)
+            (panels_dir / "panel-2.capture.json").write_text("{}", encoding="utf-8")
+            (panels_dir / "panel-7.capture.json").write_text("{}", encoding="utf-8")
+            result = MANIFEST.determine_png_status(root)
+            self.assertEqual(result["pngStatus"], "not-exported")
+            self.assertEqual(result["pendingCaptureContracts"], 2)
+
+    def test_exported_when_every_png_has_a_matching_capture_contract(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            panels_dir = root / "grafana" / "panels"
+            panels_dir.mkdir(parents=True)
+            for panel_id in (2, 3):
+                (panels_dir / f"panel-{panel_id}.png").write_bytes(b"\x89PNG")
+                (panels_dir / f"panel-{panel_id}.capture.json").write_text("{}", encoding="utf-8")
+            result = MANIFEST.determine_png_status(root)
+            self.assertEqual(result, {"pngStatus": "exported", "pngCount": 2, "linkedPngCount": 2})
+
+    def test_flags_pngs_with_no_matching_capture_contract(self):
+        # D-003-R1 / TEAM_MEMBER_B01_ACTION_REQUEST.md 4.4: a PNG must be
+        # linked to runId/fromUtc/toUtc/dashboardUid+version/Query JSON. A
+        # PNG dropped in without its capture.json sibling fails that link and
+        # must not be silently counted as valid evidence.
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             panels_dir = root / "grafana" / "panels"
             panels_dir.mkdir(parents=True)
             (panels_dir / "panel-2.png").write_bytes(b"\x89PNG")
-            (panels_dir / "panel-3.png").write_bytes(b"\x89PNG")
+            (panels_dir / "panel-2.capture.json").write_text("{}", encoding="utf-8")
+            (panels_dir / "panel-9.png").write_bytes(b"\x89PNG")  # no matching capture.json
+
             result = MANIFEST.determine_png_status(root)
-            self.assertEqual(result, {"pngStatus": "exported", "pngCount": 2})
+
+            self.assertEqual(result["pngStatus"], "exported-with-unlinked-files")
+            self.assertEqual(result["pngCount"], 2)
+            self.assertEqual(result["linkedPngCount"], 1)
+            self.assertEqual(result["unlinkedPanelIds"], ["9"])
+            self.assertIn("capture.json", result["pngStatusReason"])
 
 
 class BuildManifestTest(unittest.TestCase):
