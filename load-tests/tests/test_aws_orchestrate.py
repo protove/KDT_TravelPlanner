@@ -12,9 +12,26 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = REPOSITORY_ROOT / "scripts/loadtest/aws/orchestrate-aws-b01.sh"
 PROFILE = REPOSITORY_ROOT / "load-tests/aws/profiles/ec2-b01.json"
 DESTROY_GATE = REPOSITORY_ROOT / "scripts/loadtest/aws/check-destroy-gate.sh"
+LOAD_RUNNER_TERRAFORM = REPOSITORY_ROOT / "infra/modules/load_test_runner/main.tf"
 
 
 class AwsOrchestrationContractTests(unittest.TestCase):
+    def test_runner_role_can_read_every_target_discovery_dependency_in_region(self) -> None:
+        source = LOAD_RUNNER_TERRAFORM.read_text(encoding="utf-8")
+        self.assertIn('sid = "LoadTestTargetDiscovery"', source)
+        for action in (
+            "autoscaling:DescribeAutoScalingInstances",
+            "autoscaling:DescribeScalingActivities",
+            "ec2:DescribeInstances",
+            "elasticloadbalancing:DescribeLoadBalancers",
+            "elasticloadbalancing:DescribeTargetGroups",
+            "elasticloadbalancing:DescribeTargetHealth",
+            "ssm:DescribeInstanceInformation",
+        ):
+            self.assertIn(f'"{action}"', source)
+        self.assertIn('variable = "aws:RequestedRegion"', source)
+        self.assertIn("values   = [var.aws_region]", source)
+
     def test_help_exposes_approved_operator_inputs(self) -> None:
         result = subprocess.run(
             ["bash", str(SCRIPT), "--help"],
