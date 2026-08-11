@@ -265,6 +265,24 @@ class SeedAwsLoadDataTest(unittest.TestCase):
             SEED.run = original_run
             SEED.generate_redis_iam_auth_token = original_token_fn
 
+    def test_insert_user_does_not_include_psql_command_tag_in_user_id(self):
+        runtime = object.__new__(SEED.AwsSeed)
+        fixed_uuid = SEED.uuid.UUID("12345678-1234-5678-1234-567812345678")
+        responses = iter([
+            "",
+            f"{fixed_uuid}\nINSERT 0 1\n",
+        ])
+        runtime.psql = lambda sql: next(responses)
+        original_uuid4 = SEED.uuid.uuid4
+        SEED.uuid.uuid4 = lambda: fixed_uuid
+        try:
+            user_id, already_existed = runtime.insert_user("aws-b01-command-tag", 1)
+        finally:
+            SEED.uuid.uuid4 = original_uuid4
+
+        self.assertEqual(user_id, str(fixed_uuid))
+        self.assertFalse(already_existed)
+
     def test_seed_all_gives_every_user_a_fresh_credential_even_when_skipped(self):
         # Regression test for the "credentials: [] overwrite" bug plus the
         # deeper staleness bug it was hiding: a user that's already fully
