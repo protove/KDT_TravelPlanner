@@ -49,6 +49,15 @@ CORE_COUNTERS = (
     "core_contract_failures_total",
 )
 REQUIRED_EVENTS = ("RUN_START", "T0", "T1", "T2", "T3", "T4", "T5", "RUN_END")
+# Plan 07 registers an explicit empty-is-valid contract for signals that are
+# legitimately zero on a healthy run. k6 Counters emit no Point unless they are
+# incremented, so a recovery run with no errors structurally reports zero
+# datapoints for these two. Only these names may be waived, and only when the
+# operator declares emptyIsValid: a throughput metric at zero is still invalid.
+EMPTY_IS_VALID_ELIGIBLE = frozenset({
+    "core_unexpected_errors_total",
+    "core_contract_failures_total",
+})
 SLO_CONTRACT = load_contract()
 
 
@@ -338,6 +347,7 @@ def validate_observability(run_dir: Path, profile: dict) -> dict:
     else:
         raise RecoveryValidationError("observability metrics must be an object or list")
     failures: list[str] = []
+    empty_is_valid: list[str] = []
     for name in profile["observability"]["required"]:
         item = normalized.get(name)
         if not isinstance(item, dict):
@@ -351,10 +361,17 @@ def validate_observability(run_dir: Path, profile: dict) -> dict:
         except (TypeError, ValueError):
             count = 0
         if count <= 0:
-            failures.append(f"{name}:empty")
+            if name in EMPTY_IS_VALID_ELIGIBLE and item.get("emptyIsValid") is True:
+                empty_is_valid.append(name)
+            else:
+                failures.append(f"{name}:empty")
     if failures:
         raise RecoveryValidationError("required observability evidence invalid: " + ";".join(failures))
-    return {"requiredCount": len(profile["observability"]["required"]), "statusPath": relative}
+    return {
+        "requiredCount": len(profile["observability"]["required"]),
+        "statusPath": relative,
+        "emptyIsValid": sorted(empty_is_valid),
+    }
 
 
 def append_t6(path: Path, event_timestamp: float) -> None:
