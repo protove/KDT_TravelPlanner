@@ -91,7 +91,7 @@
       "id": 6,
       "options": {"legend": {"displayMode": "list", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "single"}},
       "pluginVersion": "13.1.0",
-      "targets": [{"expr": "sum by (level) (count_over_time({job=\"backend\"} |~ \"T[0-6]|rollback|replacement\" [$__auto]))", "queryType": "range", "refId": "A"}],
+      "targets": [{"expr": "sum by (level) (count_over_time({service=\"travel-planner-backend\"} |~ \"T[0-6]|rollback|replacement\" [$__auto]))", "queryType": "range", "refId": "A"}],
       "title": "Recovery markers / rollback logs",
       "type": "timeseries"
     }
