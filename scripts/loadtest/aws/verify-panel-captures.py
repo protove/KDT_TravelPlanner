@@ -87,6 +87,32 @@ def verify_captures(
         png_relative = contract.get("expectedPngPath")
         if not isinstance(png_relative, str) or not png_relative:
             raise CaptureVerificationError(f"{contract_path.name}: expectedPngPath is missing")
+        if contract.get("noDataPanel") is True:
+            # A panel whose query legitimately returned nothing renders "No data"
+            # and has no plot to capture. Accept it only when every referenced
+            # query JSON exists and itself reports an empty result, so a failed
+            # or unrun query can never be waved through as "no data".
+            for query_relative in contract.get("queryJsonPaths", []):
+                query_path = evidence_root / str(query_relative)
+                if not query_path.is_file():
+                    raise CaptureVerificationError(
+                        f"no-data panel {contract.get('panelId')} is missing its query JSON: {query_relative}"
+                    )
+                query = read_json(query_path)
+                if query.get("status") not in {"empty", "empty-is-valid"}:
+                    raise CaptureVerificationError(
+                        f"no-data panel {contract.get('panelId')} query {query_relative} "
+                        f"does not report an empty result (status={query.get('status')})"
+                    )
+            panels.append({
+                "panelId": contract.get("panelId"),
+                "panelTitle": contract.get("panelTitle"),
+                "pngPath": None,
+                "noDataPanel": True,
+                "noDataReason": contract.get("noDataReason"),
+                "contract": contract_path.name,
+            })
+            continue
         png_path = evidence_root / png_relative
         if png_path.is_symlink() or not png_path.is_file():
             raise CaptureVerificationError(f"missing panel capture PNG: {png_relative}")

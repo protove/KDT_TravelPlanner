@@ -127,5 +127,49 @@ class CaptureVerifierTests(unittest.TestCase):
                 MODULE.verify_captures(root)
 
 
+
+class NoDataPanelTests(unittest.TestCase):
+    """A panel whose query legitimately returned nothing has no plot to capture."""
+
+    def build(self, root: Path, *, query_status: str = "empty-is-valid", write_query: bool = True):
+        build_fixture(root, panel_ids=(2,))
+        summary = json.loads((root / "recovery-export-summary.json").read_text())
+        panels = root / "grafana" / "panels"
+        query_rel = "grafana/queries/panel-3-A.json"
+        if write_query:
+            (root / query_rel).write_text(json.dumps({"panelId": 3, "status": query_status}), encoding="utf-8")
+        contract = {**{k: summary[k] for k in ("runId","fromUtc","toUtc","dashboardUid","dashboardVersion")},
+                    "panelId": 3, "panelTitle": "Core API error rate",
+                    "queryJsonPaths": [query_rel],
+                    "expectedPngPath": "grafana/panels/panel-3.png",
+                    "noDataPanel": True,
+                    "noDataReason": "backend emitted no 5xx during the run"}
+        (panels / "panel-3.capture.json").write_text(json.dumps(contract), encoding="utf-8")
+
+    def test_no_data_panel_passes_without_png(self) -> None:
+        with TemporaryDirectory() as raw:
+            root = Path(raw)
+            self.build(root)
+            status = MODULE.verify_captures(root)
+            self.assertEqual(status["panelCount"], 2)
+            entry = [p for p in status["panels"] if p["panelId"] == 3][0]
+            self.assertTrue(entry["noDataPanel"])
+            self.assertIsNone(entry["pngPath"])
+
+    def test_no_data_claim_rejected_when_query_has_data(self) -> None:
+        with TemporaryDirectory() as raw:
+            root = Path(raw)
+            self.build(root, query_status="collected")
+            with self.assertRaisesRegex(MODULE.CaptureVerificationError, "does not report an empty result"):
+                MODULE.verify_captures(root)
+
+    def test_no_data_claim_rejected_when_query_json_missing(self) -> None:
+        with TemporaryDirectory() as raw:
+            root = Path(raw)
+            self.build(root, write_query=False)
+            with self.assertRaisesRegex(MODULE.CaptureVerificationError, "missing its query JSON"):
+                MODULE.verify_captures(root)
+
+
 if __name__ == "__main__":
     unittest.main()
