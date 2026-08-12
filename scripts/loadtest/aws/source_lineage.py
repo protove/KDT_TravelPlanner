@@ -33,6 +33,21 @@ WORKLOAD_INPUT_PREFIXES = (
     "load-tests/k6/lib/",
 )
 
+# These files changed only to consume/emit the frozen comparator contract or
+# to enrich evidence metadata. They are intentionally *not* workload inputs;
+# the actual scenario flow, request mix, and profiles remain immutable for the
+# no-rerun B-01 lineage.
+CONTROLLER_ONLY_PATHS = frozenset(
+    {
+        "load-tests/aws/contracts/slo-v1.0.json",
+        "load-tests/k6/aws/config.js",
+        "load-tests/k6/aws/recovery-config.js",
+        "load-tests/k6/aws/recovery-summary.js",
+        "load-tests/k6/aws/summary.js",
+        "load-tests/k6/aws/thresholds.js",
+    }
+)
+
 
 class SourceLineageError(ValueError):
     """Raised when a source-lineage or output-boundary contract is invalid."""
@@ -147,6 +162,10 @@ def workload_input_changes(paths: list[str]) -> list[str]:
         for path in paths
         if any(path == prefix.rstrip("/") or path.startswith(prefix) for prefix in WORKLOAD_INPUT_PREFIXES)
     ]
+
+
+def controller_only_changes(paths: list[str]) -> list[str]:
+    return sorted(path for path in paths if path in CONTROLLER_ONLY_PATHS)
 
 
 def _relative_to_root(path: Path, root: Path) -> str:
@@ -275,6 +294,9 @@ def validate_lineage(
     workload_changes = source_diff.get("workloadInputChanges")
     if workload_changes != [] or workload_input_changes(changed) != []:
         raise SourceLineageError("source lineage permits workload input changes")
+    expected_controller_only = controller_only_changes(changed)
+    if source_diff.get("controllerOnlyChanges") != expected_controller_only:
+        raise SourceLineageError("source lineage controllerOnlyChanges does not match the Git revision diff")
     inputs = payload.get("inputs")
     if expected_inputs is not None:
         if not isinstance(inputs, dict):
@@ -360,6 +382,7 @@ def build_lineage(
             "changedFiles": changed,
             "workloadInputPathsChecked": list(WORKLOAD_INPUT_PREFIXES),
             "workloadInputChanges": workload_changes,
+            "controllerOnlyChanges": controller_only_changes(changed),
             "classification": "controller-contract-and-evidence-only",
         },
         "inputs": {

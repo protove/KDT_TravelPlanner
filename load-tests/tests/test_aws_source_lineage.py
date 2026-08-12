@@ -87,6 +87,7 @@ class AwsSourceLineageTest(unittest.TestCase):
                     "changedFiles": [],
                     "workloadInputPathsChecked": list(MODULE.WORKLOAD_INPUT_PREFIXES),
                     "workloadInputChanges": [],
+                    "controllerOnlyChanges": [],
                 },
                 "inputs": {},
                 "protectedEvidenceManifestSha256": MODULE.sha256_file(manifest),
