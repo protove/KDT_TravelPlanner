@@ -184,7 +184,7 @@ React.useEffect(() => {
       id: m.userId,
       name: m.nickname ?? "알 수 없음",
       permission: toPermission(m.role as TravelRole),
-      status: "accepted",
+      status: m.status === "PENDING" ? "pending" : "accepted",
     }));
 
   return (
@@ -241,7 +241,9 @@ React.useEffect(() => {
               </div>
               {infoSaveError && <p className="mt-1 text-xs text-destructive">{infoSaveError}</p>}
               <div className="mt-1.5 flex">
-                {travelMembers.map((m, i) => (
+                {travelMembers
+                  .filter((m) => m.status === "ACCEPTED")
+                  .map((m, i) => (
                   <Avatar
                     key={m.userId}
                     className="h-[22px] w-[22px]"

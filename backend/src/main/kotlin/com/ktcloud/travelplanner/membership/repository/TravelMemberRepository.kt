@@ -28,17 +28,22 @@ interface TravelMemberRepository : JpaRepository<TravelMember, UUID> {
                 @Param("travelId") travelId: UUID,
                 @Param("userId") userId: UUID,
         ): Optional<TravelMember>
+        // 이슈 #232 — 참여자 관리 화면에서 초대 수락 대기(PENDING) 상태도 보여야 해서
+        // ACCEPTED만 걸러내던 조건을 PENDING까지 넓힘 (REJECTED는 계속 제외).
         @Query(
                 """
                 SELECT member
                 FROM TravelMember member
                 JOIN FETCH member.user user
                 WHERE member.travel.id = :travelId
-                        AND member.status = com.ktcloud.travelplanner.membership.model.InvitationStatus.ACCEPTED
+                        AND member.status IN (
+                                com.ktcloud.travelplanner.membership.model.InvitationStatus.ACCEPTED,
+                                com.ktcloud.travelplanner.membership.model.InvitationStatus.PENDING
+                        )
                 ORDER BY user.id ASC
                 """,
         )
-        fun findAcceptedMembers(@Param("travelId") travelId: UUID): List<TravelMember>
+        fun findVisibleMembers(@Param("travelId") travelId: UUID): List<TravelMember>
         @Lock(LockModeType.PESSIMISTIC_WRITE)
         @Query(
                 """

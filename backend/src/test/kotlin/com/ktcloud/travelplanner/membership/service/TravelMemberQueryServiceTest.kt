@@ -1,4 +1,5 @@
 package com.ktcloud.travelplanner.membership.service
+import com.ktcloud.travelplanner.membership.model.InvitationStatus
 import com.ktcloud.travelplanner.membership.model.TravelInvitationAction
 import com.ktcloud.travelplanner.membership.model.TravelMember
 import com.ktcloud.travelplanner.membership.model.TravelPermission
@@ -33,26 +34,41 @@ class TravelMemberQueryServiceTest {
                 val readOnlyMember = acceptedMember(travel, mockUser(READ_ONLY_ID, "reader"), TravelRole.READ_ONLY)
                 val readWriteMember = acceptedMember(travel, mockUser(READ_WRITE_ID, "writer"), TravelRole.READ_WRITE)
                 `when`(travelRepository.findById(TRAVEL_ID)).thenReturn(Optional.of(travel))
-                `when`(travelMemberRepository.findAcceptedMembers(TRAVEL_ID))
+                `when`(travelMemberRepository.findVisibleMembers(TRAVEL_ID))
                         .thenReturn(listOf(readOnlyMember, readWriteMember))
                 val response = service.getTravelMembers(TRAVEL_ID, OWNER_ID)
                 assertEquals(listOf(OWNER_ID, READ_ONLY_ID, READ_WRITE_ID), response.map { it.userId })
                 assertEquals(TravelPermission.OWNER, response[0].role)
                 assertTrue(response[0].isOwner)
+                assertEquals(InvitationStatus.ACCEPTED, response[0].status)
                 assertEquals(TravelPermission.READ_ONLY, response[1].role)
                 assertFalse(response[1].isOwner)
+                assertEquals(InvitationStatus.ACCEPTED, response[1].status)
                 assertEquals(TravelPermission.READ_WRITE, response[2].role)
                 verify(travelMemberRepository, never()).findAcceptedRole(TRAVEL_ID, OWNER_ID)
+        }
+        @Test
+        fun `pending invitation is included with pending status`() {
+                val owner = mockUser(OWNER_ID, "owner")
+                val travel = travel(owner)
+                val pendingMember = pendingMember(travel, mockUser(READ_ONLY_ID, "invitee"), TravelRole.READ_ONLY)
+                `when`(travelRepository.findById(TRAVEL_ID)).thenReturn(Optional.of(travel))
+                `when`(travelMemberRepository.findVisibleMembers(TRAVEL_ID)).thenReturn(listOf(pendingMember))
+                val response = service.getTravelMembers(TRAVEL_ID, OWNER_ID)
+                assertEquals(listOf(OWNER_ID, READ_ONLY_ID), response.map { it.userId })
+                assertEquals(InvitationStatus.PENDING, response[1].status)
+                assertEquals(null, response[0].invitationId)
+                assertEquals(pendingMember.id, response[1].invitationId)
         }
         @Test
         fun `accepted read only or read write member can query list`() {
                 val travel = travel(mockUser(OWNER_ID, "owner"))
                 `when`(travelRepository.findById(TRAVEL_ID)).thenReturn(Optional.of(travel))
                 `when`(travelMemberRepository.findAcceptedRole(TRAVEL_ID, READ_ONLY_ID)).thenReturn(TravelRole.READ_ONLY)
-                `when`(travelMemberRepository.findAcceptedMembers(TRAVEL_ID)).thenReturn(emptyList())
+                `when`(travelMemberRepository.findVisibleMembers(TRAVEL_ID)).thenReturn(emptyList())
                 val response = service.getTravelMembers(TRAVEL_ID, READ_ONLY_ID)
                 assertEquals(1, response.size)
-                verify(travelMemberRepository).findAcceptedMembers(TRAVEL_ID)
+                verify(travelMemberRepository).findVisibleMembers(TRAVEL_ID)
         }
         @Test
         fun `user without accepted membership cannot query list`() {
@@ -62,7 +78,7 @@ class TravelMemberQueryServiceTest {
                 assertThrows<TravelMemberAccessDeniedException> {
                         service.getTravelMembers(TRAVEL_ID, OUTSIDER_ID)
                 }
-                verify(travelMemberRepository, never()).findAcceptedMembers(TRAVEL_ID)
+                verify(travelMemberRepository, never()).findVisibleMembers(TRAVEL_ID)
         }
 
         private fun acceptedMember(
@@ -77,6 +93,16 @@ class TravelMemberQueryServiceTest {
         ).also {
                 it.respond(TravelInvitationAction.ACCEPT, INVITED_AT.plusSeconds(1))
         }
+        private fun pendingMember(
+                travel: Travel,
+                user: User,
+                role: TravelRole,
+        ): TravelMember = TravelMember(
+                travel = travel,
+                user = user,
+                role = role,
+                invitedAt = INVITED_AT,
+        )
         private fun mockUser(
                 id: UUID,
                 nickname: String,
