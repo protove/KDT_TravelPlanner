@@ -221,10 +221,16 @@ resource "aws_launch_template" "backend" {
 }
 
 resource "aws_autoscaling_group" "backend" {
-  name                      = "${local.name}-backend"
-  min_size                  = var.asg_min_size
-  desired_capacity          = var.asg_desired_capacity
-  max_size                  = var.asg_max_size
+  name             = "${local.name}-backend"
+  min_size         = var.asg_min_size
+  desired_capacity = var.asg_desired_capacity
+  max_size         = var.asg_max_size
+  enabled_metrics = [
+    "GroupDesiredCapacity",
+    "GroupInServiceInstances",
+    "GroupPendingInstances",
+  ]
+  metrics_granularity       = "1Minute"
   health_check_type         = "ELB"
   health_check_grace_period = 300
   default_instance_warmup   = var.instance_warmup_seconds

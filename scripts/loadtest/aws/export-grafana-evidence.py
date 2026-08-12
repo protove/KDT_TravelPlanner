@@ -153,6 +153,31 @@ def load_resource_dimensions(evidence_root: Path) -> dict:
     return payload
 
 
+def _is_runtime_placeholder(value: object) -> bool:
+    return (
+        not isinstance(value, str)
+        or not value.strip()
+        or value.startswith("<")
+        or value == "__runtime__"
+    )
+
+
+def validate_resource_dimensions(resource_dimensions: dict) -> None:
+    """Require every B-01 CloudWatch dimension before a dashboard capture."""
+    if not isinstance(resource_dimensions, dict):
+        raise ExportError("aws/resource-dimensions.json must contain a JSON object")
+    missing = [
+        key
+        for key in sorted(set(CLOUDWATCH_DIMENSION_VARIABLES.values()))
+        if _is_runtime_placeholder(resource_dimensions.get(key))
+    ]
+    if missing:
+        raise ExportError(
+            "aws/resource-dimensions.json is missing runtime CloudWatch dimensions: "
+            + ", ".join(missing)
+        )
+
+
 def resolve_cloudwatch_dimensions(dimensions: dict, resource_dimensions: dict | None) -> dict:
     """Resolve dashboard `$variable` dimensions to exact AWS identifiers."""
     if resource_dimensions is None:
@@ -167,9 +192,9 @@ def resolve_cloudwatch_dimensions(dimensions: dict, resource_dimensions: dict | 
             if resource_key is None:
                 raise ExportError(f"unknown CloudWatch dashboard dimension variable: {variable_name}")
             value = resource_dimensions.get(resource_key)
-            if not value:
+            if _is_runtime_placeholder(value):
                 raise ExportError(f"CloudWatch dimension {variable_name} is missing from aws/resource-dimensions.json")
-        if not isinstance(value, str) or not value:
+        if _is_runtime_placeholder(value):
             raise ExportError(f"CloudWatch dimension {name} is empty")
         resolved[name] = value
     return resolved
@@ -239,8 +264,9 @@ def collect_cloudwatch_query(namespace: str, metric_name: str, statistic: str, p
         "--start-time", from_utc, "--end-time", to_utc,
         "--region", region, "--output", "json",
     ]
-    for key, value in (dimensions or {}).items():
-        command += ["--dimensions", f"Name={key},Value={value}"]
+    if dimensions:
+        command += ["--dimensions"]
+        command += [f"Name={key},Value={value}" for key, value in dimensions.items()]
     return json.loads(run_command(command))
 
 
@@ -271,7 +297,28 @@ def collect_panel_queries(grafana_url: str, auth_header: str, panel_queries: lis
     return collected, failed
 
 
-def build_panel_capture_contracts(dashboard_payload: dict, panel_queries: list[dict], grafana_url: str, run_id: str, from_utc: str, to_utc: str) -> list[dict]:
+def build_dashboard_url(grafana_url: str, dashboard_uid: str, resource_dimensions: dict | None = None) -> str:
+    """Build a dashboard URL with run-specific CloudWatch variables."""
+    base_url = f"{grafana_url.rstrip('/')}/d/{dashboard_uid}"
+    if resource_dimensions is None:
+        return base_url
+    validate_resource_dimensions(resource_dimensions)
+    variables = [
+        (f"var-{variable_name}", resource_dimensions[resource_key])
+        for variable_name, resource_key in CLOUDWATCH_DIMENSION_VARIABLES.items()
+    ]
+    return f"{base_url}?{urllib.parse.urlencode(variables)}"
+
+
+def build_panel_capture_contracts(
+    dashboard_payload: dict,
+    panel_queries: list[dict],
+    grafana_url: str,
+    run_id: str,
+    from_utc: str,
+    to_utc: str,
+    resource_dimensions: dict | None = None,
+) -> list[dict]:
     """Pure/offline: one capture contract per panel (TEAM_MEMBER_B01_ACTION_REQUEST.md
     section 4.4's "고정 UTC 범위·Panel ID·Query JSON을 캡처 계약에 포함"). Groups
     panel_queries (one entry per target/refId) by panelId, since a panel with
@@ -280,6 +327,7 @@ def build_panel_capture_contracts(dashboard_payload: dict, panel_queries: list[d
     dashboard = dashboard_payload.get("dashboard", {})
     dashboard_uid = dashboard.get("uid", "")
     dashboard_version = dashboard.get("version")
+    dashboard_url = build_dashboard_url(grafana_url, dashboard_uid, resource_dimensions)
     from_ms = to_epoch_seconds(from_utc) * 1000
     to_ms = to_epoch_seconds(to_utc) * 1000
 
@@ -305,7 +353,12 @@ def build_panel_capture_contracts(dashboard_payload: dict, panel_queries: list[d
             "panelId": panel_id,
             "panelTitle": panel["panelTitle"],
             "queryJsonPaths": panel["queryJsonPaths"],
-            "captureUrl": f"{grafana_url.rstrip('/')}/d/{dashboard_uid}?viewPanel={panel_id}&from={from_ms}&to={to_ms}&tz=utc",
+            "dashboardUrl": dashboard_url,
+            "captureUrl": (
+                f"{dashboard_url}&viewPanel={panel_id}&from={from_ms}&to={to_ms}&tz=utc"
+                if "?" in dashboard_url
+                else f"{dashboard_url}?viewPanel={panel_id}&from={from_ms}&to={to_ms}&tz=utc"
+            ),
             "expectedPngPath": f"grafana/panels/panel-{panel_id}.png",
             "instructions": (
                 "SSM port-forward to the Monitoring EC2's Grafana (see download-aws-evidence.sh), "
@@ -355,8 +408,17 @@ def main() -> int:
     (grafana_dir / "dashboard.json").write_text(json.dumps(dashboard_payload, indent=2) + "\n", encoding="utf-8")
 
     resource_dimensions = load_resource_dimensions(evidence_root)
+    validate_resource_dimensions(resource_dimensions)
     (grafana_dir / "resource-dimensions.json").write_text(
         json.dumps(resource_dimensions, indent=2) + "\n", encoding="utf-8",
+    )
+    (grafana_dir / "dashboard-url.json").write_text(
+        json.dumps({
+            "dashboardUid": args.dashboard_uid,
+            "url": build_dashboard_url(args.grafana_url, args.dashboard_uid, resource_dimensions),
+            "resourceDimensionsPath": "aws/resource-dimensions.json",
+        }, indent=2) + "\n",
+        encoding="utf-8",
     )
 
     from_ms = to_epoch_seconds(from_utc) * 1000
@@ -370,7 +432,9 @@ def main() -> int:
     panel_queries = extract_panel_queries(dashboard_payload, resource_dimensions)
     collected, failed = collect_panel_queries(args.grafana_url, auth_header, panel_queries, from_utc, to_utc, args.region, queries_dir)
 
-    contracts = build_panel_capture_contracts(dashboard_payload, panel_queries, args.grafana_url, run_id, from_utc, to_utc)
+    contracts = build_panel_capture_contracts(
+        dashboard_payload, panel_queries, args.grafana_url, run_id, from_utc, to_utc, resource_dimensions,
+    )
     write_panel_capture_contracts(contracts, panels_dir)
     (panels_dir / "status.json").write_text(json.dumps({
         "status": "pending-manual-capture",

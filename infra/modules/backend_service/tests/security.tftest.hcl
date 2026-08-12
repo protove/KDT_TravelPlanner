@@ -97,6 +97,12 @@ run "backend_is_private_and_rolls_without_capacity_loss" {
       aws_autoscaling_group.backend.min_size == 2 &&
       aws_autoscaling_group.backend.desired_capacity == 2 &&
       aws_autoscaling_group.backend.max_size == 4 &&
+      aws_autoscaling_group.backend.enabled_metrics == toset([
+        "GroupDesiredCapacity",
+        "GroupInServiceInstances",
+        "GroupPendingInstances",
+      ]) &&
+      aws_autoscaling_group.backend.metrics_granularity == "1Minute" &&
       aws_autoscaling_group.backend.instance_refresh[0].preferences[0].min_healthy_percentage == 100 &&
       aws_autoscaling_group.backend.instance_refresh[0].preferences[0].max_healthy_percentage == 200 &&
       !aws_autoscaling_group.backend.instance_refresh[0].preferences[0].auto_rollback

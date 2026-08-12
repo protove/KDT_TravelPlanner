@@ -112,6 +112,31 @@ class ResolveRunIdTest(unittest.TestCase):
                 EXPORT.resolve_run_id(Path(directory), "")
 
 
+class ResourceDimensionsValidationTest(unittest.TestCase):
+    COMPLETE = {
+        "albDimension": "app/kdt-travelplanner-dev-api/51b33ebe03b9146c",
+        "targetGroupDimension": "targetgroup/kdt-travelplanner-dev-backend/bb07fdde9f6dfbdc",
+        "autoScalingGroupName": "kdt-travelplanner-dev-backend",
+        "dbInstanceIdentifier": "kdt-travelplanner-dev-postgres",
+        "cacheClusterId": "kdt-travelplanner-dev-redis-001",
+    }
+
+    def test_accepts_all_runtime_dimensions(self):
+        EXPORT.validate_resource_dimensions(self.COMPLETE)
+
+    def test_rejects_missing_runtime_dimension(self):
+        incomplete = dict(self.COMPLETE)
+        incomplete["cacheClusterId"] = None
+        with self.assertRaises(EXPORT.ExportError):
+            EXPORT.validate_resource_dimensions(incomplete)
+
+    def test_rejects_dashboard_placeholder_dimension(self):
+        placeholder = dict(self.COMPLETE)
+        placeholder["albDimension"] = "__runtime__"
+        with self.assertRaises(EXPORT.ExportError):
+            EXPORT.validate_resource_dimensions(placeholder)
+
+
 class BasicAuthHeaderTest(unittest.TestCase):
     def test_header_decodes_back_to_user_and_password(self):
         import base64
@@ -175,6 +200,38 @@ class ExtractPanelQueriesTest(unittest.TestCase):
 
 
 class CollectPanelQueriesTest(unittest.TestCase):
+    def test_cloudwatch_command_keeps_all_dimensions_in_one_cli_list(self):
+        captured = []
+        original_run_command = EXPORT.run_command
+        EXPORT.run_command = lambda command: captured.append(command) or json.dumps({"Datapoints": []})
+        try:
+            EXPORT.collect_cloudwatch_query(
+                "AWS/ApplicationELB",
+                "HealthyHostCount",
+                "Minimum",
+                "60",
+                {
+                    "LoadBalancer": "app/example/abc",
+                    "TargetGroup": "targetgroup/example/def",
+                },
+                "ap-northeast-2",
+                "2026-08-11T09:00:00Z",
+                "2026-08-11T10:00:00Z",
+            )
+        finally:
+            EXPORT.run_command = original_run_command
+
+        command = captured[0]
+        dimensions_index = command.index("--dimensions")
+        self.assertEqual(command.count("--dimensions"), 1)
+        self.assertEqual(
+            command[dimensions_index + 1:dimensions_index + 3],
+            [
+                "Name=LoadBalancer,Value=app/example/abc",
+                "Name=TargetGroup,Value=targetgroup/example/def",
+            ],
+        )
+
     def test_writes_one_file_per_query_and_counts_success_and_failure(self):
         with tempfile.TemporaryDirectory() as directory:
             queries_dir = Path(directory)
@@ -267,6 +324,27 @@ class BuildPanelCaptureContractsTest(unittest.TestCase):
             sorted(panel_2["queryJsonPaths"]),
             ["grafana/queries/panel-2-A.json", "grafana/queries/panel-2-B.json"],
         )
+
+    def test_runtime_dimensions_are_injected_into_dashboard_and_capture_urls(self):
+        contracts = EXPORT.build_panel_capture_contracts(
+            SAMPLE_DASHBOARD_PAYLOAD,
+            EXPORT.extract_panel_queries(SAMPLE_DASHBOARD_PAYLOAD),
+            "http://127.0.0.1:3000",
+            "aws-b01-20260811-090000",
+            "2026-08-11T09:00:00Z",
+            "2026-08-11T10:00:00Z",
+            ResourceDimensionsValidationTest.COMPLETE,
+        )
+        contract = next(item for item in contracts if item["panelId"] == 7)
+        self.assertIn(
+            "var-alb_dimension=app%2Fkdt-travelplanner-dev-api%2F51b33ebe03b9146c",
+            contract["dashboardUrl"],
+        )
+        self.assertIn(
+            "var-cache_cluster_id=kdt-travelplanner-dev-redis-001",
+            contract["dashboardUrl"],
+        )
+        self.assertIn("viewPanel=7", contract["captureUrl"])
 
     def test_contract_carries_run_id_and_fixed_utc_range(self):
         panel_queries = EXPORT.extract_panel_queries(SAMPLE_DASHBOARD_PAYLOAD)
