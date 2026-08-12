@@ -31,7 +31,12 @@ helper가 canonical immutable configuration을 생성하고 Dockerfile이 이를
 SHA-256과 contract/behavior label도 이미지 config에 함께 굽는다. behavior
 hash에는 mode와 모든 fault parameter가 포함된다. 컨테이너가
 실행될 때 fault 환경변수가 이미지 설정과 다르면 즉시 종료하므로 runtime
-override로 metadata와 실제 동작이 갈라지지 않는다.
+override로 metadata와 실제 동작이 갈라지지 않는다. immutable 선언이 하나라도
+있으면 `/app/fault-config.json`은 반드시 regular file이어야 하며, 파일 누락,
+directory masking, malformed JSON, 빈 hash/contract는 모두 시작 전에
+fail-closed된다. 두 immutable 선언과 config가 모두 없는 경우에만 source-level
+loopback test가 mutable `FAULT_*` 설정을 사용할 수 있다. packaged image는
+이 fallback 경로를 사용할 수 없다.
 
 배포 시 `artifact-metadata.json` sidecar는 보조 증거로만 사용한다. verifier는
 sidecar와 CLI 값을 비교하는 데서 끝나지 않고, exact digest로 로컬에 있는
@@ -113,6 +118,9 @@ metadata의 `faultHttpStatus`를 `500..599` 중 승인된 값으로 맞춘다. `
 또한 같은 digest의 이미지 label/config가 선택한 mode·parameter hash와
 다르면 통과하지 않는다. verifier는 exact digest 이미지가 local Docker
 daemon에 없거나 `RepoDigests`가 일치하지 않아도 fail-closed한다.
+배포 시 `/app/fault-config.json`을 volume으로 가리거나 runtime `FAULT_*`
+값을 주입해 immutable 설정을 우회할 수 없으며, 그런 경우 fixture process가
+비정상 종료해야 한다.
 
 ## 로컬 contract test
 

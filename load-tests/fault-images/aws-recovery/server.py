@@ -126,8 +126,30 @@ def _validate_fault_values(values: dict[str, Any]) -> dict[str, Any]:
 
 def _load_immutable_fault_config() -> dict[str, Any] | None:
     path = Path(IMMUTABLE_CONFIG_PATH)
+    behavior_sha_declared = "IMMUTABLE_BEHAVIOR_SHA256" in os.environ
+    contract_declared = "IMMUTABLE_CONTRACT_VERSION" in os.environ
+    behavior_sha = os.environ.get("IMMUTABLE_BEHAVIOR_SHA256", "")
+    declared_contract = os.environ.get("IMMUTABLE_CONTRACT_VERSION", "")
+
+    # Source-level subprocess tests may use mutable FAULT_* values only when
+    # the packaged immutable contract is entirely absent. A packaged image
+    # always declares both values, so every other state fails closed.
+    if not behavior_sha_declared and not contract_declared:
+        if not path.exists():
+            return None
+        raise ValueError(
+            "immutable config exists but immutable declarations are missing"
+        )
+    if not behavior_sha_declared or not contract_declared:
+        raise ValueError(
+            "IMMUTABLE_BEHAVIOR_SHA256 and IMMUTABLE_CONTRACT_VERSION are both required"
+        )
+    if not re.fullmatch(r"[0-9a-f]{64}", behavior_sha):
+        raise ValueError("IMMUTABLE_BEHAVIOR_SHA256 must be a 64-character lowercase hex digest")
+    if declared_contract != CONTRACT_VERSION:
+        raise ValueError("immutable fault configuration contract mismatch")
     if not path.is_file():
-        return None
+        raise ValueError("immutable fault configuration file is missing or not a regular file")
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as error:
@@ -136,13 +158,9 @@ def _load_immutable_fault_config() -> dict[str, Any] | None:
         raise ValueError("immutable fault configuration must be a JSON object")
     values = _validate_fault_values(raw)
     canonical = json.dumps(values, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-    behavior_sha = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
-    declared_sha = os.getenv("IMMUTABLE_BEHAVIOR_SHA256")
-    if declared_sha and declared_sha != behavior_sha:
+    actual_behavior_sha = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    if behavior_sha != actual_behavior_sha:
         raise ValueError("immutable fault configuration digest mismatch")
-    declared_contract = os.getenv("IMMUTABLE_CONTRACT_VERSION")
-    if declared_contract and declared_contract != CONTRACT_VERSION:
-        raise ValueError("immutable fault configuration contract mismatch")
 
     environment_values = {
         "FAULT_MODE": values["mode"],

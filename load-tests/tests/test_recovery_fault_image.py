@@ -1,5 +1,6 @@
 import http.client
 import hashlib
+import importlib.util
 import json
 import os
 import subprocess
@@ -9,6 +10,7 @@ import time
 import unittest
 from pathlib import Path
 from typing import Optional
+from unittest import mock
 
 
 ROOT = Path(__file__).parents[1]
@@ -46,6 +48,57 @@ def request(port: int, path: str) -> tuple[int, dict, dict[str, str]]:
 
 
 class RecoveryFaultFixtureTest(unittest.TestCase):
+    @staticmethod
+    def load_server_module():
+        spec = importlib.util.spec_from_file_location("recovery_fault_server", SERVER)
+        if spec is None or spec.loader is None:
+            raise AssertionError("unable to load recovery fault server module")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+    @staticmethod
+    def immutable_values(
+        *,
+        mode: str = "probe_failure",
+        fault_path: str = DEFAULT_FAULT_PATH,
+        fault_error_code: str = DEFAULT_FAULT_CODE,
+        fault_error_message: str = DEFAULT_FAULT_MESSAGE,
+        fault_http_status: int = 500,
+    ) -> dict:
+        return {
+            "contractVersion": "aws-recovery-fault-image-v1",
+            "mode": mode,
+            "faultPath": fault_path,
+            "faultErrorCode": fault_error_code,
+            "faultErrorMessage": fault_error_message,
+            "faultHttpStatus": fault_http_status,
+        }
+
+    @staticmethod
+    def immutable_sha(values: dict) -> str:
+        canonical = json.dumps(
+            values,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+    def write_immutable_config(self, path: Path, values: dict) -> str:
+        path.write_text(json.dumps(values, ensure_ascii=False), encoding="utf-8")
+        return self.immutable_sha(values)
+
+    def load_config_with_env(
+        self,
+        module,
+        config_path: Path,
+        env: dict[str, str],
+    ):
+        with mock.patch.object(module, "IMMUTABLE_CONFIG_PATH", str(config_path)):
+            with mock.patch.dict(module.os.environ, env, clear=True):
+                return module.FixtureConfig()
+
     def start_fixture(
         self, mode: str, error_status: int = 500
     ) -> tuple[subprocess.Popen[str], int, int]:
@@ -297,6 +350,105 @@ class RecoveryFaultFixtureTest(unittest.TestCase):
                     self.assertEqual(error["code"], "INTERNAL_SERVER_ERROR")
                 finally:
                     self.stop_fixture(process)
+
+    def test_immutable_config_missing_fails_closed_when_declared(self):
+        module = self.load_server_module()
+        with tempfile.TemporaryDirectory() as directory:
+            config_path = Path(directory) / "missing-fault-config.json"
+            with self.assertRaisesRegex(ValueError, "missing or not a regular file"):
+                self.load_config_with_env(
+                    module,
+                    config_path,
+                    {
+                        "IMMUTABLE_BEHAVIOR_SHA256": "a" * 64,
+                        "IMMUTABLE_CONTRACT_VERSION": "aws-recovery-fault-image-v1",
+                    },
+                )
+
+    def test_immutable_config_directory_fails_closed_when_declared(self):
+        module = self.load_server_module()
+        with tempfile.TemporaryDirectory() as directory:
+            config_path = Path(directory) / "fault-config.json"
+            config_path.mkdir()
+            with self.assertRaisesRegex(ValueError, "missing or not a regular file"):
+                self.load_config_with_env(
+                    module,
+                    config_path,
+                    {
+                        "IMMUTABLE_BEHAVIOR_SHA256": "a" * 64,
+                        "IMMUTABLE_CONTRACT_VERSION": "aws-recovery-fault-image-v1",
+                    },
+                )
+
+    def test_immutable_config_malformed_fails_closed(self):
+        module = self.load_server_module()
+        with tempfile.TemporaryDirectory() as directory:
+            config_path = Path(directory) / "fault-config.json"
+            config_path.write_text("{", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "unable to read immutable fault configuration"):
+                self.load_config_with_env(
+                    module,
+                    config_path,
+                    {
+                        "IMMUTABLE_BEHAVIOR_SHA256": "a" * 64,
+                        "IMMUTABLE_CONTRACT_VERSION": "aws-recovery-fault-image-v1",
+                    },
+                )
+
+    def test_immutable_declarations_must_be_nonempty_and_exact(self):
+        module = self.load_server_module()
+        values = self.immutable_values()
+        with tempfile.TemporaryDirectory() as directory:
+            config_path = Path(directory) / "fault-config.json"
+            digest = self.write_immutable_config(config_path, values)
+            for env in (
+                {
+                    "IMMUTABLE_BEHAVIOR_SHA256": "",
+                    "IMMUTABLE_CONTRACT_VERSION": "aws-recovery-fault-image-v1",
+                },
+                {
+                    "IMMUTABLE_BEHAVIOR_SHA256": digest,
+                    "IMMUTABLE_CONTRACT_VERSION": "",
+                },
+                {
+                    "IMMUTABLE_BEHAVIOR_SHA256": "b" * 64,
+                    "IMMUTABLE_CONTRACT_VERSION": "aws-recovery-fault-image-v1",
+                },
+                {
+                    "IMMUTABLE_BEHAVIOR_SHA256": digest,
+                    "IMMUTABLE_CONTRACT_VERSION": "wrong-contract",
+                },
+            ):
+                with self.subTest(env=env):
+                    with self.assertRaises(ValueError):
+                        self.load_config_with_env(module, config_path, env)
+
+    def test_every_fault_runtime_override_fails_closed(self):
+        module = self.load_server_module()
+        values = self.immutable_values()
+        digest = self.immutable_sha(values)
+        overrides = {
+            "FAULT_MODE": "business_error",
+            "FAULT_PATH": "/api/v1/override",
+            "FAULT_ERROR_CODE": "OVERRIDE_FAILURE",
+            "FAULT_ERROR_MESSAGE": "override",
+            "FAULT_HTTP_STATUS": "599",
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            config_path = Path(directory) / "fault-config.json"
+            self.write_immutable_config(config_path, values)
+            for name, value in overrides.items():
+                with self.subTest(name=name):
+                    with self.assertRaisesRegex(ValueError, "runtime override differs"):
+                        self.load_config_with_env(
+                            module,
+                            config_path,
+                            {
+                                "IMMUTABLE_BEHAVIOR_SHA256": digest,
+                                "IMMUTABLE_CONTRACT_VERSION": "aws-recovery-fault-image-v1",
+                                name: value,
+                            },
+                        )
 
     def test_build_helper_rejects_unpinned_base_image_without_building(self):
         result = subprocess.run(
