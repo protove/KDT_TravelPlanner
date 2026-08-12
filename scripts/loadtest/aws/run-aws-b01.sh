@@ -115,6 +115,41 @@ case "$PHASE" in
     ;;
   spike)
     : "${CONFIRMED_RATE:?CONFIRMED_RATE is required for spike (peaks off the D-005 baseline rate)}"
+    python3 - "$AWS_PROFILE_FILE" "$CONFIRMED_RATE" "$MAX_RATE" "${SPIKE_PEAK_MULTIPLIER:-}" <<'PY'
+import json
+import math
+import sys
+from pathlib import Path
+
+profile_path, baseline_raw, operator_max_raw, multiplier_raw = sys.argv[1:]
+profile = json.loads(Path(profile_path).read_text(encoding="utf-8"))
+scenario = profile.get("scenarios", {}).get("spike", {})
+try:
+    baseline = float(baseline_raw)
+    operator_max = float(operator_max_raw)
+    multiplier = float(multiplier_raw or scenario.get("peakRateMultiplier"))
+    profile_max = float(profile.get("limits", {}).get("maxRate"))
+except (TypeError, ValueError):
+    raise SystemExit("spike baseline, multiplier, profile maxRate, and operator maxRate must be numbers")
+if not all(math.isfinite(value) for value in (baseline, operator_max, multiplier, profile_max)):
+    raise SystemExit("spike baseline, multiplier, profile maxRate, and operator maxRate must be finite")
+if baseline <= 0:
+    raise SystemExit("spike baseline rate must be positive")
+if multiplier <= 1:
+    raise SystemExit("spike peak multiplier must be greater than 1")
+peak = baseline * multiplier
+if not baseline < peak:
+    raise SystemExit(f"spike peak rate {peak:g} must be greater than baseline rate {baseline:g}")
+if peak > profile_max:
+    raise SystemExit(
+        f"spike peak rate {peak:g} exceeds profile limits.maxRate {profile_max:g}"
+    )
+if peak > operator_max:
+    raise SystemExit(
+        f"spike peak rate {peak:g} exceeds operator --max-rate {operator_max:g}"
+    )
+print(f"[b01] spike rate validated: baseline={baseline:g} peak={peak:g}")
+PY
     export RATE="$CONFIRMED_RATE"
     export PREALLOCATED_VUS="${SPIKE_PREALLOCATED_VUS:-20}"
     configure_phase_max_vus spike "${SPIKE_MAX_VUS:-}"

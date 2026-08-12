@@ -8,16 +8,25 @@ import { recordCoreOperation } from '../lib/core-metrics.js';
 import { b01SpikeThresholds } from '../thresholds.js';
 import { makeAwsSummaryHandler } from '../summary.js';
 import {
-  SCENARIOS, REQUEST_MIX, enforceRateLimit, enforceVuLimit, requireScenarioRate,
+  LIMITS, SCENARIOS, REQUEST_MIX, enforceRateLimit, enforceVuLimit, requireScenarioRate,
 } from '../config.js';
 
 const SPIKE = SCENARIOS.spike;
 if (!SPIKE) throw new Error('[aws/b01-spike] profile.scenarios.spike is missing');
 
 const RATE = requireScenarioRate('baseline');
-const PEAK_RATE = enforceRateLimit(
-  RATE * (Number(__ENV.SPIKE_PEAK_MULTIPLIER) || SPIKE.peakRateMultiplier || 3),
-);
+const PEAK_MULTIPLIER = Number(__ENV.SPIKE_PEAK_MULTIPLIER || SPIKE.peakRateMultiplier);
+if (!Number.isFinite(PEAK_MULTIPLIER) || PEAK_MULTIPLIER <= 1) {
+  throw new Error('[aws/b01-spike] peak multiplier must be greater than 1');
+}
+const REQUESTED_PEAK_RATE = RATE * PEAK_MULTIPLIER;
+if (!(RATE < REQUESTED_PEAK_RATE)) {
+  throw new Error('[aws/b01-spike] peak rate must be greater than baseline rate');
+}
+if (REQUESTED_PEAK_RATE > LIMITS.maxRate) {
+  throw new Error(`[aws/b01-spike] peak rate ${REQUESTED_PEAK_RATE} exceeds profile limits.maxRate ${LIMITS.maxRate}`);
+}
+const PEAK_RATE = enforceRateLimit(REQUESTED_PEAK_RATE);
 const HOLD = __ENV.SPIKE_HOLD || SPIKE.hold || '1m';
 const PRE_ALLOCATED_VUS = enforceVuLimit(Number(__ENV.PREALLOCATED_VUS || SPIKE.preAllocatedVUs));
 const MAX_VUS = enforceVuLimit(Number(__ENV.MAX_VUS || SPIKE.maxVUs));
