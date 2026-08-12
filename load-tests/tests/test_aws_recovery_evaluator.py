@@ -440,5 +440,60 @@ class ObservabilityEmptyIsValidTests(unittest.TestCase):
                 MODULE.validate_observability(root, self.PROFILE)
 
 
+
+class RawAbsenceForEmptyCountersTests(unittest.TestCase):
+    """A clean run has no raw Points for the error counters at all.
+
+    load_points() only materialises a counter when k6 emitted at least one
+    Point, so evaluate() must accept the absence of a declared empty-is-valid
+    counter - but only when the k6 summary corroborates a zero count.
+    """
+
+    def build(self, root: Path, *, summary_counts: dict):
+        run_id, freeze, d005, b01_profile, candidate = AwsRecoveryEvaluatorTest().build_run(root)
+        summary = json.loads((root / "summary.json").read_text(encoding="utf-8"))
+        summary.setdefault("metrics", {})
+        for name, value in summary_counts.items():
+            summary["metrics"][name] = value
+        (root / "summary.json").write_text(json.dumps(summary), encoding="utf-8")
+        required = json.loads((root / "monitoring" / "required-metrics.json").read_text(encoding="utf-8"))
+        for name in ("core_unexpected_errors_total", "core_contract_failures_total"):
+            required["metrics"][name] = {"status": "collected", "datapointCount": 0, "emptyIsValid": True}
+        (root / "monitoring" / "required-metrics.json").write_text(json.dumps(required), encoding="utf-8")
+        raw_lines = [
+            line for line in (root / "raw.json").read_text(encoding="utf-8").splitlines()
+            if '"core_unexpected_errors_total"' not in line
+            and '"core_contract_failures_total"' not in line
+        ]
+        (root / "raw.json").write_text("\n".join(raw_lines) + "\n", encoding="utf-8")
+        return run_id, freeze, d005, b01_profile, candidate
+
+    def test_absent_counters_accepted_when_summary_reports_zero(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            args_source = AwsRecoveryEvaluatorTest()
+            run_id, freeze, d005, b01_profile, candidate = self.build(root, summary_counts={
+                "core_unexpected_errors_total": {"count": 0},
+                "core_contract_failures_total": {"count": 0},
+            })
+            result = MODULE.evaluate(args_source.args(root, run_id, freeze, d005, b01_profile, candidate))
+            self.assertEqual(result["status"], "PASSED")
+            self.assertEqual(
+                result["observability"]["absentFromRawButSummaryZero"],
+                ["core_contract_failures_total", "core_unexpected_errors_total"],
+            )
+
+    def test_absent_counter_with_nonzero_summary_is_invalid(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            args_source = AwsRecoveryEvaluatorTest()
+            run_id, freeze, d005, b01_profile, candidate = self.build(root, summary_counts={
+                "core_unexpected_errors_total": {"count": 7},
+                "core_contract_failures_total": {"count": 0},
+            })
+            with self.assertRaisesRegex(MODULE.RecoveryValidationError, "core_unexpected_errors_total"):
+                MODULE.evaluate(args_source.args(root, run_id, freeze, d005, b01_profile, candidate))
+
+
 if __name__ == "__main__":
     unittest.main()
