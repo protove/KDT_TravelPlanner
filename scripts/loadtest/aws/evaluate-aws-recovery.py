@@ -58,6 +58,13 @@ EMPTY_IS_VALID_ELIGIBLE = frozenset({
     "core_unexpected_errors_total",
     "core_contract_failures_total",
 })
+SCENARIO_RUN_PREFIX = {
+    "B-02": "aws-b02-",
+    "R-01": "aws-r01-",
+    "R-03": "aws-r03-",
+    "R-05": "aws-r05-",
+    "R-07": "aws-r07-",
+}
 SLO_CONTRACT = load_contract()
 
 
@@ -417,6 +424,41 @@ def _bucket_stats(
     }
 
 
+def assert_scenario_slo(
+    scenario: str | None,
+    t1_to_t6: float,
+    t4_to_t6: float,
+    unexpected_total: float,
+    contract_total: float,
+) -> None:
+    """Apply the frozen contract's scenario-specific pass condition.
+
+    R-01 is a planned staged deployment, not a failure: T1 is the moment the
+    rollout was started on purpose, so T1->T6 measures how long the chosen
+    strategy takes (checkpoint delay + instance warmup + the mandatory stable
+    window) rather than how fast the system recovered. Plan 07's acceptance
+    matrix puts a 600s budget on B-02 but lists only zero user errors, the new
+    digest and T6 for R-01, and the frozen contract already carries dedicated
+    r01 comparators. No threshold value is redefined here; each comparator is
+    simply applied to the scenario it was written for. Omitting the scenario
+    keeps the previous behaviour.
+    """
+
+    if scenario == "R-01":
+        if not satisfies(SLO_CONTRACT, "r01UnexpectedErrorCount", unexpected_total) or not satisfies(
+            SLO_CONTRACT, "r01ContractFailureCount", contract_total
+        ):
+            raise RecoverySloFailure(
+                "R-01 requires zero user-visible errors: "
+                f"unexpected={unexpected_total} contractFailures={contract_total}"
+            )
+        return
+    if not satisfies(SLO_CONTRACT, "recoveryBudgetSeconds", t1_to_t6) or not satisfies(
+        SLO_CONTRACT, "recoveryBudgetSeconds", t4_to_t6
+    ):
+        raise RecoverySloFailure(f"recovery budget exceeded: T1->T6={t1_to_t6:.1f}s T4->T6={t4_to_t6:.1f}s")
+
+
 def evaluate(args: argparse.Namespace) -> dict:
     run_dir = args.run_dir
     verdict_path = run_dir / "recovery-verdict.json"
@@ -623,10 +665,8 @@ def evaluate(args: argparse.Namespace) -> dict:
         raise RecoveryValidationError("T6 recovery window ends after RUN_END")
     t1_to_t6 = t6 - t1
     t4_to_t6 = t6 - t4
-    if not satisfies(SLO_CONTRACT, "recoveryBudgetSeconds", t1_to_t6) or not satisfies(
-        SLO_CONTRACT, "recoveryBudgetSeconds", t4_to_t6
-    ):
-        raise RecoverySloFailure(f"recovery budget exceeded: T1->T6={t1_to_t6:.1f}s T4->T6={t4_to_t6:.1f}s")
+    scenario = getattr(args, "scenario", None)
+    assert_scenario_slo(scenario, t1_to_t6, t4_to_t6, unexpected_total, contract_total)
     if "T6" in events and abs(events["T6"] - t6) > bucket_seconds:
         raise RecoveryValidationError("existing T6 event does not match evaluated recovery window")
     if "T6" not in events:
@@ -656,6 +696,15 @@ def evaluate(args: argparse.Namespace) -> dict:
         "T1ToT6Seconds": round(t1_to_t6, 3),
         "T4ToT6Seconds": round(t4_to_t6, 3),
         "budgetSeconds": budget_seconds,
+        "scenario": scenario,
+        "recoveryBudgetApplied": scenario != "R-01",
+        "budgetPolicyNote": (
+            "R-01 is a planned staged rollout: Plan 07 does not put it under the failure-recovery "
+            "budget, so the frozen contract's r01 zero-error comparators were applied instead and "
+            "the timings above are recorded for reference."
+            if scenario == "R-01"
+            else "Failure-recovery budget applied to both T1->T6 and T4->T6."
+        ),
         "stableWindowSeconds": window_seconds,
         "windowCoreCompleted": completed_total,
         "windowCoreUnexpectedErrors": unexpected_total,
@@ -743,6 +792,16 @@ def main() -> int:
     parser.add_argument("--source-lineage", type=Path, default=None)
     parser.add_argument("--protected-evidence-manifest", type=Path, default=None)
     parser.add_argument("--k6-image", required=True)
+    parser.add_argument(
+        "--scenario",
+        choices=sorted(SCENARIO_RUN_PREFIX),
+        default=None,
+        help=(
+            "Recovery scenario this run belongs to. R-01 is judged by the frozen contract's "
+            "r01 comparators instead of the failure-recovery budget; omitting the flag keeps "
+            "the previous scenario-agnostic behaviour."
+        ),
+    )
     args = parser.parse_args()
     try:
         result = evaluate(args)

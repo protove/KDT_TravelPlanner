@@ -495,5 +495,43 @@ class RawAbsenceForEmptyCountersTests(unittest.TestCase):
                 MODULE.evaluate(args_source.args(root, run_id, freeze, d005, b01_profile, candidate))
 
 
+
+class ScenarioAwareBudgetTests(unittest.TestCase):
+    """R-01 is a planned rollout, so the failure-recovery budget must not gate it.
+
+    Plan 07's acceptance matrix puts a 600s budget on B-02 but lists only zero
+    user errors, the new digest and T6 for R-01, and the frozen contract already
+    carries r01UnexpectedErrorCount / r01ContractFailureCount. These exercise the
+    policy directly so no threshold value is asserted twice.
+    """
+
+    OVER_BUDGET = 677.1
+    WITHIN_BUDGET = 278.8
+
+    def test_r01_ignores_the_recovery_budget_when_there_are_no_errors(self) -> None:
+        MODULE.assert_scenario_slo("R-01", self.OVER_BUDGET, self.WITHIN_BUDGET, 0, 0)
+
+    def test_r01_fails_on_any_user_visible_error(self) -> None:
+        with self.assertRaisesRegex(MODULE.RecoverySloFailure, "zero user-visible errors"):
+            MODULE.assert_scenario_slo("R-01", 100.0, 100.0, 1, 0)
+        with self.assertRaisesRegex(MODULE.RecoverySloFailure, "zero user-visible errors"):
+            MODULE.assert_scenario_slo("R-01", 100.0, 100.0, 0, 1)
+
+    def test_failure_scenarios_still_enforce_the_budget(self) -> None:
+        for scenario in ("B-02", "R-03", "R-05", "R-07"):
+            with self.subTest(scenario=scenario):
+                with self.assertRaisesRegex(MODULE.RecoverySloFailure, "recovery budget exceeded"):
+                    MODULE.assert_scenario_slo(scenario, self.OVER_BUDGET, self.WITHIN_BUDGET, 0, 0)
+                MODULE.assert_scenario_slo(scenario, self.WITHIN_BUDGET, self.WITHIN_BUDGET, 0, 0)
+
+    def test_omitting_the_scenario_keeps_the_previous_behaviour(self) -> None:
+        with self.assertRaisesRegex(MODULE.RecoverySloFailure, "recovery budget exceeded"):
+            MODULE.assert_scenario_slo(None, self.OVER_BUDGET, self.WITHIN_BUDGET, 0, 0)
+
+    def test_t4_to_t6_still_gates_failure_scenarios(self) -> None:
+        with self.assertRaisesRegex(MODULE.RecoverySloFailure, "recovery budget exceeded"):
+            MODULE.assert_scenario_slo("B-02", 100.0, self.OVER_BUDGET, 0, 0)
+
+
 if __name__ == "__main__":
     unittest.main()
