@@ -40,7 +40,10 @@ SAFETY_SCRIPT = REPOSITORY_ROOT / "scripts/loadtest/verify-evidence-safety.py"
 
 P95_MS = 500.0
 UNEXPECTED_ERROR_RATE = 0.01
+CONTRACT_FAILURE_RATE = 0.01
 SUCCESS_RATE_FLOOR = 0.99
+SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+COMMIT_SHA_PATTERN = re.compile(r"^[0-9a-f]{40}$")
 CORE_COUNTERS = (
     "core_operations_total",
     "core_completed_operations_total",
@@ -226,6 +229,7 @@ def evaluate_phase(run_dir: Path) -> dict:
         and p95_ms is not None and p95_ms <= P95_MS
         and success_rate is not None and success_rate >= SUCCESS_RATE_FLOOR
         and unexpected_error_rate is not None and unexpected_error_rate < UNEXPECTED_ERROR_RATE
+        and contract_failure_rate is not None and contract_failure_rate < CONTRACT_FAILURE_RATE
         and not bottleneck_suspected
     )
 
@@ -272,21 +276,145 @@ def discover_phases(evidence_root: Path) -> dict:
     return phases
 
 
-def evaluate_baseline_candidate(reps: list[dict], confirmed_rate: float | None) -> dict:
-    rates = {rep.get("rate") for rep in reps if rep.get("rate") is not None}
-    consistent_rate = len(rates) <= 1
+def evaluate_baseline_candidate(
+    reps: list[dict],
+    confirmed_rate: float | None,
+    *,
+    digest_gate_passed: bool = True,
+) -> dict:
+    numeric_rates: list[float] = []
+    for rep in reps:
+        value = rep.get("rate")
+        try:
+            numeric = float(value)
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(numeric):
+            numeric_rates.append(numeric)
+    rates = set(numeric_rates)
+    all_rates_positive = len(numeric_rates) == len(reps) and all(rate > 0 for rate in numeric_rates)
+    consistent_rate = len(reps) == 3 and all_rates_positive and len(rates) == 1
+    if len(rates) == 1:
+        candidate_rate = next(iter(rates))
+    elif rates:
+        candidate_rate = sorted(rates)
+    else:
+        candidate_rate = None
+    try:
+        numeric_confirmed_rate = float(confirmed_rate) if confirmed_rate is not None else None
+    except (TypeError, ValueError):
+        numeric_confirmed_rate = None
+    confirmed_rate_valid = (
+        numeric_confirmed_rate is not None
+        and math.isfinite(numeric_confirmed_rate)
+        and numeric_confirmed_rate > 0
+    )
+    rate_matches_confirmed = (
+        confirmed_rate_valid
+        and consistent_rate
+        and candidate_rate == numeric_confirmed_rate
+    )
     reps_passed = sum(1 for rep in reps if rep["sloPass"])
     return {
         "repsCount": len(reps),
         "repsPassed": reps_passed,
-        "rate": next(iter(rates), None) if consistent_rate else sorted(rates),
+        "rate": candidate_rate,
         "rateConsistentAcrossReps": consistent_rate,
-        "rateMatchesConfirmedRate": (
-            confirmed_rate is None or (consistent_rate and next(iter(rates), None) == confirmed_rate)
-        ),
+        "allRatesPositive": all_rates_positive,
+        "confirmedRateProvided": confirmed_rate is not None,
+        "confirmedRateValid": confirmed_rate_valid,
+        "rateMatchesConfirmedRate": rate_matches_confirmed,
         # D-005: "3회 중 하나라도 99% 미만이면 해당 arrival-rate 후보를 동결하지 않는다"
-        "frozen": len(reps) == 3 and reps_passed == 3 and consistent_rate,
+        # The operator-confirmed rate is part of the gate, rather than an
+        # optional display-only comparison. This prevents a candidate with
+        # missing metadata or a different CLI rate from being frozen.
+        "frozen": (
+            len(reps) == 3
+            and reps_passed == 3
+            and consistent_rate
+            and rate_matches_confirmed
+            and digest_gate_passed
+        ),
     }
+
+
+def evaluate_baseline_candidate_only(evidence_root: Path, confirmed_rate: float | None) -> dict:
+    """Evaluate and persist only the D-005 Baseline x3 gate.
+
+    This intentionally does not require the final evidence-safety file,
+    Grafana export, cleanup result, or Spike output. D-005 must be decided
+    immediately after Baseline x3 and before d005-record or Spike can run.
+    """
+    metadata = read_json(evidence_root / "metadata.json")
+    k6_root = evidence_root / "k6"
+    baseline_reps = []
+    if k6_root.is_dir():
+        for entry in sorted(k6_root.iterdir()):
+            if entry.is_dir() and entry.name.startswith("baseline-"):
+                baseline_reps.append(evaluate_phase(entry))
+    source_commit_sha = metadata.get("commitSha")
+    marker_profile_shas: list[str] = []
+    marker_input_digests: list[str] = []
+    marker_contract_passed = True
+    stages_root = evidence_root / "stages"
+    for index in (1, 2, 3):
+        marker_path = stages_root / f"baseline-{index}.json"
+        try:
+            marker = read_json(marker_path)
+        except ValidationError:
+            marker_contract_passed = False
+            continue
+        if marker.get("runId") != metadata.get("runId") or marker.get("stage") != f"baseline-{index}":
+            marker_contract_passed = False
+        if marker.get("sourceCommitSha") != source_commit_sha:
+            marker_contract_passed = False
+        profile_sha = marker.get("profileSha256")
+        if not isinstance(profile_sha, str) or not SHA256_PATTERN.fullmatch(profile_sha):
+            marker_contract_passed = False
+        else:
+            marker_profile_shas.append(profile_sha)
+        input_digest = marker.get("inputDigest")
+        if not isinstance(input_digest, str) or not SHA256_PATTERN.fullmatch(input_digest):
+            marker_contract_passed = False
+        else:
+            marker_input_digests.append(input_digest)
+    profile_sha_values = set(marker_profile_shas)
+    profile_sha_consistent = len(marker_profile_shas) == 3 and len(profile_sha_values) == 1
+    # stage_input_digest intentionally includes baseline-1/2/3 as the stage
+    # discriminator, so the three values must be present, valid, and distinct;
+    # run/profile/source consistency above binds their shared inputs.
+    input_digest_contract_passed = len(marker_input_digests) == 3 and len(set(marker_input_digests)) == 3
+    source_sha_valid = isinstance(source_commit_sha, str) and COMMIT_SHA_PATTERN.fullmatch(source_commit_sha) is not None
+    digest_gate_passed = (
+        marker_contract_passed
+        and profile_sha_consistent
+        and input_digest_contract_passed
+        and source_sha_valid
+    )
+    candidate = evaluate_baseline_candidate(
+        baseline_reps,
+        confirmed_rate,
+        digest_gate_passed=digest_gate_passed,
+    )
+    report = {
+        "evidenceRoot": str(evidence_root),
+        "runId": metadata.get("runId"),
+        "confirmedRate": confirmed_rate,
+        "sourceCommitSha": source_commit_sha,
+        "profileSha256": next(iter(profile_sha_values), None) if profile_sha_consistent else None,
+        "profileShaConsistent": profile_sha_consistent,
+        "baselineInputDigests": marker_input_digests,
+        "inputDigestContractPassed": input_digest_contract_passed,
+        "digestGatePassed": digest_gate_passed,
+        "baselineReps": baseline_reps,
+        "baselineCandidate": candidate,
+        "passed": candidate["frozen"],
+        "sloVersion": "v0.2-candidate (D-005 baseline gate)",
+    }
+    (evidence_root / "baseline-candidate.json").write_text(
+        json.dumps(report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+    )
+    return report
 
 
 def fixture_failure(phase: str, reason: str) -> dict:
@@ -431,7 +559,19 @@ def main() -> int:
     parser.add_argument("evidence_root", type=Path)
     parser.add_argument("--data-file", type=Path, default=None, help="Fallback to build evidence-safety.json if upload-aws-evidence.py has not already written one")
     parser.add_argument("--confirmed-rate", type=float, default=None, help="D-005 rate the operator confirmed for this run; cross-checked against each baseline rep's recorded rate")
+    parser.add_argument(
+        "--baseline-candidate-only",
+        action="store_true",
+        help="Evaluate and write baseline-candidate.json without requiring final evidence files",
+    )
     args = parser.parse_args()
+    if args.baseline_candidate_only:
+        report = evaluate_baseline_candidate_only(
+            args.evidence_root.resolve(),
+            args.confirmed_rate,
+        )
+        print(json.dumps(report, indent=2, ensure_ascii=False))
+        return 0 if report["passed"] else 1
     report = evaluate(
         args.evidence_root.resolve(),
         args.data_file.resolve() if args.data_file else None,

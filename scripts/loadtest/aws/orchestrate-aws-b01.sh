@@ -400,17 +400,18 @@ mark_stage_complete() {
   local stage_rate stage_digest
   stage_rate="$(stage_confirmed_rate "$stage")"
   stage_digest="$(stage_input_digest "$stage")"
-  python3 - "$STAGE_DIR/$stage.json" "$stage" "$RUN_ID" "$PROFILE_SHA256" "$stage_rate" "$stage_digest" "$USERS" <<'PY'
+  python3 - "$STAGE_DIR/$stage.json" "$stage" "$RUN_ID" "$PROFILE_SHA256" "$SOURCE_COMMIT_SHA" "$stage_rate" "$stage_digest" "$USERS" <<'PY'
 import json
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-output, stage, run_id, profile_sha, confirmed_rate, input_digest, users_raw = sys.argv[1:]
+output, stage, run_id, profile_sha, source_commit_sha, confirmed_rate, input_digest, users_raw = sys.argv[1:]
 payload = {
     "stage": stage,
     "runId": run_id,
     "profileSha256": profile_sha,
+    "sourceCommitSha": source_commit_sha,
     "confirmedRate": confirmed_rate or None,
     "inputDigest": input_digest,
     "completedAtUtc": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
@@ -706,6 +707,9 @@ k6_phase_stage() {
   local baseline_rep="${2:-}"
   echo "[b01] $phase"
   validate_phase_credential_capacity "$phase"
+  if [[ "$phase" == "spike" ]]; then
+    require_d005_record_gate
+  fi
   if [[ "$DRY_RUN" == "1" ]]; then
     echo "[dry-run] refresh credentials before $phase" >&2
     echo "[dry-run] run-aws-b01.sh $phase (RUN_ID=$RUN_ID rate=${CONFIRMED_RATE:-<profile>})" >&2
@@ -720,6 +724,10 @@ k6_phase_stage() {
   export REPOSITORY_ROOT EVIDENCE_ROOT BASE_URL REGION ENVIRONMENT MAX_RATE MAX_VUS
   export K6_IMAGE_DIGEST="$K6_IMAGE" AWS_PROFILE_FILE="$PROFILE" RUN_ID="$RUN_ID"
   export DATA_FILE
+  export START_RATE DURATION WARMUP
+  export RAMP_PREALLOCATED_VUS RAMP_MAX_VUS
+  export BASELINE_PREALLOCATED_VUS BASELINE_MAX_VUS
+  export SPIKE_PREALLOCATED_VUS SPIKE_MAX_VUS SPIKE_PEAK_MULTIPLIER SPIKE_HOLD
   if [[ -n "$CONFIRMED_RATE" ]]; then export CONFIRMED_RATE; fi
   if [[ "$phase" == "baseline" ]]; then
     if [[ -n "$baseline_rep" ]]; then
@@ -734,40 +742,153 @@ k6_phase_stage() {
   fi
 }
 
+validate_confirmed_rate() {
+  if [[ -z "$CONFIRMED_RATE" ]]; then
+    echo "--confirmed-rate is required for $MODE" >&2
+    exit 2
+  fi
+  python3 - "$CONFIRMED_RATE" "$MAX_RATE" <<'PY'
+import math
+import sys
+
+confirmed_raw, operator_max_raw = sys.argv[1:]
+try:
+    confirmed = float(confirmed_raw)
+    operator_max = float(operator_max_raw)
+except (TypeError, ValueError):
+    raise SystemExit("--confirmed-rate and --max-rate must be finite numbers")
+if not math.isfinite(confirmed) or confirmed <= 0:
+    raise SystemExit("--confirmed-rate must be a positive finite number")
+if not math.isfinite(operator_max) or operator_max <= 0:
+    raise SystemExit("--max-rate must be a positive finite number")
+if confirmed > operator_max:
+    raise SystemExit(f"--confirmed-rate {confirmed_raw} exceeds --max-rate {operator_max_raw}")
+PY
+}
+
+require_baseline_candidate_gate() {
+  if [[ "$DRY_RUN" == "1" ]]; then
+    echo "[dry-run] would require a passed baseline-candidate.json before D-005/Spike" >&2
+    return 0
+  fi
+  local candidate_path="$EVIDENCE_ROOT/baseline-candidate.json"
+  if [[ ! -f "$candidate_path" ]]; then
+    echo "baseline-candidate.json is missing; Baseline x3 gate must pass before D-005 or Spike" >&2
+    exit 2
+  fi
+  python3 - "$candidate_path" "$RUN_ID" "$CONFIRMED_RATE" "$SOURCE_COMMIT_SHA" "$PROFILE_SHA256" <<'PY'
+import json
+import math
+import sys
+from pathlib import Path
+
+candidate_path, run_id, confirmed_raw, source_sha, profile_sha = sys.argv[1:]
+payload = json.loads(Path(candidate_path).read_text(encoding="utf-8"))
+candidate = payload.get("baselineCandidate")
+if payload.get("runId") != run_id:
+    raise SystemExit("baseline-candidate.json runId does not match this run")
+if payload.get("sourceCommitSha") != source_sha:
+    raise SystemExit("baseline-candidate.json source commit does not match this run")
+if payload.get("profileSha256") != profile_sha or payload.get("profileShaConsistent") is not True:
+    raise SystemExit("baseline-candidate.json profile digest does not match this run")
+if payload.get("inputDigestContractPassed") is not True:
+    raise SystemExit("baseline-candidate.json input digest contract has not passed")
+if payload.get("digestGatePassed") is not True:
+    raise SystemExit("baseline-candidate.json digest gate has not passed")
+if not isinstance(candidate, dict) or candidate.get("frozen") is not True:
+    raise SystemExit("Baseline x3 gate has not passed; refusing D-005/Spike")
+if candidate.get("rateMatchesConfirmedRate") is not True:
+    raise SystemExit("Baseline rate does not match --confirmed-rate; refusing D-005/Spike")
+try:
+    confirmed = float(confirmed_raw)
+    recorded = float(payload.get("confirmedRate"))
+except (TypeError, ValueError):
+    raise SystemExit("baseline-candidate.json has no valid confirmedRate")
+if not math.isfinite(confirmed) or not math.isfinite(recorded) or confirmed != recorded:
+    raise SystemExit("baseline-candidate.json confirmedRate does not match --confirmed-rate")
+PY
+}
+
+require_d005_record_gate() {
+  if [[ "$DRY_RUN" == "1" ]]; then
+    echo "[dry-run] would require D-005 baseline gate and d005-arrival-rate.json before Spike" >&2
+    return 0
+  fi
+  require_baseline_candidate_gate
+  if ! stage_is_complete d005; then
+    echo "D-005 d005-record stage is missing or stale; refusing Spike" >&2
+    exit 2
+  fi
+  if [[ ! -f "$EVIDENCE_ROOT/d005-arrival-rate.json" ]]; then
+    echo "d005-arrival-rate.json is missing; refusing Spike" >&2
+    exit 2
+  fi
+  python3 - "$EVIDENCE_ROOT/d005-arrival-rate.json" "$EVIDENCE_ROOT/baseline-candidate.json" "$RUN_ID" "$CONFIRMED_RATE" "$SOURCE_COMMIT_SHA" "$PROFILE_SHA256" <<'PY'
+import hashlib
+import json
+import math
+import sys
+from pathlib import Path
+
+record_path, candidate_path, run_id, confirmed_raw, source_sha, profile_sha = sys.argv[1:]
+record = json.loads(Path(record_path).read_text(encoding="utf-8"))
+candidate_sha = hashlib.sha256(Path(candidate_path).read_bytes()).hexdigest()
+if record.get("runId") != run_id:
+    raise SystemExit("d005-arrival-rate.json runId does not match this run")
+if record.get("baselineCandidateSha256") != candidate_sha:
+    raise SystemExit("d005-arrival-rate.json baseline candidate is stale; rerun D-005 gate")
+if record.get("sourceCommitSha") != source_sha or record.get("profileSha256") != profile_sha:
+    raise SystemExit("d005-arrival-rate.json source/profile digest does not match this run")
+try:
+    recorded = float(record.get("arrivalRate"))
+    confirmed = float(confirmed_raw)
+except (TypeError, ValueError):
+    raise SystemExit("d005-arrival-rate.json has no valid arrivalRate")
+if not math.isfinite(recorded) or not math.isfinite(confirmed) or recorded != confirmed:
+    raise SystemExit("d005-arrival-rate.json does not match --confirmed-rate")
+PY
+}
+
 d005_record_stage() {
-  # A factual record of the rate this run's Baseline x3 actually tested —
-  # not a pass/fail verdict (that's validate-aws-run.py's job, run
-  # separately, same as Compose's summarize-gate.py). This exists so D-005
-  # has a durable artifact distinct from --confirmed-rate just being an
-  # ephemeral CLI arg consumed into each phase's own metadata.json.
+  # Record the D-005 rate only after validate-aws-run.py has produced a
+  # passing Baseline x3 candidate. This gives the subsequent Spike gate a
+  # durable, hash-bound decision artifact rather than trusting an ephemeral
+  # --confirmed-rate CLI argument.
   echo "[b01] d005-record: rate=$CONFIRMED_RATE"
   if [[ "$DRY_RUN" == "1" ]]; then
     echo "[dry-run] would write $EVIDENCE_ROOT/d005-arrival-rate.json" >&2
     return 0
   fi
-  if [[ -z "$CONFIRMED_RATE" ]]; then echo "--confirmed-rate is required for d005-record" >&2; exit 2; fi
+  validate_confirmed_rate
   for rep in 1 2 3; do
-    if [[ ! -f "$EVIDENCE_ROOT/stages/baseline-$rep.json" ]]; then
+    if ! stage_is_complete "baseline-$rep"; then
       echo "baseline-$rep is not complete; refusing to record D-005" >&2
       exit 2
     fi
   done
+  python3 "$REPOSITORY_ROOT/scripts/loadtest/aws/validate-aws-run.py" \
+    "$EVIDENCE_ROOT" --confirmed-rate "$CONFIRMED_RATE" --baseline-candidate-only
   local profile_sha256
   profile_sha256="$(python3 -c "import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],'rb').read()).hexdigest())" "$PROFILE")"
-  python3 - "$EVIDENCE_ROOT/d005-arrival-rate.json" "$RUN_ID" "$CONFIRMED_RATE" "${MAX_VUS:-}" "$profile_sha256" "$PROFILE" <<'PY'
+  local candidate_sha256
+  candidate_sha256="$(python3 -c "import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],'rb').read()).hexdigest())" "$EVIDENCE_ROOT/baseline-candidate.json")"
+  python3 - "$EVIDENCE_ROOT/d005-arrival-rate.json" "$RUN_ID" "$CONFIRMED_RATE" "${MAX_VUS:-}" "$profile_sha256" "$PROFILE" "$candidate_sha256" "$SOURCE_COMMIT_SHA" <<'PY'
 import json
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-output, run_id, rate, max_vus, profile_sha256, profile_path = sys.argv[1:]
+output, run_id, rate, max_vus, profile_sha256, profile_path, candidate_sha256, source_commit_sha = sys.argv[1:]
 Path(output).write_text(json.dumps({
     "runId": run_id,
-    "note": "This records what Baseline x3 was run at, not whether it passed SLO (see validate-aws-run.py's baselineCandidate).",
+    "note": "This records the D-005 rate only after validate-aws-run.py baselineCandidate.frozen=true.",
     "arrivalRate": float(rate),
     "maxVusCeiling": float(max_vus) if max_vus else None,
     "profilePath": profile_path,
     "profileSha256": profile_sha256,
+    "sourceCommitSha": source_commit_sha,
+    "baselineCandidatePath": "baseline-candidate.json",
+    "baselineCandidateSha256": candidate_sha256,
     "recordedAtUtc": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
 }, indent=2) + "\n", encoding="utf-8")
 PY
@@ -1024,7 +1145,7 @@ case "$MODE" in
     echo "      orchestrate-aws-b01.sh all --run-id $RUN_ID --confirmed-rate <rate> ..."
     ;;
   baseline)
-    if [[ -z "$CONFIRMED_RATE" ]]; then echo "--confirmed-rate is required for baseline" >&2; exit 2; fi
+    validate_confirmed_rate
     run_stage_once target target_stage
     run_stage_once seed seed_stage
     for rep in 1 2 3; do
@@ -1032,11 +1153,12 @@ case "$MODE" in
     done
     ;;
   d005-record)
-    if [[ -z "$CONFIRMED_RATE" ]]; then echo "--confirmed-rate is required for d005-record" >&2; exit 2; fi
+    validate_confirmed_rate
     run_stage_once d005 d005_record_stage
     ;;
   spike)
-    if [[ -z "$CONFIRMED_RATE" ]]; then echo "--confirmed-rate is required for spike" >&2; exit 2; fi
+    validate_confirmed_rate
+    require_d005_record_gate
     run_stage_once target target_stage
     run_stage_once seed seed_stage
     run_stage_once spike k6_phase_stage spike
@@ -1067,6 +1189,7 @@ case "$MODE" in
       echo "      orchestrate-aws-b01.sh all --run-id $RUN_ID --confirmed-rate <rate> ..."
       exit 0
     fi
+    validate_confirmed_rate
     for rep in 1 2 3; do
       run_stage_once "baseline-$rep" k6_phase_stage baseline "$rep"
     done
