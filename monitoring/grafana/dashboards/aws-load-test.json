@@ -148,11 +148,16 @@
       "pluginVersion": "13.1.0",
       "targets": [
         {
+          "datasource": { "type": "cloudwatch", "uid": "cloudwatch" },
           "dimensions": { "LoadBalancer": "$alb_dimension" },
           "expression": "",
+          "matchExact": true,
+          "metricEditorMode": 0,
           "metricName": "RequestCount",
+          "metricQueryType": 0,
           "namespace": "AWS/ApplicationELB",
           "period": "60",
+          "queryMode": "Metrics",
           "refId": "A",
           "region": "ap-northeast-2",
           "statistic": "Sum"
@@ -189,11 +194,16 @@
       "pluginVersion": "13.1.0",
       "targets": [
         {
+          "datasource": { "type": "cloudwatch", "uid": "cloudwatch" },
           "dimensions": { "LoadBalancer": "$alb_dimension", "TargetGroup": "$target_group_dimension" },
           "expression": "",
+          "matchExact": true,
+          "metricEditorMode": 0,
           "metricName": "TargetResponseTime",
+          "metricQueryType": 0,
           "namespace": "AWS/ApplicationELB",
           "period": "60",
+          "queryMode": "Metrics",
           "refId": "A",
           "region": "ap-northeast-2",
           "statistic": "Average"
@@ -229,11 +239,16 @@
       "pluginVersion": "13.1.0",
       "targets": [
         {
+          "datasource": { "type": "cloudwatch", "uid": "cloudwatch" },
           "dimensions": { "LoadBalancer": "$alb_dimension", "TargetGroup": "$target_group_dimension" },
           "expression": "",
+          "matchExact": true,
+          "metricEditorMode": 0,
           "metricName": "HealthyHostCount",
+          "metricQueryType": 0,
           "namespace": "AWS/ApplicationELB",
           "period": "60",
+          "queryMode": "Metrics",
           "refId": "A",
           "region": "ap-northeast-2",
           "statistic": "Minimum"
@@ -270,9 +285,9 @@
       },
       "pluginVersion": "13.1.0",
       "targets": [
-        { "dimensions": { "AutoScalingGroupName": "$autoscaling_group_name" }, "expression": "", "metricName": "GroupDesiredCapacity", "namespace": "AWS/AutoScaling", "period": "60", "refId": "A", "region": "ap-northeast-2", "statistic": "Average" },
-        { "dimensions": { "AutoScalingGroupName": "$autoscaling_group_name" }, "expression": "", "metricName": "GroupInServiceInstances", "namespace": "AWS/AutoScaling", "period": "60", "refId": "B", "region": "ap-northeast-2", "statistic": "Average" },
-        { "dimensions": { "AutoScalingGroupName": "$autoscaling_group_name" }, "expression": "", "metricName": "GroupPendingInstances", "namespace": "AWS/AutoScaling", "period": "60", "refId": "C", "region": "ap-northeast-2", "statistic": "Average" }
+        { "datasource": { "type": "cloudwatch", "uid": "cloudwatch" }, "dimensions": { "AutoScalingGroupName": "$autoscaling_group_name" }, "expression": "", "matchExact": true, "metricEditorMode": 0, "metricName": "GroupDesiredCapacity", "metricQueryType": 0, "namespace": "AWS/AutoScaling", "period": "60", "queryMode": "Metrics", "refId": "A", "region": "ap-northeast-2", "statistic": "Average" },
+        { "datasource": { "type": "cloudwatch", "uid": "cloudwatch" }, "dimensions": { "AutoScalingGroupName": "$autoscaling_group_name" }, "expression": "", "matchExact": true, "metricEditorMode": 0, "metricName": "GroupInServiceInstances", "metricQueryType": 0, "namespace": "AWS/AutoScaling", "period": "60", "queryMode": "Metrics", "refId": "B", "region": "ap-northeast-2", "statistic": "Average" },
+        { "datasource": { "type": "cloudwatch", "uid": "cloudwatch" }, "dimensions": { "AutoScalingGroupName": "$autoscaling_group_name" }, "expression": "", "matchExact": true, "metricEditorMode": 0, "metricName": "GroupPendingInstances", "metricQueryType": 0, "namespace": "AWS/AutoScaling", "period": "60", "queryMode": "Metrics", "refId": "C", "region": "ap-northeast-2", "statistic": "Average" }
       ],
       "title": "ASG Desired / InService / Pending",
       "type": "timeseries"
@@ -369,8 +384,8 @@
       },
       "pluginVersion": "13.1.0",
       "targets": [
-        { "dimensions": { "DBInstanceIdentifier": "$db_instance_identifier" }, "expression": "", "metricName": "CPUUtilization", "namespace": "AWS/RDS", "period": "60", "refId": "A", "region": "ap-northeast-2", "statistic": "Average" },
-        { "dimensions": { "CacheClusterId": "$cache_cluster_id" }, "expression": "", "metricName": "EngineCPUUtilization", "namespace": "AWS/ElastiCache", "period": "60", "refId": "B", "region": "ap-northeast-2", "statistic": "Average" }
+        { "datasource": { "type": "cloudwatch", "uid": "cloudwatch" }, "dimensions": { "DBInstanceIdentifier": "$db_instance_identifier" }, "expression": "", "matchExact": true, "metricEditorMode": 0, "metricName": "CPUUtilization", "metricQueryType": 0, "namespace": "AWS/RDS", "period": "60", "queryMode": "Metrics", "refId": "A", "region": "ap-northeast-2", "statistic": "Average" },
+        { "datasource": { "type": "cloudwatch", "uid": "cloudwatch" }, "dimensions": { "CacheClusterId": "$cache_cluster_id" }, "expression": "", "matchExact": true, "metricEditorMode": 0, "metricName": "EngineCPUUtilization", "metricQueryType": 0, "namespace": "AWS/ElastiCache", "period": "60", "queryMode": "Metrics", "refId": "B", "region": "ap-northeast-2", "statistic": "Average" }
       ],
       "title": "RDS / Redis CPU",
       "type": "timeseries"
@@ -429,11 +444,11 @@
       { "name": "instance", "type": "query", "query": "label_values(up{job=\"backend\"}, instance_id)", "datasource": { "type": "prometheus", "uid": "prometheus" }, "refresh": 2, "sort": 1, "includeAll": true, "multi": true, "current": {} },
       { "name": "availability_zone", "type": "query", "query": "label_values(up{job=\"backend\"}, availability_zone)", "datasource": { "type": "prometheus", "uid": "prometheus" }, "refresh": 2, "sort": 1, "includeAll": true, "multi": true, "current": {} },
       { "name": "route", "type": "query", "query": "label_values(http_server_requests_seconds_count{job=\"backend\"}, uri)", "datasource": { "type": "prometheus", "uid": "prometheus" }, "refresh": 2, "sort": 1, "includeAll": true, "multi": true, "current": {}, "description": "Spring Boot Actuator's actual Prometheus label is 'uri'." },
-      { "name": "alb_dimension", "type": "custom", "query": "<resolve from aws/resource-dimensions.json>", "includeAll": false, "multi": false, "current": { "text": "<set from evidence>", "value": "<set from evidence>" }, "description": "ALB ARN suffix after loadbalancer/. Set from aws/resource-dimensions.json before capture." },
-      { "name": "target_group_dimension", "type": "custom", "query": "<resolve from aws/resource-dimensions.json>", "includeAll": false, "multi": false, "current": { "text": "<set from evidence>", "value": "<set from evidence>" }, "description": "Target group ARN suffix after targetgroup/. Set from aws/resource-dimensions.json before capture." },
-      { "name": "autoscaling_group_name", "type": "custom", "query": "<resolve from aws/resource-dimensions.json>", "includeAll": false, "multi": false, "current": { "text": "<set from evidence>", "value": "<set from evidence>" }, "description": "Backend ASG name. Set from aws/resource-dimensions.json before capture." },
-      { "name": "db_instance_identifier", "type": "custom", "query": "<resolve from aws/resource-dimensions.json>", "includeAll": false, "multi": false, "current": { "text": "<set from evidence>", "value": "<set from evidence>" }, "description": "RDS DBInstanceIdentifier. Set from aws/resource-dimensions.json before capture." },
-      { "name": "cache_cluster_id", "type": "custom", "query": "<resolve from aws/resource-dimensions.json>", "includeAll": false, "multi": false, "current": { "text": "<set from evidence>", "value": "<set from evidence>" }, "description": "ElastiCache CacheClusterId/member cluster ID. Set from aws/resource-dimensions.json before capture." }
+      { "name": "alb_dimension", "type": "custom", "query": "__runtime__", "includeAll": false, "multi": false, "current": { "text": "__runtime__", "value": "__runtime__" }, "description": "Runtime-only ALB ARN suffix after loadbalancer/. The evidence exporter injects var-alb_dimension from aws/resource-dimensions.json into the capture URL." },
+      { "name": "target_group_dimension", "type": "custom", "query": "__runtime__", "includeAll": false, "multi": false, "current": { "text": "__runtime__", "value": "__runtime__" }, "description": "Runtime-only target group ARN suffix after targetgroup/. The evidence exporter injects var-target_group_dimension from aws/resource-dimensions.json into the capture URL." },
+      { "name": "autoscaling_group_name", "type": "custom", "query": "__runtime__", "includeAll": false, "multi": false, "current": { "text": "__runtime__", "value": "__runtime__" }, "description": "Runtime-only backend ASG name. The evidence exporter injects var-autoscaling_group_name from aws/resource-dimensions.json into the capture URL." },
+      { "name": "db_instance_identifier", "type": "custom", "query": "__runtime__", "includeAll": false, "multi": false, "current": { "text": "__runtime__", "value": "__runtime__" }, "description": "Runtime-only RDS DBInstanceIdentifier. The evidence exporter injects var-db_instance_identifier from aws/resource-dimensions.json into the capture URL." },
+      { "name": "cache_cluster_id", "type": "custom", "query": "__runtime__", "includeAll": false, "multi": false, "current": { "text": "__runtime__", "value": "__runtime__" }, "description": "Runtime-only ElastiCache CacheClusterId/member cluster ID. The evidence exporter injects var-cache_cluster_id from aws/resource-dimensions.json into the capture URL." }
     ]
   },
   "time": { "from": "now-1h", "to": "now" },
