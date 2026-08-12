@@ -65,6 +65,12 @@ SCENARIO_RUN_PREFIX = {
     "R-05": "aws-r05-",
     "R-07": "aws-r07-",
 }
+# Plan 06 requires detection time and rollback execution delay to be reported
+# separately, and Plan 07's acceptance matrix scopes R-05 to T4->T6. In these
+# scenarios recovery is deliberately manual, so T1->T6 also contains the fault
+# rollout and the operator's decision latency. The budget therefore gates the
+# recovery execution window; T1->T6 is still measured and recorded.
+MANUAL_RECOVERY_SCENARIOS = frozenset({"R-03", "R-05", "R-07"})
 SLO_CONTRACT = load_contract()
 
 
@@ -453,6 +459,10 @@ def assert_scenario_slo(
                 f"unexpected={unexpected_total} contractFailures={contract_total}"
             )
         return
+    if scenario in MANUAL_RECOVERY_SCENARIOS:
+        if not satisfies(SLO_CONTRACT, "recoveryBudgetSeconds", t4_to_t6):
+            raise RecoverySloFailure(f"recovery budget exceeded: T4->T6={t4_to_t6:.1f}s")
+        return
     if not satisfies(SLO_CONTRACT, "recoveryBudgetSeconds", t1_to_t6) or not satisfies(
         SLO_CONTRACT, "recoveryBudgetSeconds", t4_to_t6
     ):
@@ -698,11 +708,22 @@ def evaluate(args: argparse.Namespace) -> dict:
         "budgetSeconds": budget_seconds,
         "scenario": scenario,
         "recoveryBudgetApplied": scenario != "R-01",
+        "recoveryBudgetScope": (
+            "not-applied"
+            if scenario == "R-01"
+            else "T4->T6" if scenario in MANUAL_RECOVERY_SCENARIOS else "T1->T6 and T4->T6"
+        ),
         "budgetPolicyNote": (
             "R-01 is a planned staged rollout: Plan 07 does not put it under the failure-recovery "
             "budget, so the frozen contract's r01 zero-error comparators were applied instead and "
             "the timings above are recorded for reference."
             if scenario == "R-01"
+            else
+            "Manual-recovery scenario: Plan 06 requires detection time and rollback execution delay to "
+            "be reported separately and Plan 07 scopes R-05 to T4->T6, so the budget gates the recovery "
+            "execution window. T1->T6 additionally contains the fault rollout and operator decision "
+            "latency and is recorded above for reference."
+            if scenario in MANUAL_RECOVERY_SCENARIOS
             else "Failure-recovery budget applied to both T1->T6 and T4->T6."
         ),
         "stableWindowSeconds": window_seconds,

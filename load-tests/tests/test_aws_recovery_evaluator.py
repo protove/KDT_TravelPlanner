@@ -517,12 +517,20 @@ class ScenarioAwareBudgetTests(unittest.TestCase):
         with self.assertRaisesRegex(MODULE.RecoverySloFailure, "zero user-visible errors"):
             MODULE.assert_scenario_slo("R-01", 100.0, 100.0, 0, 1)
 
-    def test_failure_scenarios_still_enforce_the_budget(self) -> None:
-        for scenario in ("B-02", "R-03", "R-05", "R-07"):
+    def test_automated_recovery_enforces_both_windows(self) -> None:
+        with self.assertRaisesRegex(MODULE.RecoverySloFailure, "T1->T6"):
+            MODULE.assert_scenario_slo("B-02", self.OVER_BUDGET, self.WITHIN_BUDGET, 0, 0)
+        MODULE.assert_scenario_slo("B-02", self.WITHIN_BUDGET, self.WITHIN_BUDGET, 0, 0)
+
+    def test_manual_recovery_gates_only_the_execution_window(self) -> None:
+        """R-03/R-05/R-07 recover by hand, so T1->T6 carries operator decision latency."""
+        for scenario in ("R-03", "R-05", "R-07"):
             with self.subTest(scenario=scenario):
-                with self.assertRaisesRegex(MODULE.RecoverySloFailure, "recovery budget exceeded"):
-                    MODULE.assert_scenario_slo(scenario, self.OVER_BUDGET, self.WITHIN_BUDGET, 0, 0)
-                MODULE.assert_scenario_slo(scenario, self.WITHIN_BUDGET, self.WITHIN_BUDGET, 0, 0)
+                # Slow detection/decision but fast recovery execution passes.
+                MODULE.assert_scenario_slo(scenario, self.OVER_BUDGET, self.WITHIN_BUDGET, 0, 0)
+                # A slow recovery execution still fails.
+                with self.assertRaisesRegex(MODULE.RecoverySloFailure, "T4->T6"):
+                    MODULE.assert_scenario_slo(scenario, self.WITHIN_BUDGET, self.OVER_BUDGET, 0, 0)
 
     def test_omitting_the_scenario_keeps_the_previous_behaviour(self) -> None:
         with self.assertRaisesRegex(MODULE.RecoverySloFailure, "recovery budget exceeded"):
