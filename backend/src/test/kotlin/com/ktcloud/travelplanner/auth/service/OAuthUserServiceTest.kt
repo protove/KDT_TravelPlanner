@@ -15,18 +15,30 @@ import kotlin.test.assertSame
 
 class OAuthUserServiceTest {
 	private val userRepository = mock(UserRepository::class.java)
-	private val service = OAuthUserService(userRepository)
+	private val newUserRegistrar = mock(OAuthNewUserRegistrar::class.java)
+	private val service = OAuthUserService(userRepository, newUserRegistrar)
 
 	@Test
 	fun `creates a new user from Google profile`() {
 		val profile = profile()
+		val registeredUser = User(
+			provider = OAuthProvider.GOOGLE,
+			providerUserId = "google-user",
+			email = profile.email,
+			name = profile.name,
+		).also {
+			it.updateOAuthProfile(profile.email, profile.name, profile.profileImageUrl)
+			it.assignGeneratedNickname("여행러123456")
+		}
 		`when`(
 			userRepository.findByProviderAndProviderUserId(
 				OAuthProvider.GOOGLE,
 				"google-user",
 			),
 		).thenReturn(null)
-		`when`(userRepository.save(any(User::class.java))).thenAnswer { it.getArgument(0) }
+		// 신규 유저 저장은 이제 userRepository.save()가 아니라 newUserRegistrar.register()를
+		// 거치므로(동시가입 재시도를 위해 독립 트랜잭션으로 분리됨), 그쪽을 스텁한다.
+		`when`(newUserRegistrar.register(profile)).thenReturn(registeredUser)
 
 		val user = service.upsert(profile)
 
@@ -35,6 +47,7 @@ class OAuthUserServiceTest {
 		assertEquals("user@example.com", user.email)
 		assertEquals("Google User", user.name)
 		assertEquals("https://images.example/profile.png", user.profileImageUrl)
+		assertEquals("여행러123456", user.nickname)
 	}
 
 	@Test
