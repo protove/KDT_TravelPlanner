@@ -117,6 +117,46 @@ class DashboardStructureTest(unittest.TestCase):
                     f"panel {panel['id']} has hardcoded CloudWatch dimensions: {dimensions}",
                 )
 
+    def test_cloudwatch_targets_have_grafana_13_metrics_query_model(self):
+        required = {
+            "datasource", "queryMode", "metricQueryType", "metricEditorMode", "matchExact",
+        }
+        for panel in self.dashboard["panels"]:
+            if panel.get("datasource", {}).get("type") != "cloudwatch":
+                continue
+            for target in panel.get("targets", []):
+                self.assertTrue(
+                    required.issubset(target),
+                    f"panel {panel['id']} target is missing Grafana CloudWatch query fields",
+                )
+                self.assertEqual(target["datasource"], {"type": "cloudwatch", "uid": "cloudwatch"})
+                self.assertEqual(target["queryMode"], "Metrics")
+                self.assertEqual(target["metricQueryType"], 0)
+                self.assertEqual(target["metricEditorMode"], 0)
+                self.assertTrue(target["matchExact"])
+
+    def test_cloudwatch_variables_use_runtime_sentinel_not_unresolved_markup(self):
+        cloudwatch_variables = {
+            "alb_dimension", "target_group_dimension", "autoscaling_group_name",
+            "db_instance_identifier", "cache_cluster_id",
+        }
+        variables = {
+            variable["name"]: variable
+            for variable in self.dashboard["templating"]["list"]
+            if variable["name"] in cloudwatch_variables
+        }
+        self.assertEqual(set(variables), cloudwatch_variables)
+        for name, variable in variables.items():
+            self.assertEqual(variable["query"], "__runtime__", name)
+            self.assertEqual(
+                variable["current"],
+                {"text": "__runtime__", "value": "__runtime__"},
+                name,
+            )
+        serialized = json.dumps(self.dashboard)
+        self.assertNotIn("<resolve from aws/resource-dimensions.json>", serialized)
+        self.assertNotIn("<set from evidence>", serialized)
+
     def test_no_user_flow_deep_diagnostic_panels(self):
         # Plan04: rows 8-11 (flow starts/completed/E2E, flow_id/flow_step) are
         # for workloadModel=user-flow deep diagnostics only, not the EC2

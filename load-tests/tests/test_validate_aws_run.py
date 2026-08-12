@@ -94,7 +94,9 @@ def write_phase_dir(
 
 def write_valid_fixture_bundle(root: Path, *, run_id: str = "run-valid") -> Path:
     root.mkdir(parents=True, exist_ok=True)
-    (root / "metadata.json").write_text(json.dumps({"runId": run_id}), encoding="utf-8")
+    (root / "metadata.json").write_text(
+        json.dumps({"runId": run_id, "commitSha": "a" * 40}), encoding="utf-8"
+    )
     (root / "operations.jsonl").write_text(
         json.dumps({"ts": "2026-01-01T00:00:00Z", "event": "RUN_START"}) + "\n"
         + json.dumps({"ts": "2026-01-01T01:00:00Z", "event": "RUN_END"}) + "\n",
@@ -115,6 +117,9 @@ def write_valid_fixture_bundle(root: Path, *, run_id: str = "run-valid") -> Path
         (stages / f"{phase}.json").write_text(json.dumps({
             "stage": phase,
             "runId": run_id,
+            "profileSha256": "b" * 64,
+            "sourceCommitSha": "a" * 40,
+            "inputDigest": ("%064x" % (VALIDATE.ASSESSED_PHASES.index(phase) + 1)),
             "fixtureId": phase,
             "fixtureResultPath": f"fixtures/{phase}.json",
             "fixtureExpectedUsers": 2,
@@ -179,6 +184,34 @@ class EvaluatePhaseTest(unittest.TestCase):
 
             self.assertFalse(result["sloPass"])
             self.assertAlmostEqual(result["unexpectedErrorRate"], 0.10)
+
+    def test_baseline_fails_slo_when_contract_failure_rate_reaches_one_percent(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            start = datetime(2026, 1, 1, tzinfo=timezone.utc)
+            phase_dir = write_phase_dir(
+                root, "baseline-2", run_start=start, warmup_seconds=180, rate=12,
+                k6_exit_code=0, dropped_iterations=0, p95_ms=120,
+                completed=100, successful=100, unexpected=0, contract_failures=1,
+            )
+            result = VALIDATE.evaluate_phase(phase_dir)
+
+            self.assertFalse(result["sloPass"])
+            self.assertAlmostEqual(result["contractFailureRate"], 0.01)
+
+    def test_baseline_passes_when_contract_failure_rate_is_below_one_percent(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            start = datetime(2026, 1, 1, tzinfo=timezone.utc)
+            phase_dir = write_phase_dir(
+                root, "baseline-2", run_start=start, warmup_seconds=180, rate=12,
+                k6_exit_code=0, dropped_iterations=0, p95_ms=120,
+                completed=101, successful=101, unexpected=0, contract_failures=1,
+            )
+            result = VALIDATE.evaluate_phase(phase_dir)
+
+            self.assertTrue(result["sloPass"])
+            self.assertLess(result["contractFailureRate"], 0.01)
 
     def test_dropped_iterations_fail_slo_even_with_good_ratios(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -283,6 +316,74 @@ class BaselineCandidateTest(unittest.TestCase):
         candidate = VALIDATE.evaluate_baseline_candidate(reps, confirmed_rate=12)
         self.assertFalse(candidate["frozen"])
         self.assertFalse(candidate["rateConsistentAcrossReps"])
+
+    def test_not_frozen_without_a_positive_confirmed_rate(self):
+        reps = [self._rep(rate=12, slo_pass=True) for _ in range(3)]
+        self.assertFalse(VALIDATE.evaluate_baseline_candidate(reps, confirmed_rate=None)["frozen"])
+        self.assertFalse(VALIDATE.evaluate_baseline_candidate(reps, confirmed_rate=0)["frozen"])
+
+    def test_not_frozen_when_confirmed_rate_differs(self):
+        reps = [self._rep(rate=12, slo_pass=True) for _ in range(3)]
+        candidate = VALIDATE.evaluate_baseline_candidate(reps, confirmed_rate=10)
+        self.assertFalse(candidate["frozen"])
+        self.assertFalse(candidate["rateMatchesConfirmedRate"])
+
+    def test_not_frozen_when_any_baseline_rate_is_missing_or_non_positive(self):
+        missing = [self._rep(rate=12, slo_pass=True), self._rep(rate=None, slo_pass=True), self._rep(rate=12, slo_pass=True)]
+        zero = [self._rep(rate=12, slo_pass=True), self._rep(rate=0, slo_pass=True), self._rep(rate=12, slo_pass=True)]
+        self.assertFalse(VALIDATE.evaluate_baseline_candidate(missing, confirmed_rate=12)["frozen"])
+        self.assertFalse(VALIDATE.evaluate_baseline_candidate(zero, confirmed_rate=12)["frozen"])
+
+    def test_baseline_candidate_only_writes_a_d005_evidence_artifact(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = write_valid_fixture_bundle(Path(directory))
+            report = VALIDATE.evaluate_baseline_candidate_only(root, confirmed_rate=12)
+            artifact = json.loads((root / "baseline-candidate.json").read_text(encoding="utf-8"))
+            self.assertTrue(report["passed"])
+            self.assertTrue(artifact["baselineCandidate"]["frozen"])
+            self.assertEqual(artifact["confirmedRate"], 12)
+            self.assertEqual(artifact["sourceCommitSha"], "a" * 40)
+            self.assertEqual(artifact["profileSha256"], "b" * 64)
+            self.assertTrue(artifact["inputDigestContractPassed"])
+
+    def test_baseline_candidate_only_rejects_stale_source_commit_marker(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = write_valid_fixture_bundle(Path(directory))
+            marker = root / "stages" / "baseline-2.json"
+            payload = json.loads(marker.read_text(encoding="utf-8"))
+            payload["sourceCommitSha"] = "c" * 40
+            marker.write_text(json.dumps(payload), encoding="utf-8")
+
+            report = VALIDATE.evaluate_baseline_candidate_only(root, confirmed_rate=12)
+
+            self.assertFalse(report["passed"])
+            self.assertFalse(report["digestGatePassed"])
+
+    def test_baseline_candidate_only_rejects_missing_input_digest(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = write_valid_fixture_bundle(Path(directory))
+            marker = root / "stages" / "baseline-3.json"
+            payload = json.loads(marker.read_text(encoding="utf-8"))
+            del payload["inputDigest"]
+            marker.write_text(json.dumps(payload), encoding="utf-8")
+
+            report = VALIDATE.evaluate_baseline_candidate_only(root, confirmed_rate=12)
+
+            self.assertFalse(report["passed"])
+            self.assertFalse(report["inputDigestContractPassed"])
+
+    def test_baseline_candidate_only_rejects_missing_profile_digest(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = write_valid_fixture_bundle(Path(directory))
+            marker = root / "stages" / "baseline-2.json"
+            payload = json.loads(marker.read_text(encoding="utf-8"))
+            del payload["profileSha256"]
+            marker.write_text(json.dumps(payload), encoding="utf-8")
+
+            report = VALIDATE.evaluate_baseline_candidate_only(root, confirmed_rate=12)
+
+            self.assertFalse(report["passed"])
+            self.assertFalse(report["digestGatePassed"])
 
 
 class BundleStructureTest(unittest.TestCase):

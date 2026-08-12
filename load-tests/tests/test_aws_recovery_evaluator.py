@@ -1,0 +1,288 @@
+from __future__ import annotations
+
+import importlib.util
+import hashlib
+import json
+import tempfile
+import unittest
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+
+SCRIPT_PATH = Path(__file__).parents[2] / "scripts/loadtest/aws/evaluate-aws-recovery.py"
+SPEC = importlib.util.spec_from_file_location("evaluate_aws_recovery", SCRIPT_PATH)
+MODULE = importlib.util.module_from_spec(SPEC)
+assert SPEC and SPEC.loader
+SPEC.loader.exec_module(MODULE)
+
+PROFILE_PATH = Path(__file__).parents[1] / "aws/profiles/ec2-recovery.json"
+
+
+def write_json(path: Path, payload: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+
+
+def event(ts: datetime, name: str) -> dict:
+    return {"ts": ts.isoformat().replace("+00:00", "Z"), "event": name, "detail": "fixture", "actor": "test"}
+
+
+class AwsRecoveryEvaluatorTest(unittest.TestCase):
+    def build_run(self, root: Path, *, gaps: set[int] | None = None, runner_bottleneck: bool = False):
+        start = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        run_id = "aws-recovery-fixture-001"
+        freeze = root / "freeze-metadata.json"
+        d005 = root / "d005-arrival-rate.json"
+        b01_profile = root / "ec2-b01.json"
+        b01_profile.write_text('{"profileVersion":"fixture-b01"}\n', encoding="utf-8")
+        candidate = root / "baseline-candidate.json"
+        candidate.write_text('{"candidate":"fixture"}\n', encoding="utf-8")
+        b01_profile_sha = hashlib.sha256(b01_profile.read_bytes()).hexdigest()
+        candidate_sha = hashlib.sha256(candidate.read_bytes()).hexdigest()
+        write_json(freeze, {"runId": "aws-b01-fixture-001", "sloVersion": "v1.0-frozen", "approvedBy": "test"})
+        write_json(d005, {
+            "runId": "aws-b01-fixture-001",
+            "arrivalRate": 1,
+            "sourceCommitSha": "a" * 40,
+            "profileSha256": b01_profile_sha,
+            "baselineCandidateSha256": candidate_sha,
+        })
+        write_json(root / "metadata.json", {
+            "runId": run_id,
+            "scenarioId": "AWS-RECOVERY",
+            "environment": "dev-runtime",
+            "rate": 1,
+            "commitSha": "a" * 40,
+            "k6Image": "grafana/k6:0.54.0@sha256:" + "b" * 64,
+            "profileSha256": hashlib.sha256(PROFILE_PATH.read_bytes()).hexdigest(),
+        })
+        events = [
+            event(start + timedelta(seconds=0), "RUN_START"),
+            event(start + timedelta(seconds=20), "T0"),
+            event(start + timedelta(seconds=40), "T1"),
+            event(start + timedelta(seconds=50), "T2"),
+            event(start + timedelta(seconds=60), "T3"),
+            event(start + timedelta(seconds=70), "T4"),
+            event(start + timedelta(seconds=75), "T5"),
+            event(start + timedelta(seconds=210), "RUN_END"),
+        ]
+        (root / "operations.jsonl").write_text(
+            "\n".join(json.dumps(item) for item in events) + "\n", encoding="utf-8"
+        )
+        points = []
+        for bucket in range(0, 210, 10):
+            if bucket in (gaps or set()):
+                continue
+            point_time = (start + timedelta(seconds=bucket)).isoformat().replace("+00:00", "Z")
+            points.extend([
+                {"type": "Point", "metric": "core_operation_duration", "data": {"time": point_time, "value": 100}},
+                {"type": "Point", "metric": "core_operations_total", "data": {"time": point_time, "value": 10}},
+                {"type": "Point", "metric": "core_completed_operations_total", "data": {"time": point_time, "value": 10}},
+                {"type": "Point", "metric": "core_successful_operations_total", "data": {"time": point_time, "value": 10}},
+                {"type": "Point", "metric": "core_unexpected_errors_total", "data": {"time": point_time, "value": 0}},
+                {"type": "Point", "metric": "core_contract_failures_total", "data": {"time": point_time, "value": 0}},
+            ])
+        (root / "raw.json").write_text("\n".join(json.dumps(point) for point in points) + "\n", encoding="utf-8")
+        write_json(root / "summary.json", {"metrics": {"dropped_iterations": {"count": 0}}})
+        write_json(root / "run-status.json", {
+            "k6ExitCode": 0, "k6ContainerOomKilled": False, "k6ContainerRestartCount": 0,
+        })
+        (root / "runner-stats.jsonl").write_text(json.dumps({
+            "docker": {"CPUPerc": "95.00%" if runner_bottleneck else "1.00%", "MemPerc": "2.00%"},
+        }) + "\n", encoding="utf-8")
+        required = [
+            "core_operations_total", "core_completed_operations_total",
+            "core_successful_operations_total", "core_unexpected_errors_total",
+            "core_contract_failures_total", "core_operation_duration", "runner_stats",
+            "aws_target_health", "aws_asg_activities",
+        ]
+        write_json(root / "monitoring" / "required-metrics.json", {
+            "metrics": {
+                name: {"status": "collected", "datapointCount": 1}
+                for name in required
+            }
+        })
+        return run_id, freeze, d005, b01_profile, candidate
+
+    def args(self, root: Path, run_id: str, freeze: Path, d005: Path, b01_profile: Path, candidate: Path):
+        return type("Args", (), {
+            "run_dir": root,
+            "run_id": run_id,
+            "profile": PROFILE_PATH,
+            "b01_profile": b01_profile,
+            "freeze_metadata": freeze,
+            "d005_rate_file": d005,
+            "baseline_candidate": candidate,
+            "rate": "1",
+            "source_sha": "a" * 40,
+            "k6_image": "grafana/k6:0.54.0@sha256:" + "b" * 64,
+        })()
+
+    def set_recovery_bucket_metric(self, root: Path, bucket_seconds: int, metric: str, value: int) -> None:
+        target_time = (
+            datetime(2026, 1, 1, tzinfo=timezone.utc) + timedelta(seconds=bucket_seconds)
+        ).isoformat().replace("+00:00", "Z")
+        lines = []
+        changed = False
+        for raw_line in (root / "raw.json").read_text(encoding="utf-8").splitlines():
+            point = json.loads(raw_line)
+            if (
+                point.get("metric") == metric
+                and point.get("data", {}).get("time") == target_time
+            ):
+                point["data"]["value"] = value
+                changed = True
+            lines.append(json.dumps(point))
+        self.assertTrue(changed, f"fixture did not contain {metric} at {target_time}")
+        (root / "raw.json").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    def test_contiguous_window_passes_and_records_t6(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_id, freeze, d005, b01_profile, candidate = self.build_run(root)
+            result = MODULE.evaluate(self.args(root, run_id, freeze, d005, b01_profile, candidate))
+            self.assertEqual(result["status"], "PASSED")
+            self.assertEqual(result["T1ToT6Seconds"], 160.0)
+            self.assertEqual(result["T4ToT6Seconds"], 130.0)
+            self.assertEqual(result["T6"], "2026-01-01T00:03:20.000Z")
+            events = [json.loads(line)["event"] for line in (root / "operations.jsonl").read_text().splitlines()]
+            self.assertLess(events.index("T6"), events.index("RUN_END"))
+            self.assertTrue((root / "recovery-verdict.json").exists())
+
+    def test_missing_required_metric_is_invalid(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_id, freeze, d005, b01_profile, candidate = self.build_run(root)
+            payload = json.loads((root / "monitoring" / "required-metrics.json").read_text())
+            del payload["metrics"]["aws_asg_activities"]
+            write_json(root / "monitoring" / "required-metrics.json", payload)
+            with self.assertRaises(MODULE.RecoveryValidationError):
+                MODULE.evaluate(self.args(root, run_id, freeze, d005, b01_profile, candidate))
+
+    def test_t5_mid_bucket_does_not_reuse_pre_t5_samples(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_id, freeze, d005, b01_profile, candidate = self.build_run(root)
+            result = MODULE.evaluate(self.args(root, run_id, freeze, d005, b01_profile, candidate))
+            # T5=75s is inside the 70-80s bucket; the first eligible bucket
+            # is 80s, so the 12-bucket window ends at 200s.
+            self.assertEqual(result["T6"], "2026-01-01T00:03:20.000Z")
+
+    def test_recovery_window_after_run_end_is_invalid(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_id, freeze, d005, b01_profile, candidate = self.build_run(root)
+            operations = [json.loads(line) for line in (root / "operations.jsonl").read_text().splitlines()]
+            for item in operations:
+                if item["event"] == "RUN_END":
+                    item["ts"] = "2026-01-01T00:02:30Z"
+            (root / "operations.jsonl").write_text(
+                "\n".join(json.dumps(item) for item in operations) + "\n", encoding="utf-8"
+            )
+            with self.assertRaises(MODULE.RecoveryValidationError):
+                MODULE.evaluate(self.args(root, run_id, freeze, d005, b01_profile, candidate))
+
+    def test_t6_after_run_end_is_invalid(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_id, freeze, d005, b01_profile, candidate = self.build_run(root)
+            operations = [json.loads(line) for line in (root / "operations.jsonl").read_text().splitlines()]
+            run_end = operations.pop()
+            operations.extend([
+                run_end,
+                {"ts": "2026-01-01T00:03:20Z", "event": "T6"},
+            ])
+            (root / "operations.jsonl").write_text(
+                "\n".join(json.dumps(item) for item in operations) + "\n", encoding="utf-8"
+            )
+            with self.assertRaises(MODULE.RecoveryValidationError):
+                MODULE.evaluate(self.args(root, run_id, freeze, d005, b01_profile, candidate))
+
+    def test_gap_in_recovery_window_is_invalid(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_id, freeze, d005, b01_profile, candidate = self.build_run(root, gaps={120})
+            with self.assertRaises(MODULE.RecoveryValidationError):
+                MODULE.evaluate(self.args(root, run_id, freeze, d005, b01_profile, candidate))
+
+    def test_single_recovery_bucket_unexpected_error_rate_is_invalid(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_id, freeze, d005, b01_profile, candidate = self.build_run(root, gaps={200})
+            # One 10-second bucket has 10% unexpected errors. The aggregate
+            # window rate is still below 1%, so this catches aggregate-only
+            # validation regressions.
+            self.set_recovery_bucket_metric(root, 80, "core_unexpected_errors_total", 1)
+            with self.assertRaises(MODULE.RecoveryValidationError):
+                MODULE.evaluate(self.args(root, run_id, freeze, d005, b01_profile, candidate))
+
+    def test_single_recovery_bucket_contract_failure_rate_is_invalid(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_id, freeze, d005, b01_profile, candidate = self.build_run(root, gaps={200})
+            self.set_recovery_bucket_metric(root, 80, "core_contract_failures_total", 1)
+            with self.assertRaises(MODULE.RecoveryValidationError):
+                MODULE.evaluate(self.args(root, run_id, freeze, d005, b01_profile, candidate))
+
+    def test_adjacent_physical_event_swaps_are_invalid(self):
+        for first, second in (("T1", "T2"), ("T3", "T4")):
+            with self.subTest(first=first, second=second), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                run_id, freeze, d005, b01_profile, candidate = self.build_run(root)
+                operations = [
+                    json.loads(line)
+                    for line in (root / "operations.jsonl").read_text(encoding="utf-8").splitlines()
+                ]
+                indices = [index for index, item in enumerate(operations) if item["event"] in (first, second)]
+                self.assertEqual(len(indices), 2)
+                operations[indices[0]], operations[indices[1]] = operations[indices[1]], operations[indices[0]]
+                (root / "operations.jsonl").write_text(
+                    "\n".join(json.dumps(item) for item in operations) + "\n", encoding="utf-8"
+                )
+                with self.assertRaises(MODULE.RecoveryValidationError):
+                    MODULE.evaluate(self.args(root, run_id, freeze, d005, b01_profile, candidate))
+
+    def test_missing_freeze_is_invalid(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_id, freeze, d005, b01_profile, candidate = self.build_run(root)
+            freeze.unlink()
+            with self.assertRaises(MODULE.RecoveryValidationError):
+                MODULE.evaluate(self.args(root, run_id, freeze, d005, b01_profile, candidate))
+
+    def test_freeze_without_b01_run_id_is_invalid(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_id, freeze, d005, b01_profile, candidate = self.build_run(root)
+            write_json(freeze, {"sloVersion": "v1.0-frozen", "approvedBy": "test"})
+            with self.assertRaises(MODULE.RecoveryValidationError):
+                MODULE.evaluate(self.args(root, run_id, freeze, d005, b01_profile, candidate))
+
+    def test_d005_rate_mismatch_is_invalid(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_id, freeze, d005, b01_profile, candidate = self.build_run(root)
+            args = self.args(root, run_id, freeze, d005, b01_profile, candidate)
+            args.rate = "2"
+            with self.assertRaises(MODULE.RecoveryValidationError):
+                MODULE.evaluate(args)
+
+    def test_runner_bottleneck_is_invalid(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_id, freeze, d005, b01_profile, candidate = self.build_run(root, runner_bottleneck=True)
+            with self.assertRaises(MODULE.RecoveryValidationError):
+                MODULE.evaluate(self.args(root, run_id, freeze, d005, b01_profile, candidate))
+
+    def test_source_and_image_gates_are_checked(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_id, freeze, d005, b01_profile, candidate = self.build_run(root)
+            args = self.args(root, run_id, freeze, d005, b01_profile, candidate)
+            args.source_sha = "c" * 40
+            with self.assertRaises(MODULE.RecoveryValidationError):
+                MODULE.evaluate(args)
+
+
+if __name__ == "__main__":
+    unittest.main()

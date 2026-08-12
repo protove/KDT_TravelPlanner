@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import shlex
 import subprocess
@@ -98,6 +99,58 @@ class AwsOrchestrationContractTests(unittest.TestCase):
         self.assertIn("--runner-instance-type TYPE", result.stdout)
         self.assertIn("d005-record", result.stdout)
         self.assertIn("Default: 80", result.stdout)
+
+    def test_d005_and_spike_are_fail_closed_on_baseline_candidate(self) -> None:
+        source = SCRIPT.read_text(encoding="utf-8")
+        self.assertIn("require_baseline_candidate_gate", source)
+        self.assertIn("require_d005_record_gate", source)
+        self.assertIn("baseline-candidate.json is missing", source)
+        self.assertIn("Baseline x3 gate has not passed; refusing D-005/Spike", source)
+        self.assertIn("validate-aws-run.py", source)
+        self.assertIn("--baseline-candidate-only", source)
+        self.assertIn("baselineCandidateSha256", source)
+        self.assertIn("sourceCommitSha", source)
+        self.assertIn("profileSha256", source)
+        self.assertIn("profile digest does not match this run", source)
+        self.assertIn("inputDigestContractPassed", source)
+        self.assertIn('"sourceCommitSha": source_commit_sha', source)
+
+    def test_spike_peak_is_bounded_by_profile_and_operator_limits(self) -> None:
+        phase_source = AWS_PHASE_RUNNER.read_text(encoding="utf-8")
+        spike_source = (K6_ROOT / "aws/scenarios/b01-spike.js").read_text(encoding="utf-8")
+        self.assertIn("spike peak rate", phase_source)
+        self.assertIn("profile limits.maxRate", phase_source)
+        self.assertIn("RATE < REQUESTED_PEAK_RATE", spike_source)
+        self.assertIn("REQUESTED_PEAK_RATE > LIMITS.maxRate", spike_source)
+        self.assertIn("operator --max-rate", phase_source)
+
+    def test_spike_rejects_peak_above_profile_before_starting_k6(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            environment = {
+                "REPOSITORY_ROOT": str(REPOSITORY_ROOT),
+                "EVIDENCE_ROOT": directory,
+                "BASE_URL": "https://b01.example.com",
+                "K6_IMAGE_DIGEST": "grafana/k6:0.54.0@sha256:" + "a" * 64,
+                "RUN_ID": "aws-b01-spike-gate-test",
+                "AWS_PROFILE_FILE": str(PROFILE),
+                "REGION": "ap-northeast-2",
+                "ENVIRONMENT": "dev",
+                "MAX_RATE": "30",
+                "MAX_VUS": "100",
+                "EFFECTIVE_MAX_VUS": "80",
+                "CONFIRMED_RATE": "20",
+                "DATA_FILE": str(Path(directory) / "missing-data.json"),
+            }
+            result = subprocess.run(
+                ["bash", str(AWS_PHASE_RUNNER), "spike"],
+                cwd=REPOSITORY_ROOT,
+                env={**os.environ, **environment},
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("exceeds profile limits.maxRate", result.stderr)
 
     def test_phase_credential_refresh_and_profile_vu_defaults_are_preserved(self) -> None:
         orchestrator_source = SCRIPT.read_text(encoding="utf-8")

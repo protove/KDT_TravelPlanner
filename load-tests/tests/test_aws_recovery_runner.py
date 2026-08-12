@@ -1,0 +1,146 @@
+import subprocess
+import hashlib
+import json
+import shutil
+import tempfile
+import unittest
+import uuid
+from pathlib import Path
+
+
+ROOT = Path(__file__).parents[2]
+RUNNER = ROOT / "scripts/loadtest/aws/run-k6-aws-recovery.sh"
+ENTRYPOINT = ROOT / "scripts/loadtest/aws/run-aws-recovery-workload.sh"
+ORCHESTRATOR = ROOT / "scripts/loadtest/aws/orchestrate-aws-recovery.sh"
+
+
+class AwsRecoveryRunnerContractTest(unittest.TestCase):
+    def test_runner_shell_syntax_and_no_literal_escape(self):
+        subprocess.run(["bash", "-n", str(RUNNER)], check=True)
+        source = RUNNER.read_text(encoding="utf-8")
+        self.assertNotRegex(source, r"\\\$[A-Za-z#{(]")
+
+    def test_runner_preserves_preflight_metadata_and_records_profile_digest(self):
+        source = RUNNER.read_text(encoding="utf-8")
+        self.assertIn("metadata = {}", source)
+        self.assertIn("if output_path.exists()", source)
+        self.assertIn("metadata.update({", source)
+        self.assertIn('"profileSha256": hashlib.sha256(Path(profile_path).read_bytes()).hexdigest()', source)
+
+    def test_planned_entrypoint_delegates_to_k6_runner(self):
+        source = ENTRYPOINT.read_text(encoding="utf-8")
+        self.assertIn("run-k6-aws-recovery.sh", source)
+        self.assertIn("run-aws-recovery-workload.sh", ORCHESTRATOR.read_text(encoding="utf-8"))
+
+    def test_runner_has_required_evidence_outputs_and_no_intervention(self):
+        source = RUNNER.read_text(encoding="utf-8")
+        for output in ("metadata.json", "raw.json", "summary.json", "k6-native-summary.json", "run-status.json", "runner-stats.jsonl"):
+            self.assertIn(output, source)
+        self.assertIn('metadata["endedAtUtc"]', source)
+        self.assertIn('"event": "RUN_START"', source)
+        self.assertIn("RUN_END", source)
+        self.assertNotRegex(source, r"(terminate-instances|start-instance-refresh|terraform\\s+destroy)")
+
+    def test_orchestrator_has_dry_run_and_no_overwrite_guards(self):
+        source = ORCHESTRATOR.read_text(encoding="utf-8")
+        self.assertIn('[dry-run] would run AWS Recovery workload', source)
+        self.assertIn('if [[ "$MODE" == "run" ]]', source)
+        self.assertIn('refusing to reuse Recovery run with existing output', source)
+        self.assertIn('--launch-template-id', source)
+        self.assertIn('--launch-template-version', source)
+        self.assertIn('LaunchTemplateId', source)
+        self.assertIn('launch_template.get("Version")', source)
+        self.assertIn('D-005 profileSha256 does not match --b01-profile', source)
+        self.assertIn('D-005 baselineCandidateSha256 does not match --baseline-candidate', source)
+        self.assertIn('D-006 freeze runId does not match D-005 runId', source)
+
+    def test_orchestrator_requires_strict_recovery_inputs_before_live_run(self):
+        source = ORCHESTRATOR.read_text(encoding="utf-8")
+        self.assertIn('python3 - "$D005_RATE_FILE" "$FREEZE_METADATA" "$B01_PROFILE"', source)
+        self.assertIn('if [[ "$DRY_RUN" == "1" ]]; then', source)
+        self.assertIn('would run AWS Recovery workload', source)
+
+    def test_preflight_evidence_is_idempotent_and_rejects_mismatch(self):
+        run_id = f"aws-recovery-preflight-{uuid.uuid4().hex}"
+        run_dir = ROOT / "evidence" / "aws-recovery" / run_id
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Path(directory)
+            b01_profile = fixture / "b01-profile.json"
+            candidate = fixture / "baseline-candidate.json"
+            freeze = fixture / "freeze-metadata.json"
+            d005 = fixture / "d005-rate.json"
+            b01_profile.write_text('{"profileVersion":"fixture-b01"}\n', encoding="utf-8")
+            candidate.write_text('{"candidate":"fixture"}\n', encoding="utf-8")
+            b01_sha = hashlib.sha256(b01_profile.read_bytes()).hexdigest()
+            candidate_sha = hashlib.sha256(candidate.read_bytes()).hexdigest()
+            source_sha = subprocess.check_output(
+                ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True
+            ).strip()
+            freeze.write_text(json.dumps({
+                "runId": "aws-b01-preflight-fixture",
+                "sloVersion": "v1.0-frozen",
+                "approvedBy": "test",
+            }) + "\n", encoding="utf-8")
+            d005.write_text(json.dumps({
+                "runId": "aws-b01-preflight-fixture",
+                "arrivalRate": 1,
+                "sourceCommitSha": source_sha,
+                "profileSha256": b01_sha,
+                "baselineCandidateSha256": candidate_sha,
+            }) + "\n", encoding="utf-8")
+            common = [
+                str(ORCHESTRATOR), "preflight", "--dry-run",
+                "--run-id", run_id,
+                "--profile", str(ROOT / "load-tests/aws/profiles/ec2-recovery.json"),
+                "--region", "ap-northeast-2",
+                "--environment", "dev-runtime",
+                "--expected-account-id", "123456789012",
+                "--alb-arn", "arn:aws:elasticloadbalancing:ap-northeast-2:123456789012:loadbalancer/app/fixture/abc",
+                "--asg-name", "travel-planner-backend",
+                "--launch-template-id", "lt-abc123",
+                "--launch-template-version", "1",
+                "--runner-id", "i-abc123",
+                "--base-url", "https://approved.example.com",
+                "--rate", "1",
+                "--freeze-metadata", str(freeze),
+                "--d005-rate-file", str(d005),
+                "--b01-profile", str(b01_profile),
+                "--baseline-candidate", str(candidate),
+                "--source-sha", source_sha,
+            ]
+            try:
+                first = subprocess.run(common, cwd=ROOT, capture_output=True, text=True)
+                self.assertEqual(first.returncode, 0, first.stderr)
+                paths = [
+                    run_dir / "metadata.json",
+                    run_dir / "aws-alb.json",
+                    run_dir / "aws-asg.json",
+                    run_dir / "aws-target-health.json",
+                ]
+                before = {path: path.read_bytes() for path in paths}
+
+                second = subprocess.run(common, cwd=ROOT, capture_output=True, text=True)
+                self.assertEqual(second.returncode, 0, second.stderr)
+                self.assertEqual(before, {path: path.read_bytes() for path in paths})
+
+                mismatch = list(common)
+                mismatch[mismatch.index("--alb-arn") + 1] = (
+                    "arn:aws:elasticloadbalancing:ap-northeast-2:123456789012:"
+                    "loadbalancer/app/fixture/changed"
+                )
+                rejected = subprocess.run(mismatch, cwd=ROOT, capture_output=True, text=True)
+                self.assertNotEqual(rejected.returncode, 0)
+                self.assertIn("immutable preflight metadata", rejected.stderr)
+                self.assertEqual(before, {path: path.read_bytes() for path in paths})
+
+                (run_dir / "aws-alb.json").write_text('{"tampered":true}\n', encoding="utf-8")
+                tampered = subprocess.run(common, cwd=ROOT, capture_output=True, text=True)
+                self.assertNotEqual(tampered.returncode, 0)
+                self.assertIn("immutable preflight evidence", tampered.stderr)
+            finally:
+                if run_dir.exists():
+                    shutil.rmtree(run_dir)
+
+
+if __name__ == "__main__":
+    unittest.main()
