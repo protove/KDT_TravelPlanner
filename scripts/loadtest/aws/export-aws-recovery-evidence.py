@@ -76,7 +76,7 @@ def resolve_run(root: Path, run_id: str) -> tuple[str, str, str]:
     return run_id, started, ended
 
 
-def read_recovery_events(path: Path) -> dict[str, float]:
+def read_recovery_events(path: Path, *, require_all: bool = True) -> dict[str, float]:
     try:
         records = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
     except (OSError, json.JSONDecodeError) as error:
@@ -95,32 +95,51 @@ def read_recovery_events(path: Path) -> dict[str, float]:
         events[event] = parse_timestamp(ts)
         physical.append(event)
     missing = [event for event in REQUIRED_EVENTS if event not in events]
-    if missing:
+    if require_all and missing:
         raise RecoveryExportError("missing recovery events: " + ",".join(missing))
-    if physical != list(REQUIRED_EVENTS):
+    if not require_all:
+        # A FAILED/INVALID run may legally stop early, but what was recorded
+        # must still be a strictly-ordered prefix of the event contract plus
+        # the mandatory RUN_START/RUN_END boundaries.
+        if "RUN_START" not in events or "RUN_END" not in events:
+            raise RecoveryExportError("missing recovery events: RUN_START/RUN_END")
+        middle_contract = [event for event in REQUIRED_EVENTS if event not in ("RUN_START", "RUN_END")]
+        recorded_middle = [event for event in middle_contract if event in events]
+        if recorded_middle != middle_contract[: len(recorded_middle)]:
+            raise RecoveryExportError("failed-run events are not a prefix of the T0-T6 contract")
+    expected_physical = [event for event in REQUIRED_EVENTS if event in events]
+    if physical != expected_physical:
         raise RecoveryExportError("T0-T6 events are not in the required physical order")
-    if any(events[left] >= events[right] for left, right in zip(REQUIRED_EVENTS, REQUIRED_EVENTS[1:])):
+    timestamps = [events[event] for event in REQUIRED_EVENTS if event in events]
+    if any(left >= right for left, right in zip(timestamps, timestamps[1:])):
         raise RecoveryExportError("T0-T6 event timestamps are not strictly chronological")
     return events
 
 
 def build_recovery_timing(events: dict[str, float]) -> dict[str, Any]:
-    return {
-        "status": "collected",
-        "T0": iso_timestamp(events["T0"]),
-        "T1": iso_timestamp(events["T1"]),
-        "T2": iso_timestamp(events["T2"]),
-        "T3": iso_timestamp(events["T3"]),
-        "T4": iso_timestamp(events["T4"]),
-        "T5": iso_timestamp(events["T5"]),
-        "T6": iso_timestamp(events["T6"]),
-        "detectorToRollbackSeconds": round(events["T4"] - events["T3"], 3),
-        "rollbackToHealthySeconds": round(events["T5"] - events["T4"], 3),
-        "healthyToSloSeconds": round(events["T6"] - events["T5"], 3),
-        "T1ToT6Seconds": round(events["T6"] - events["T1"], 3),
-        "T4ToT6Seconds": round(events["T6"] - events["T4"], 3),
-        "source": "operations.jsonl",
-    }
+    def span(start: str, end: str) -> float | None:
+        if start in events and end in events:
+            return round(events[end] - events[start], 3)
+        return None
+
+    complete = all(event in events for event in REQUIRED_EVENTS)
+    timing: dict[str, Any] = {"status": "collected" if complete else "partial"}
+    for event in REQUIRED_EVENTS:
+        if event in ("RUN_START", "RUN_END"):
+            continue
+        if event in events:
+            timing[event] = iso_timestamp(events[event])
+    timing.update(
+        {
+            "detectorToRollbackSeconds": span("T3", "T4"),
+            "rollbackToHealthySeconds": span("T4", "T5"),
+            "healthyToSloSeconds": span("T5", "T6"),
+            "T1ToT6Seconds": span("T1", "T6"),
+            "T4ToT6Seconds": span("T4", "T6"),
+            "source": "operations.jsonl",
+        }
+    )
+    return timing
 
 
 def validate_required_metrics(
@@ -197,22 +216,38 @@ def validate_restoration_invariant(path: Path) -> dict[str, Any]:
 
 
 def validate_verdict(path: Path, run_id: str) -> dict[str, Any]:
-    """Require the pure evaluator's verdict before exporting derived evidence."""
+    """Require the pure evaluator's verdict before exporting derived evidence.
+
+    PASSED verdicts must carry the full T0-T6 timeline. FAILED and INVALID
+    verdicts are preserved and exported too — a run that missed the SLO is
+    still evidence — but they must carry the sanitized failure fields instead.
+    """
 
     payload = read_json(path)
     if payload.get("runId") != run_id or payload.get("scenarioId") != "AWS-RECOVERY":
         raise RecoveryExportError("recovery-verdict.json is bound to a different Recovery run")
-    if payload.get("status") not in {"PASSED", "INVALID_RUN", "INVALID_OBSERVABILITY_EVIDENCE"}:
+    status = payload.get("status")
+    if status not in {"PASSED", "FAILED", "INVALID_RUN", "INVALID_OBSERVABILITY_EVIDENCE"}:
         raise RecoveryExportError("recovery-verdict.json has an unsupported status")
-    for field in ("T0", "T1", "T2", "T3", "T4", "T5", "T6", "RUN_END"):
-        if not isinstance(payload.get(field), str) or not payload[field].strip():
-            raise RecoveryExportError(f"recovery-verdict.json is missing {field}")
+    if status == "PASSED":
+        for field in ("T0", "T1", "T2", "T3", "T4", "T5", "T6", "RUN_END"):
+            if not isinstance(payload.get(field), str) or not payload[field].strip():
+                raise RecoveryExportError(f"recovery-verdict.json is missing {field}")
+    else:
+        for field in ("errorType", "detail"):
+            if not isinstance(payload.get(field), str) or not payload[field].strip():
+                raise RecoveryExportError(f"non-passed recovery-verdict.json is missing {field}")
     return {
-        "status": payload["status"],
+        "status": status,
         "runId": run_id,
         "sloVersion": payload.get("sloVersion"),
         "T1ToT6Seconds": payload.get("T1ToT6Seconds"),
         "T4ToT6Seconds": payload.get("T4ToT6Seconds"),
+        **(
+            {}
+            if status == "PASSED"
+            else {"errorType": payload.get("errorType"), "detail": payload.get("detail")}
+        ),
         "source": "recovery-verdict.json",
     }
 
@@ -228,7 +263,11 @@ def export_recovery_evidence(
     empty_is_valid: set[str] | None = None,
 ) -> dict[str, Any]:
     run_id, from_utc, to_utc = resolve_run(evidence_root, run_id)
-    events = read_recovery_events(evidence_root / "operations.jsonl")
+    verdict = validate_verdict(evidence_root / "recovery-verdict.json", run_id)
+    verdict_passed = verdict["status"] == "PASSED"
+    events = read_recovery_events(
+        evidence_root / "operations.jsonl", require_all=verdict_passed
+    )
     range_start = parse_timestamp(from_utc)
     range_end = parse_timestamp(to_utc)
     if any(timestamp < range_start or timestamp > range_end for timestamp in events.values()):
@@ -239,10 +278,9 @@ def export_recovery_evidence(
     metric_status = validate_required_metrics(
         read_json(evidence_root / "monitoring/required-metrics.json"), required, empty_is_valid,
     )
-    if metric_status["status"] != "collected":
+    if verdict_passed and metric_status["status"] != "collected":
         raise RecoveryExportError("required observability evidence is incomplete")
     restoration = validate_restoration_invariant(evidence_root / "aws/restoration-state.json")
-    verdict = validate_verdict(evidence_root / "recovery-verdict.json", run_id)
 
     exporter = _load_grafana_exporter()
     auth_header = exporter.basic_auth_header(user, password)
@@ -278,6 +316,7 @@ def export_recovery_evidence(
     (evidence_root / "recovery-verdict-export.json").write_text(json.dumps(verdict, indent=2) + "\n", encoding="utf-8")
     summary = {
         "status": "collected" if failed == 0 else "INVALID_OBSERVABILITY_EVIDENCE",
+        "verdictStatus": verdict["status"],
         "runId": run_id,
         "scenarioId": "AWS-RECOVERY",
         "fromUtc": from_utc,

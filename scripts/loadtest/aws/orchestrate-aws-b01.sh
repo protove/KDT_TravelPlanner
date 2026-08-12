@@ -203,7 +203,10 @@ fi
 python3 "$REPOSITORY_ROOT/scripts/loadtest/aws/validate-aws-profile.py" "$PROFILE"
 
 RUN_ID="${RUN_ID:-aws-b01-$(date -u +%Y%m%d-%H%M%S)}"
-EVIDENCE_ROOT="$REPOSITORY_ROOT/evidence/aws-load-tests/$RUN_ID"
+# Tests and diagnostics may relocate evidence with B01_EVIDENCE_BASE so the
+# repository's protected evidence tree is never written by a test run.
+EVIDENCE_BASE="${B01_EVIDENCE_BASE:-$REPOSITORY_ROOT/evidence/aws-load-tests}"
+EVIDENCE_ROOT="$EVIDENCE_BASE/$RUN_ID"
 DATA_FILE="$EVIDENCE_ROOT/data.json"
 FIXTURES_DIR="$EVIDENCE_ROOT/fixtures"
 PROFILE_SHA256="$(python3 -c "import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],'rb').read()).hexdigest())" "$PROFILE")"
