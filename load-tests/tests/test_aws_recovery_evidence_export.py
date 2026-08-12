@@ -131,5 +131,62 @@ class RecoveryEvidenceFixtureTest(unittest.TestCase):
             shutil.rmtree(root)
 
 
+    def test_failed_verdict_is_exportable_with_partial_events(self):
+        root = self.fixture()
+        try:
+            write_json(root / "recovery-verdict.json", {
+                "status": "FAILED", "runId": "aws-r05-fixture-001", "scenarioId": "AWS-RECOVERY",
+                "sloVersion": "v1.0-frozen",
+                "errorType": "RecoverySloFailure",
+                "detail": "no contiguous 120-second T6 SLO window satisfied the frozen SLO",
+            })
+            result = MODULE.validate_verdict(root / "recovery-verdict.json", "aws-r05-fixture-001")
+            self.assertEqual(result["status"], "FAILED")
+            self.assertEqual(result["errorType"], "RecoverySloFailure")
+        finally:
+            import shutil
+            shutil.rmtree(root)
+
+    def test_failed_verdict_still_requires_failure_fields(self):
+        root = self.fixture()
+        try:
+            write_json(root / "recovery-verdict.json", {
+                "status": "FAILED", "runId": "aws-r05-fixture-001", "scenarioId": "AWS-RECOVERY",
+            })
+            with self.assertRaises(MODULE.RecoveryExportError):
+                MODULE.validate_verdict(root / "recovery-verdict.json", "aws-r05-fixture-001")
+        finally:
+            import shutil
+            shutil.rmtree(root)
+
+    def test_partial_events_accepted_only_as_ordered_prefix(self):
+        import json as _json
+        root = self.fixture()
+        try:
+            lines = (root / "operations.jsonl").read_text(encoding="utf-8").splitlines()
+            events = [_json.loads(line) for line in lines]
+            # Drop T6 but keep RUN_END: a legal failed-run shape.
+            partial = [item for item in events if item["event"] != "T6"]
+            (root / "operations.jsonl").write_text(
+                "\n".join(_json.dumps(item) for item in partial) + "\n", encoding="utf-8")
+            parsed = MODULE.read_recovery_events(root / "operations.jsonl", require_all=False)
+            self.assertNotIn("T6", parsed)
+            timing = MODULE.build_recovery_timing(parsed)
+            self.assertEqual(timing["status"], "partial")
+            self.assertIsNone(timing["T1ToT6Seconds"])
+            # Dropping a middle event (T3) breaks the prefix contract.
+            broken = [item for item in events if item["event"] not in ("T3", "T6")]
+            (root / "operations.jsonl").write_text(
+                "\n".join(_json.dumps(item) for item in broken) + "\n", encoding="utf-8")
+            with self.assertRaises(MODULE.RecoveryExportError):
+                MODULE.read_recovery_events(root / "operations.jsonl", require_all=False)
+            # And the strict reader still rejects any missing event.
+            with self.assertRaises(MODULE.RecoveryExportError):
+                MODULE.read_recovery_events(root / "operations.jsonl")
+        finally:
+            import shutil
+            shutil.rmtree(root)
+
+
 if __name__ == "__main__":
     unittest.main()

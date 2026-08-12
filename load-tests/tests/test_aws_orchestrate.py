@@ -11,6 +11,15 @@ import unittest
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
+
+# Every subprocess in this module inherits an isolated evidence base so a
+# test run can never write into the repository's protected evidence/ tree
+# (a real B-01 run's diagnostic files were overwritten by this suite on
+# 2026-08-12 before this guard existed).
+_EVIDENCE_ISOLATION = tempfile.TemporaryDirectory(prefix="b01-test-evidence-")
+os.environ["B01_EVIDENCE_BASE"] = _EVIDENCE_ISOLATION.name
+os.environ["AWS_RECOVERY_EVIDENCE_BASE"] = _EVIDENCE_ISOLATION.name
+
 SCRIPT = REPOSITORY_ROOT / "scripts/loadtest/aws/orchestrate-aws-b01.sh"
 PROFILE = REPOSITORY_ROOT / "load-tests/aws/profiles/ec2-b01.json"
 DESTROY_GATE = REPOSITORY_ROOT / "scripts/loadtest/aws/check-destroy-gate.sh"
@@ -401,6 +410,43 @@ source {fragment}
             (root / "local-export-complete.json").write_text("{}", encoding="utf-8")
             allowed = subprocess.run(["bash", str(DESTROY_GATE), str(root)], capture_output=True, text=True, check=False)
             self.assertEqual(allowed.returncode, 0, allowed.stderr)
+
+
+
+class EvidenceIsolationTests(unittest.TestCase):
+    def test_orchestrators_support_isolated_evidence_bases(self) -> None:
+        b01_source = SCRIPT.read_text(encoding="utf-8")
+        self.assertIn('EVIDENCE_BASE="${B01_EVIDENCE_BASE:-$REPOSITORY_ROOT/evidence/aws-load-tests}"', b01_source)
+        recovery_source = (
+            REPOSITORY_ROOT / "scripts/loadtest/aws/orchestrate-aws-recovery.sh"
+        ).read_text(encoding="utf-8")
+        self.assertIn('${AWS_RECOVERY_EVIDENCE_BASE:-$REPOSITORY_ROOT/evidence/aws-recovery}', recovery_source)
+
+    def test_writing_invocation_lands_in_isolated_base_not_repository(self) -> None:
+        run_id = "aws-b01-isolation-check"
+        repository_run = REPOSITORY_ROOT / "evidence/aws-load-tests" / run_id
+        self.assertFalse(repository_run.exists())
+        with tempfile.TemporaryDirectory(prefix="b01-isolation-") as isolated:
+            env = {**os.environ, "B01_EVIDENCE_BASE": isolated}
+            result = subprocess.run(
+                [
+                    "bash", str(SCRIPT), "ramp", "--dry-run",
+                    "--region", "ap-northeast-2", "--environment", "dev",
+                    "--expected-account-id", "111111111111",
+                    "--alb-arn", "arn:aws:elasticloadbalancing:ap-northeast-2:111111111111:loadbalancer/app/example/1234567890abcdef",
+                    "--base-url", "https://b01.example.com",
+                    "--runner-id", "i-0123456789abcdef0",
+                    "--max-rate", "30", "--max-vus", "20",
+                    "--run-id", run_id, "--profile", str(PROFILE),
+                ],
+                cwd=REPOSITORY_ROOT, capture_output=True, text=True, check=False, env=env,
+            )
+            self.assertEqual(result.returncode, 1)
+            self.assertFalse(repository_run.exists())
+            isolated_run = Path(isolated) / run_id
+            if not isolated_run.exists():
+                self.skipTest("this invocation exited before writing evidence; repository stayed clean")
+            self.assertTrue((isolated_run / "operations.jsonl").exists() or any(isolated_run.iterdir()))
 
 
 if __name__ == "__main__":

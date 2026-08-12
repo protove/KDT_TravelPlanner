@@ -1,3 +1,4 @@
+import os
 import subprocess
 import hashlib
 import json
@@ -62,9 +63,13 @@ class AwsRecoveryRunnerContractTest(unittest.TestCase):
 
     def test_preflight_evidence_is_idempotent_and_rejects_mismatch(self):
         run_id = f"aws-recovery-preflight-{uuid.uuid4().hex}"
-        run_dir = ROOT / "evidence" / "aws-recovery" / run_id
         with tempfile.TemporaryDirectory() as directory:
             fixture = Path(directory)
+            # Keep test writes out of the repository's protected evidence tree.
+            evidence_base = fixture / "evidence-base"
+            evidence_base.mkdir()
+            environment = {**os.environ, "AWS_RECOVERY_EVIDENCE_BASE": str(evidence_base)}
+            run_dir = evidence_base / run_id
             b01_profile = fixture / "b01-profile.json"
             candidate = fixture / "baseline-candidate.json"
             freeze = fixture / "freeze-metadata.json"
@@ -156,7 +161,7 @@ class AwsRecoveryRunnerContractTest(unittest.TestCase):
                 "--source-sha", source_sha,
             ]
             try:
-                first = subprocess.run(common, cwd=ROOT, capture_output=True, text=True)
+                first = subprocess.run(common, cwd=ROOT, capture_output=True, text=True, env=environment)
                 self.assertEqual(first.returncode, 0, first.stderr)
                 paths = [
                     run_dir / "metadata.json",
@@ -166,7 +171,7 @@ class AwsRecoveryRunnerContractTest(unittest.TestCase):
                 ]
                 before = {path: path.read_bytes() for path in paths}
 
-                second = subprocess.run(common, cwd=ROOT, capture_output=True, text=True)
+                second = subprocess.run(common, cwd=ROOT, capture_output=True, text=True, env=environment)
                 self.assertEqual(second.returncode, 0, second.stderr)
                 self.assertEqual(before, {path: path.read_bytes() for path in paths})
 
@@ -175,13 +180,13 @@ class AwsRecoveryRunnerContractTest(unittest.TestCase):
                     "arn:aws:elasticloadbalancing:ap-northeast-2:123456789012:"
                     "loadbalancer/app/fixture/changed"
                 )
-                rejected = subprocess.run(mismatch, cwd=ROOT, capture_output=True, text=True)
+                rejected = subprocess.run(mismatch, cwd=ROOT, capture_output=True, text=True, env=environment)
                 self.assertNotEqual(rejected.returncode, 0)
                 self.assertIn("immutable preflight metadata", rejected.stderr)
                 self.assertEqual(before, {path: path.read_bytes() for path in paths})
 
                 (run_dir / "aws-alb.json").write_text('{"tampered":true}\n', encoding="utf-8")
-                tampered = subprocess.run(common, cwd=ROOT, capture_output=True, text=True)
+                tampered = subprocess.run(common, cwd=ROOT, capture_output=True, text=True, env=environment)
                 self.assertNotEqual(tampered.returncode, 0)
                 self.assertIn("immutable preflight evidence", tampered.stderr)
             finally:

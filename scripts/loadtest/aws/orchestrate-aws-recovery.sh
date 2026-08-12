@@ -208,7 +208,7 @@ PY
   SOURCE_LINEAGE_SHA256="$(printf '%s\n' "$lineage_values" | sed -n '2p')"
 fi
 
-RUN_DIR="$REPOSITORY_ROOT/evidence/aws-recovery/$RUN_ID"
+RUN_DIR="${AWS_RECOVERY_EVIDENCE_BASE:-$REPOSITORY_ROOT/evidence/aws-recovery}/$RUN_ID"
 if [[ -n "$PROTECTED_EVIDENCE_MANIFEST" ]]; then
   python3 - "$RUN_DIR" "$REPOSITORY_ROOT" "$PROTECTED_EVIDENCE_MANIFEST" <<'PY'
 import sys
