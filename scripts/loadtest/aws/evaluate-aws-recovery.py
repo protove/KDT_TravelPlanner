@@ -157,15 +157,17 @@ def read_events(path: Path) -> dict[str, float]:
     ordered = [events[event] for event in REQUIRED_EVENTS]
     if ordered != sorted(ordered):
         raise RecoveryValidationError("operation events are not in chronological order")
-    if "RUN_END" in physical_order:
-        run_end_index = physical_order.index("RUN_END")
-        if any(event != "RUN_END" for event in physical_order[run_end_index + 1:]):
-            raise RecoveryValidationError("RUN_END must be the final recorded recovery event")
+    expected_physical_order = list(REQUIRED_EVENTS)
     if "T6" in events:
-        if physical_order.index("T6") > physical_order.index("RUN_END"):
-            raise RecoveryValidationError("T6 must be recorded before RUN_END")
-        if events["T6"] > events["RUN_END"]:
-            raise RecoveryValidationError("T6 occurs after RUN_END")
+        expected_physical_order.insert(-1, "T6")
+    if physical_order != expected_physical_order:
+        expected = ",".join(expected_physical_order)
+        actual = ",".join(physical_order)
+        raise RecoveryValidationError(
+            f"operation events are not in the required physical order: expected {expected}; got {actual}"
+        )
+    if "T6" in events and events["T6"] > events["RUN_END"]:
+        raise RecoveryValidationError("T6 occurs after RUN_END")
     if "T6" in events and events["T6"] < events["T5"]:
         raise RecoveryValidationError("T6 occurs before T5")
     return events
@@ -450,12 +452,17 @@ def evaluate(args: argparse.Namespace) -> dict:
         contract_total = sum(int(item["contractFailures"]) for item in stats)
         unexpected_rate = unexpected_total / completed_total if completed_total else math.inf
         contract_rate = contract_total / completed_total if completed_total else math.inf
+        bucket_rates_pass = all(
+            (float(item["unexpected"]) / int(item["completed"])) < float(profile["recovery"]["unexpectedErrorRate"])
+            and (float(item["contractFailures"]) / int(item["completed"])) <= float(profile["recovery"]["contractFailureRate"])
+            for item in stats
+        )
         bucket_pass = all(
             float(item["p95Ms"]) <= float(profile["recovery"]["p95Ms"])
             and float(item["successRps"]) >= float(profile["recovery"]["capacityFloorRatio"]) * base_success_rps
             for item in stats
         )
-        if bucket_pass and unexpected_rate < float(profile["recovery"]["unexpectedErrorRate"]) and contract_rate <= float(profile["recovery"]["contractFailureRate"]):
+        if bucket_pass and bucket_rates_pass:
             candidates.append((window[-1] + bucket_seconds, stats, completed_total, unexpected_total, contract_total, unexpected_rate, contract_rate))
             break
 

@@ -118,6 +118,24 @@ class AwsRecoveryEvaluatorTest(unittest.TestCase):
             "k6_image": "grafana/k6:0.54.0@sha256:" + "b" * 64,
         })()
 
+    def set_recovery_bucket_metric(self, root: Path, bucket_seconds: int, metric: str, value: int) -> None:
+        target_time = (
+            datetime(2026, 1, 1, tzinfo=timezone.utc) + timedelta(seconds=bucket_seconds)
+        ).isoformat().replace("+00:00", "Z")
+        lines = []
+        changed = False
+        for raw_line in (root / "raw.json").read_text(encoding="utf-8").splitlines():
+            point = json.loads(raw_line)
+            if (
+                point.get("metric") == metric
+                and point.get("data", {}).get("time") == target_time
+            ):
+                point["data"]["value"] = value
+                changed = True
+            lines.append(json.dumps(point))
+        self.assertTrue(changed, f"fixture did not contain {metric} at {target_time}")
+        (root / "raw.json").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
     def test_contiguous_window_passes_and_records_t6(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -186,6 +204,43 @@ class AwsRecoveryEvaluatorTest(unittest.TestCase):
             run_id, freeze, d005, b01_profile, candidate = self.build_run(root, gaps={120})
             with self.assertRaises(MODULE.RecoveryValidationError):
                 MODULE.evaluate(self.args(root, run_id, freeze, d005, b01_profile, candidate))
+
+    def test_single_recovery_bucket_unexpected_error_rate_is_invalid(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_id, freeze, d005, b01_profile, candidate = self.build_run(root, gaps={200})
+            # One 10-second bucket has 10% unexpected errors. The aggregate
+            # window rate is still below 1%, so this catches aggregate-only
+            # validation regressions.
+            self.set_recovery_bucket_metric(root, 80, "core_unexpected_errors_total", 1)
+            with self.assertRaises(MODULE.RecoveryValidationError):
+                MODULE.evaluate(self.args(root, run_id, freeze, d005, b01_profile, candidate))
+
+    def test_single_recovery_bucket_contract_failure_rate_is_invalid(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_id, freeze, d005, b01_profile, candidate = self.build_run(root, gaps={200})
+            self.set_recovery_bucket_metric(root, 80, "core_contract_failures_total", 1)
+            with self.assertRaises(MODULE.RecoveryValidationError):
+                MODULE.evaluate(self.args(root, run_id, freeze, d005, b01_profile, candidate))
+
+    def test_adjacent_physical_event_swaps_are_invalid(self):
+        for first, second in (("T1", "T2"), ("T3", "T4")):
+            with self.subTest(first=first, second=second), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                run_id, freeze, d005, b01_profile, candidate = self.build_run(root)
+                operations = [
+                    json.loads(line)
+                    for line in (root / "operations.jsonl").read_text(encoding="utf-8").splitlines()
+                ]
+                indices = [index for index, item in enumerate(operations) if item["event"] in (first, second)]
+                self.assertEqual(len(indices), 2)
+                operations[indices[0]], operations[indices[1]] = operations[indices[1]], operations[indices[0]]
+                (root / "operations.jsonl").write_text(
+                    "\n".join(json.dumps(item) for item in operations) + "\n", encoding="utf-8"
+                )
+                with self.assertRaises(MODULE.RecoveryValidationError):
+                    MODULE.evaluate(self.args(root, run_id, freeze, d005, b01_profile, candidate))
 
     def test_missing_freeze_is_invalid(self):
         with tempfile.TemporaryDirectory() as directory:

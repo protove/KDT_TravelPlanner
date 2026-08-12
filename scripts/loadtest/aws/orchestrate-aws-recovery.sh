@@ -245,6 +245,17 @@ run_aws_json() {
 
 target_preflight() {
   local account alb tags target_groups asg runner runner_tags target_group_arn target_health
+  local preflight_output existing_preflight_outputs=0
+  for preflight_output in metadata.json aws-alb.json aws-asg.json aws-target-health.json; do
+    if [[ -e "$RUN_DIR/$preflight_output" ]]; then
+      existing_preflight_outputs=$((existing_preflight_outputs + 1))
+    fi
+  done
+  if [[ "$existing_preflight_outputs" -ne 0 && "$existing_preflight_outputs" -ne 4 ]]; then
+    echo "refusing to reuse Recovery run with incomplete immutable preflight evidence; use a new --run-id" >&2
+    exit 2
+  fi
+
   account="$(run_aws_json sts get-caller-identity --region "$REGION" --query Account --output text 2>/dev/null || true)"
   if [[ "$DRY_RUN" != "1" && "$account" != "$EXPECTED_ACCOUNT_ID" ]]; then
     echo "observed AWS account does not match --expected-account-id" >&2
@@ -324,7 +335,7 @@ PY
     target_health='{"status":"dry-run"}'
   fi
 
-  python3 - "$RUN_DIR/metadata.json" "$RUN_ID" "$PROFILE" "$B01_PROFILE" "$REGION" "$ENVIRONMENT" "$RATE" "$ALB_ARN" "$ASG_NAME" "$LAUNCH_TEMPLATE_ID" "$LAUNCH_TEMPLATE_VERSION" "$RUNNER_ID" "$BASE_URL" "$EXPECTED_ACCOUNT_ID" "$REPOSITORY_ROOT" <<'PY'
+  python3 - "$RUN_DIR/metadata.json" "$RUN_ID" "$PROFILE" "$B01_PROFILE" "$REGION" "$ENVIRONMENT" "$RATE" "$ALB_ARN" "$ASG_NAME" "$LAUNCH_TEMPLATE_ID" "$LAUNCH_TEMPLATE_VERSION" "$RUNNER_ID" "$BASE_URL" "$EXPECTED_ACCOUNT_ID" "$REPOSITORY_ROOT" "$existing_preflight_outputs" <<'PY'
 import hashlib
 import json
 import subprocess
@@ -332,18 +343,16 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-output, run_id, profile_path, b01_profile_path, region, environment, rate, alb_arn, asg_name, launch_template_id, launch_template_version, runner_id, base_url, account_id, repo_root = sys.argv[1:]
+output, run_id, profile_path, b01_profile_path, region, environment, rate, alb_arn, asg_name, launch_template_id, launch_template_version, runner_id, base_url, account_id, repo_root, existing_outputs_raw = sys.argv[1:]
 profile_sha = hashlib.sha256(Path(profile_path).read_bytes()).hexdigest()
 b01_profile_sha = hashlib.sha256(Path(b01_profile_path).read_bytes()).hexdigest()
 commit_sha = subprocess.run(["git", "-C", repo_root, "rev-parse", "HEAD"], capture_output=True, text=True, check=True).stdout.strip()
-Path(output).write_text(json.dumps({
+expected = {
     "runId": run_id,
     "scenarioId": "AWS-RECOVERY",
     "platform": "ec2",
     "environment": environment,
     "region": region,
-    "startedAtUtc": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
-    "endedAtUtc": None,
     "commitSha": commit_sha,
     "profileSha256": profile_sha,
     "b01ProfileSha256": b01_profile_sha,
@@ -360,11 +369,67 @@ Path(output).write_text(json.dumps({
         "runnerInstanceId": runner_id,
         "baseUrl": base_url,
     },
-}, indent=2) + chr(10), encoding="utf-8")
+}
+output_path = Path(output)
+existing_outputs = int(existing_outputs_raw)
+if existing_outputs:
+    try:
+        existing = json.loads(output_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise SystemExit(f"immutable preflight metadata is invalid: {error}")
+    if not isinstance(existing, dict):
+        raise SystemExit("immutable preflight metadata must be a JSON object")
+    for key, value in expected.items():
+        if existing.get(key) != value:
+            raise SystemExit(f"refusing to overwrite immutable preflight metadata: {key} does not match this run")
+    if not isinstance(existing.get("startedAtUtc"), str) or not existing["startedAtUtc"].strip():
+        raise SystemExit("immutable preflight metadata has no startedAtUtc")
+    if existing.get("endedAtUtc") not in (None, ""):
+        raise SystemExit("refusing to reuse a completed Recovery run; use a new --run-id")
+else:
+    payload = dict(expected)
+    payload["startedAtUtc"] = datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+    payload["endedAtUtc"] = None
+    try:
+        with output_path.open("x", encoding="utf-8") as output_file:
+            output_file.write(json.dumps(payload, indent=2) + chr(10))
+    except FileExistsError as error:
+        raise SystemExit("immutable preflight metadata was created concurrently; retry with a new --run-id") from error
 PY
-  printf '%s\012' "$alb" > "$RUN_DIR/aws-alb.json"
-  printf '%s\012' "$asg" > "$RUN_DIR/aws-asg.json"
-  printf '%s\012' "$target_health" > "$RUN_DIR/aws-target-health.json"
+
+  write_immutable_preflight_evidence() {
+    local output="$1" content="$2"
+    python3 - "$output" "$content" <<'PY'
+import hashlib
+import sys
+from pathlib import Path
+
+output, content = sys.argv[1:]
+path = Path(output)
+expected = (content + chr(10)).encode("utf-8")
+if path.exists():
+    try:
+        actual = path.read_bytes()
+    except OSError as error:
+        raise SystemExit(f"cannot read immutable preflight evidence {path}: {error}")
+    actual_sha = hashlib.sha256(actual).hexdigest()
+    expected_sha = hashlib.sha256(expected).hexdigest()
+    if actual_sha != expected_sha:
+        raise SystemExit(
+            f"refusing to overwrite immutable preflight evidence: {path} "
+            f"(existing sha256={actual_sha}, expected sha256={expected_sha})"
+        )
+else:
+    try:
+        with path.open("xb") as output_file:
+            output_file.write(expected)
+    except FileExistsError as error:
+        raise SystemExit(f"immutable preflight evidence was created concurrently: {path}") from error
+PY
+  }
+  write_immutable_preflight_evidence "$RUN_DIR/aws-alb.json" "$alb"
+  write_immutable_preflight_evidence "$RUN_DIR/aws-asg.json" "$asg"
+  write_immutable_preflight_evidence "$RUN_DIR/aws-target-health.json" "$target_health"
   mkdir -p "$RUN_DIR/monitoring"
   if [[ "$DRY_RUN" != "1" && ! -f "$RUN_DIR/operations.jsonl" ]]; then
     python3 "$REPOSITORY_ROOT/scripts/loadtest/record-rehearsal-event.py" "$RUN_DIR" RUN_START "AWS Recovery preflight passed; workload may start" --actor automation
