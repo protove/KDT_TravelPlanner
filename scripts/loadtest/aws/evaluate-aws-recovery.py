@@ -526,11 +526,30 @@ def evaluate(args: argparse.Namespace) -> dict:
     window_seconds = int(recovery_contract["stableWindowSeconds"])
     budget_seconds = int(recovery_contract["budgetSeconds"])
     durations, counters, observed = load_points(run_dir / "raw.json", bucket_seconds)
-    missing_core = [name for name in CORE_COUNTERS if name not in observed]
+    # A k6 Counter emits no Point unless it is incremented, so an error counter
+    # that was declared empty-is-valid is legitimately absent from raw.json on a
+    # clean run. Absence is accepted only when the k6 summary also reports zero:
+    # a non-zero summary with no raw Points would mean real measurement loss.
+    absent_but_declared_empty = set()
+    for name in observability.get("emptyIsValid", []):
+        if name in observed:
+            continue
+        summary_entry = summary.get("metrics", {}).get(name)
+        summary_count = summary_entry.get("count") if isinstance(summary_entry, dict) else None
+        if summary_count == 0:
+            absent_but_declared_empty.add(name)
+    missing_core = [
+        name for name in CORE_COUNTERS
+        if name not in observed and name not in absent_but_declared_empty
+    ]
     if "core_operation_duration" not in observed:
         missing_core.append("core_operation_duration")
     if missing_core:
         raise RecoveryValidationError("raw k6 metrics missing: " + ",".join(missing_core))
+    observability = {
+        **observability,
+        "absentFromRawButSummaryZero": sorted(absent_but_declared_empty),
+    }
 
     t0, t1, t4, t5 = events["T0"], events["T1"], events["T4"], events["T5"]
     baseline_buckets = sorted(
