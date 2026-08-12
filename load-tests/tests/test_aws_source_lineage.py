@@ -104,6 +104,35 @@ class AwsSourceLineageTest(unittest.TestCase):
                 expected_protected_manifest=manifest,
             )
             self.assertEqual(result["measurementSourceCommitSha"], controller_sha)
+            payload["inputs"] = {
+                "b01ProfileSha256": "a" * 64,
+                "baselineCandidateSha256": "b" * 64,
+                "d005RateRecordSha256": "c" * 64,
+                "freezeInputDigest": "d" * 64,
+            }
+            payload.pop("lineageSha256", None)
+            payload["lineageSha256"] = MODULE.digest_json(payload)
+            MODULE.validate_lineage(
+                payload,
+                repository_root=ROOT,
+                expected_controller_sha=controller_sha,
+                expected_run_id="aws-b01-fixture",
+                expected_protected_manifest=manifest,
+                expected_inputs={key: value for key, value in payload["inputs"].items()},
+            )
+            tampered_inputs = json.loads(json.dumps(payload))
+            tampered_inputs["inputs"]["d005RateRecordSha256"] = "e" * 64
+            tampered_inputs.pop("lineageSha256", None)
+            tampered_inputs["lineageSha256"] = MODULE.digest_json(tampered_inputs)
+            with self.assertRaises(MODULE.SourceLineageError):
+                MODULE.validate_lineage(
+                    tampered_inputs,
+                    repository_root=ROOT,
+                    expected_controller_sha=controller_sha,
+                    expected_run_id="aws-b01-fixture",
+                    expected_protected_manifest=manifest,
+                    expected_inputs={key: value for key, value in payload["inputs"].items()},
+                )
             tampered = json.loads(json.dumps(payload))
             tampered["sourceDiff"]["changedFiles"] = ["load-tests/k6/aws/scenarios/baseline.js"]
             with self.assertRaises(MODULE.SourceLineageError):

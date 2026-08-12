@@ -430,13 +430,6 @@ def evaluate(args: argparse.Namespace) -> dict:
             raise RecoveryValidationError("protected evidence manifest is required with source lineage")
         try:
             lineage = read_lineage_json(source_lineage, "source lineage")
-            validate_lineage(
-                lineage,
-                repository_root=Path(__file__).resolve().parents[3],
-                expected_controller_sha=args.source_sha,
-                expected_run_id=freeze["runId"],
-                expected_protected_manifest=protected_manifest,
-            )
         except ValueError as error:
             raise RecoveryValidationError(str(error)) from error
     profile_sha = hashlib.sha256(args.profile.read_bytes()).hexdigest()
@@ -447,6 +440,24 @@ def evaluate(args: argparse.Namespace) -> dict:
         expected_b01_profile_sha=b01_profile_sha,
         baseline_candidate=args.baseline_candidate,
     )
+    if source_lineage:
+        try:
+            validate_lineage(
+                lineage,
+                repository_root=Path(__file__).resolve().parents[3],
+                expected_controller_sha=args.source_sha,
+                expected_run_id=freeze["runId"],
+                expected_protected_manifest=protected_manifest,
+                expected_inputs={
+                    "b01ProfileSha256": b01_profile_sha,
+                    "baselineCandidateSha256": hashlib.sha256(args.baseline_candidate.read_bytes()).hexdigest(),
+                    "d005RateRecordSha256": hashlib.sha256(args.d005_rate_file.read_bytes()).hexdigest(),
+                    "freezeInputDigest": freeze.get("freezeInputDigest"),
+                },
+                require_clean_worktree=True,
+            )
+        except ValueError as error:
+            raise RecoveryValidationError(str(error)) from error
     try:
         expected_rate = float(args.rate)
     except (TypeError, ValueError) as error:

@@ -169,24 +169,36 @@ if [[ -n "$SOURCE_LINEAGE" ]]; then
     exit 2
   fi
   lineage_values="$({
-    python3 - "$SOURCE_LINEAGE" "$PROTECTED_EVIDENCE_MANIFEST" "$D005_RATE_FILE" "$REPOSITORY_ROOT" "$SOURCE_SHA" <<'PY'
+    python3 - "$SOURCE_LINEAGE" "$PROTECTED_EVIDENCE_MANIFEST" "$D005_RATE_FILE" "$FREEZE_METADATA" "$B01_PROFILE" "$BASELINE_CANDIDATE" "$REPOSITORY_ROOT" "$SOURCE_SHA" <<'PY'
 import sys
 from pathlib import Path
 
-root = Path(sys.argv[4]).resolve()
+lineage_path = Path(sys.argv[1]).resolve()
+protected_path = Path(sys.argv[2]).resolve()
+d005_path = Path(sys.argv[3]).resolve()
+freeze_path = Path(sys.argv[4]).resolve()
+b01_profile_path = Path(sys.argv[5]).resolve()
+candidate_path = Path(sys.argv[6]).resolve()
+root = Path(sys.argv[7]).resolve()
 sys.path.insert(0, str(root / "scripts/loadtest/aws"))
 from source_lineage import read_json, validate_lineage, sha256_file
 
-lineage_path = Path(sys.argv[1]).resolve()
-protected_path = Path(sys.argv[2]).resolve()
-d005 = read_json(Path(sys.argv[3]).resolve(), "D-005 rate record")
+d005 = read_json(d005_path, "D-005 rate record")
+freeze = read_json(freeze_path, "D-006 freeze metadata")
 lineage = read_json(lineage_path, "source lineage")
 result = validate_lineage(
     lineage,
     repository_root=root,
-    expected_controller_sha=sys.argv[5],
+    expected_controller_sha=sys.argv[8],
     expected_run_id=d005.get("runId"),
     expected_protected_manifest=protected_path,
+    expected_inputs={
+        "b01ProfileSha256": sha256_file(b01_profile_path),
+        "baselineCandidateSha256": sha256_file(candidate_path),
+        "d005RateRecordSha256": sha256_file(d005_path),
+        "freezeInputDigest": freeze.get("freezeInputDigest"),
+    },
+    require_clean_worktree=True,
 )
 print(result["measurementSourceCommitSha"])
 print(sha256_file(lineage_path))

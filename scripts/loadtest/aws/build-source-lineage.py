@@ -106,6 +106,13 @@ def main() -> int:
         expected_controller_sha=controller_sha,
         expected_run_id=args.b01_run_id,
         expected_protected_manifest=args.protected_manifest.resolve(),
+        expected_inputs={
+            "b01ProfileSha256": profile_sha,
+            "baselineCandidateSha256": candidate_sha,
+            "d005RateRecordSha256": d005_sha,
+            "freezeInputDigest": freeze_input_digest,
+        },
+        require_clean_worktree=True,
     )
     destination = assert_new_output_path(
         args.output.resolve(),

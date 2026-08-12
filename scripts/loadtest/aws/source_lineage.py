@@ -92,6 +92,32 @@ def git_head(repository_root: Path) -> str:
     return require_commit(result.stdout.strip(), "repository HEAD")
 
 
+def assert_clean_controller_worktree(repository_root: Path) -> None:
+    """Require committed controller code while allowing generated outputs."""
+
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(repository_root), "status", "--porcelain=v1", "--untracked-files=all"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    except (OSError, subprocess.CalledProcessError) as error:
+        raise SourceLineageError("unable to inspect controller worktree status") from error
+    unexpected = []
+    for line in result.stdout.splitlines():
+        if not line:
+            continue
+        path = line[3:] if len(line) >= 4 else line
+        if " -> " in path:
+            path = path.split(" -> ", 1)[1]
+        if path.startswith(("evidence/", "recovery-control/")):
+            continue
+        unexpected.append(path)
+    if unexpected:
+        raise SourceLineageError("controller worktree has uncommitted non-output changes: " + ",".join(unexpected))
+
+
 def changed_paths(repository_root: Path, measurement_sha: str, controller_sha: str) -> list[str]:
     measurement_sha = require_commit(measurement_sha, "measurementSourceCommitSha")
     controller_sha = require_commit(controller_sha, "controllerSourceCommitSha")
@@ -221,6 +247,8 @@ def validate_lineage(
     expected_controller_sha: str,
     expected_run_id: str | None = None,
     expected_protected_manifest: Path | None = None,
+    expected_inputs: dict[str, str] | None = None,
+    require_clean_worktree: bool = False,
 ) -> dict[str, Any]:
     if payload.get("schemaVersion") != LINEAGE_SCHEMA:
         raise SourceLineageError("source lineage schemaVersion is invalid")
@@ -231,6 +259,8 @@ def validate_lineage(
         raise SourceLineageError("controllerSourceCommitSha does not match the executing controller")
     if git_head(repository_root) != controller_sha:
         raise SourceLineageError("repository HEAD does not match controllerSourceCommitSha")
+    if require_clean_worktree:
+        assert_clean_controller_worktree(repository_root)
     if expected_run_id is not None and payload.get("b01RunId") != expected_run_id:
         raise SourceLineageError("source lineage B-01 runId does not match the freeze record")
     source_diff = payload.get("sourceDiff")
@@ -245,6 +275,23 @@ def validate_lineage(
     workload_changes = source_diff.get("workloadInputChanges")
     if workload_changes != [] or workload_input_changes(changed) != []:
         raise SourceLineageError("source lineage permits workload input changes")
+    inputs = payload.get("inputs")
+    if expected_inputs is not None:
+        if not isinstance(inputs, dict):
+            raise SourceLineageError("source lineage inputs are missing")
+        required_inputs = {
+            "b01ProfileSha256",
+            "baselineCandidateSha256",
+            "d005RateRecordSha256",
+            "freezeInputDigest",
+        }
+        if set(inputs) != required_inputs:
+            raise SourceLineageError("source lineage inputs do not match the required D-005/D-006 contract")
+        for field in required_inputs:
+            actual = require_sha256(inputs.get(field), f"source lineage inputs.{field}")
+            expected = require_sha256(expected_inputs.get(field), f"expected inputs.{field}")
+            if actual != expected:
+                raise SourceLineageError(f"source lineage inputs.{field} does not match the approved input")
     protected_digest = payload.get("protectedEvidenceManifestSha256")
     require_sha256(protected_digest, "protectedEvidenceManifestSha256")
     if expected_protected_manifest is not None:
