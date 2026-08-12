@@ -1,4 +1,5 @@
 import http.client
+import hashlib
 import json
 import os
 import subprocess
@@ -138,11 +139,43 @@ class RecoveryFaultFixtureTest(unittest.TestCase):
         fault_error_message: str = DEFAULT_FAULT_MESSAGE,
         fault_http_status: int = 500,
         include_metadata_argument: bool = True,
+        image_mode: Optional[str] = None,
     ) -> subprocess.CompletedProcess[str]:
         with tempfile.TemporaryDirectory() as directory:
             metadata_path = Path(directory) / "artifact-metadata.json"
+            docker_mock = Path(directory) / "docker-mock.py"
             if metadata is not None:
                 metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+            inspected_mode = image_mode or mode
+            inspected_config = {
+                "contractVersion": "aws-recovery-fault-image-v1",
+                "mode": inspected_mode,
+                "faultPath": fault_path,
+                "faultErrorCode": fault_error_code,
+                "faultErrorMessage": fault_error_message,
+                "faultHttpStatus": fault_http_status,
+            }
+            canonical = json.dumps(
+                inspected_config,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            behavior_sha = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+            docker_mock.write_text(
+                "#!/usr/bin/env python3\n"
+                "import json, os, sys\n"
+                "image_ref = sys.argv[-1]\n"
+                "repository = image_ref.split('@', 1)[0].rsplit(':', 1)[0]\n"
+                "repo_digest = repository + '@' + image_ref.split('@', 1)[1]\n"
+                "print(json.dumps([{'RepoDigests': [repo_digest], 'Config': {'Labels': {"
+                "'org.kdt.travelplanner.recovery.contract-version': 'aws-recovery-fault-image-v1', "
+                "'org.kdt.travelplanner.recovery.behavior-sha256': os.environ['MOCK_BEHAVIOR_SHA256']}, "
+                "'Env': ['IMMUTABLE_BEHAVIOR_SHA256=' + os.environ['MOCK_BEHAVIOR_SHA256'], "
+                "'IMMUTABLE_CONTRACT_VERSION=aws-recovery-fault-image-v1']}}]))\n",
+                encoding="utf-8",
+            )
+            docker_mock.chmod(0o755)
             command = [
                 "bash",
                 str(VERIFY_HELPER),
@@ -168,6 +201,12 @@ class RecoveryFaultFixtureTest(unittest.TestCase):
                 capture_output=True,
                 text=True,
                 check=False,
+                env={
+                    **os.environ,
+                    "DOCKER_BIN": str(docker_mock),
+                    "MOCK_IMAGE_MODE": inspected_mode,
+                    "MOCK_BEHAVIOR_SHA256": behavior_sha,
+                },
             )
 
     def test_contract_declares_digest_and_safety_boundaries(self):
@@ -318,7 +357,7 @@ class RecoveryFaultFixtureTest(unittest.TestCase):
                 )
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertIn("deployment_image_ref=verified", result.stdout)
-                self.assertIn(f"artifact_metadata=verified mode={mode}", result.stdout)
+                self.assertIn(f"artifact_metadata=derived_from_image mode={mode}", result.stdout)
 
     def test_deployment_verifier_requires_metadata(self):
         result = self.verify_metadata(None, include_metadata_argument=False)
@@ -337,6 +376,24 @@ class RecoveryFaultFixtureTest(unittest.TestCase):
         result = self.verify_metadata(metadata, mode="business_error")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("metadata mismatch for mode", result.stderr)
+
+    def test_same_digest_cannot_verify_contradictory_image_mode(self):
+        probe_metadata = self.metadata("probe_failure")
+        probe = self.verify_metadata(
+            probe_metadata,
+            mode="probe_failure",
+            image_mode="probe_failure",
+        )
+        self.assertEqual(probe.returncode, 0, probe.stderr)
+
+        business_metadata = self.metadata("business_error")
+        business = self.verify_metadata(
+            business_metadata,
+            mode="business_error",
+            image_mode="probe_failure",
+        )
+        self.assertNotEqual(business.returncode, 0)
+        self.assertIn("immutable behavior digest", business.stderr)
 
     def test_deployment_verifier_rejects_metadata_digest_mismatch(self):
         metadata = self.metadata("probe_failure")

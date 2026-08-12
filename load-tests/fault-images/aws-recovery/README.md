@@ -25,10 +25,22 @@ Management server는 `9091` 포트, application server는 `8080` 포트에서
 
 ## Immutable artifact metadata
 
-모드가 이미지의 runtime `FAULT_MODE` 환경 변수에만 남지 않도록, 배포 시
-승인된 이미지 digest와 선택한 모드를 `artifact-metadata.json` sidecar에
-함께 기록한다. metadata는 다음 8개 필드만 허용하며 모두 verifier의 CLI
-입력과 exact-match해야 한다.
+모드와 장애 파라미터는 runtime 환경변수만으로 결정되지 않는다. Build
+helper가 canonical immutable configuration을 생성하고 Dockerfile이 이를
+`/app/fault-config.json`으로 이미지 안에 기록한다. 같은 configuration의
+SHA-256과 contract/behavior label도 이미지 config에 함께 굽는다. behavior
+hash에는 mode와 모든 fault parameter가 포함된다. 컨테이너가
+실행될 때 fault 환경변수가 이미지 설정과 다르면 즉시 종료하므로 runtime
+override로 metadata와 실제 동작이 갈라지지 않는다.
+
+배포 시 `artifact-metadata.json` sidecar는 보조 증거로만 사용한다. verifier는
+sidecar와 CLI 값을 비교하는 데서 끝나지 않고, exact digest로 로컬에 있는
+이미지에 `docker image inspect`를 수행해 `RepoDigests`, immutable labels,
+immutable environment binding을 직접 확인한다. 따라서 caller가 만든
+sidecar만으로는 검증을 통과할 수 없다.
+
+metadata는 다음 8개 필드만 허용하며 모두 verifier의 CLI 입력과 exact-match해야
+한다.
 
 ```json
 {
@@ -48,11 +60,12 @@ error code/message/status 중 하나라도 없거나 다르면 검증은 fail-cl
 `faultHttpStatus`는 metadata에서도 `500..599`만 허용한다. Metadata에는
 credentials, tokens, 개인 정보 또는 외부 서비스 설정을 넣지 않는다.
 
-Build helper는 `--mode`와 fault parameter를 검증하고 Docker build에 같은
-`FAULT_MODE`를 전달한다. Registry digest를 확인한 뒤에는 `--image-digest`
-와 `--metadata-file`을 함께 사용해 같은 sidecar를 재검증한다. 배포 직전
-verifier에는 `--mode`, `--metadata-file` 및 동일한 fault parameter를
-반드시 전달한다.
+Build helper는 `--mode`와 모든 fault parameter를 검증하고, configuration
+base64와 behavior SHA를 Docker build args로 전달한다. Registry digest를
+확인한 뒤에는 exact digest 이미지를 먼저 pull하거나 local cache에 둔 다음
+`--image-digest`와 `--metadata-file`을 함께 사용해 실제 image config를
+재검증한다. 배포 직전 verifier에는 `--mode`, `--metadata-file` 및 동일한
+fault parameter를 반드시 전달한다.
 
 ## Digest 계약
 
@@ -97,6 +110,9 @@ Registry에서 확인한 최종 digest reference와 base image는 배포 직전�
 `business_error` 검증은 위 명령의 `--mode`를 `business_error`로 바꾸고
 metadata의 `faultHttpStatus`를 `500..599` 중 승인된 값으로 맞춘다. `--mode`
 와 metadata가 서로 다른 경우 이미지 digest가 같아도 통과하지 않는다.
+또한 같은 digest의 이미지 label/config가 선택한 mode·parameter hash와
+다르면 통과하지 않는다. verifier는 exact digest 이미지가 local Docker
+daemon에 없거나 `RepoDigests`가 일치하지 않아도 fail-closed한다.
 
 ## 로컬 contract test
 
@@ -108,4 +124,6 @@ python3 -m unittest load-tests/tests/test_recovery_fault_image.py -v
 bash -n scripts/loadtest/aws/build-recovery-fault-image.sh
 ```
 
-실제 Docker build/push와 AWS rollout은 이 테스트에 포함하지 않는다.
+실제 Docker build/push와 AWS rollout은 이 테스트에 포함하지 않는다. Docker
+build 후에는 `docker image inspect`와 두 mode의 실제 HTTP probe를 별도
+검증해야 하며, fault image를 push하지 않고도 이 검증을 수행할 수 있다.

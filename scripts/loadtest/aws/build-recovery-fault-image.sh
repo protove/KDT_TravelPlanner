@@ -27,8 +27,8 @@ usage: build-recovery-fault-image.sh --image-ref REPOSITORY:TAG \
 
 --dry-run is the default and validates only. --push requires --build and is a
 separate live approval action. When a registry digest is known, --image-digest
-and --metadata-file validate the immutable artifact sidecar with the same
-contract used by verify-recovery-fault-image.sh.
+and --metadata-file pre-validate the sidecar; verify-recovery-fault-image.sh
+must still inspect the exact local image digest and immutable config.
 EOF
 }
 
@@ -193,6 +193,35 @@ if metadata_file:
     print(f"artifact_metadata=verified image_digest={image_digest}")
 PY
 
+BUILD_BINDING="$({
+  python3 - "$MODE" "$FAULT_PATH" "$FAULT_ERROR_CODE" "$FAULT_ERROR_MESSAGE" \
+    "$FAULT_HTTP_STATUS" "$CONTEXT/artifact-contract.json" <<'PY'
+import base64
+import hashlib
+import json
+import sys
+from pathlib import Path
+
+mode, fault_path, fault_error_code, fault_error_message, fault_http_status, contract_path = sys.argv[1:]
+contract = json.loads(Path(contract_path).read_text(encoding="utf-8"))
+config = {
+    "contractVersion": contract["contractVersion"],
+    "mode": mode,
+    "faultPath": fault_path,
+    "faultErrorCode": fault_error_code,
+    "faultErrorMessage": fault_error_message,
+    "faultHttpStatus": int(fault_http_status),
+}
+canonical = json.dumps(config, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+encoded = base64.b64encode(canonical.encode("utf-8")).decode("ascii")
+digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+print(f"{encoded}:{digest}")
+PY
+})"
+FAULT_CONFIG_B64="${BUILD_BINDING%%:*}"
+BEHAVIOR_SHA256="${BUILD_BINDING##*:}"
+echo "behavior_binding=derived sha256=$BEHAVIOR_SHA256"
+
 if (( ! DO_BUILD )); then
   echo "dry_run=passed"
   exit 0
@@ -201,11 +230,18 @@ fi
 docker build \
   --pull=false \
   --build-arg "PYTHON_IMAGE=$BASE_IMAGE" \
+  --build-arg "CONTRACT_VERSION=aws-recovery-fault-image-v1" \
   --build-arg "FAULT_MODE=$MODE" \
+  --build-arg "FAULT_PATH=$FAULT_PATH" \
+  --build-arg "FAULT_ERROR_CODE=$FAULT_ERROR_CODE" \
+  --build-arg "FAULT_ERROR_MESSAGE=$FAULT_ERROR_MESSAGE" \
+  --build-arg "FAULT_HTTP_STATUS=$FAULT_HTTP_STATUS" \
+  --build-arg "FAULT_CONFIG_B64=$FAULT_CONFIG_B64" \
+  --build-arg "BEHAVIOR_SHA256=$BEHAVIOR_SHA256" \
   --tag "$IMAGE_REF" \
   "$CONTEXT"
 
-echo "image_build=passed local_tag=$IMAGE_REF"
+echo "image_build=passed local_tag=$IMAGE_REF behavior_sha256=$BEHAVIOR_SHA256"
 if (( DO_PUSH )); then
   docker push "$IMAGE_REF"
   echo "image_push=completed local_tag=$IMAGE_REF"

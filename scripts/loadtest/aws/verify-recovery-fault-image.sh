@@ -6,6 +6,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPOSITORY_ROOT="$(cd -- "$SCRIPT_DIR/../../.." && pwd)"
 CONTRACT="$REPOSITORY_ROOT/load-tests/fault-images/aws-recovery/artifact-contract.json"
+DOCKER_BIN="${DOCKER_BIN:-docker}"
 
 IMAGE_REF=""
 BASE_IMAGE=""
@@ -50,14 +51,35 @@ if [[ -z "$METADATA_FILE" || ! -f "$METADATA_FILE" ]]; then
   exit 2
 fi
 
+INSPECT_JSON="$(mktemp "${TMPDIR:-/tmp}/recovery-fault-image-inspect.XXXXXX")"
+INSPECT_ERR="$(mktemp "${TMPDIR:-/tmp}/recovery-fault-image-inspect-error.XXXXXX")"
+trap 'rm -f "$INSPECT_JSON" "$INSPECT_ERR"' EXIT
+if ! "$DOCKER_BIN" image inspect "$IMAGE_REF" >"$INSPECT_JSON" 2>"$INSPECT_ERR"; then
+  echo "docker image inspect failed for the exact digest-pinned image" >&2
+  exit 1
+fi
+
 python3 - "$CONTRACT" "$METADATA_FILE" "$IMAGE_REF" "$BASE_IMAGE" \
-  "$MODE" "$FAULT_PATH" "$FAULT_ERROR_CODE" "$FAULT_ERROR_MESSAGE" "$FAULT_HTTP_STATUS" <<'PY'
+  "$MODE" "$FAULT_PATH" "$FAULT_ERROR_CODE" "$FAULT_ERROR_MESSAGE" "$FAULT_HTTP_STATUS" \
+  "$INSPECT_JSON" <<'PY'
+import hashlib
 import json
 import re
 import sys
 from pathlib import Path
 
-contract_path, metadata_path, image_ref, base_image, mode, fault_path, fault_error_code, fault_error_message, fault_http_status = sys.argv[1:]
+(
+    contract_path,
+    metadata_path,
+    image_ref,
+    base_image,
+    mode,
+    fault_path,
+    fault_error_code,
+    fault_error_message,
+    fault_http_status,
+    inspect_path,
+) = sys.argv[1:]
 try:
     contract = json.loads(Path(contract_path).read_text(encoding="utf-8"))
 except (OSError, json.JSONDecodeError) as error:
@@ -73,6 +95,28 @@ if not re.fullmatch(image_spec.get("digestPattern", ""), image_ref):
     raise SystemExit("image reference is not digest pinned")
 if not re.fullmatch(image_spec.get("baseImagePattern", ""), base_image):
     raise SystemExit("base image is not digest pinned")
+
+try:
+    inspected = json.loads(Path(inspect_path).read_text(encoding="utf-8"))
+except (OSError, json.JSONDecodeError) as error:
+    raise SystemExit(f"unable to read docker image inspection: {error}") from error
+if not isinstance(inspected, list) or len(inspected) != 1 or not isinstance(inspected[0], dict):
+    raise SystemExit("docker image inspection must contain exactly one image")
+image = inspected[0]
+repo_digests = image.get("RepoDigests")
+if not isinstance(repo_digests, list):
+    raise SystemExit("docker image inspection does not prove the exact deployment digest")
+image_tag, image_digest = image_ref.split("@", 1)
+repository = image_tag.rsplit(":", 1)[0]
+expected_repo_digest = f"{repository}@{image_digest}"
+if expected_repo_digest not in repo_digests:
+    raise SystemExit("docker image inspection does not prove the exact deployment digest")
+config = image.get("Config")
+if not isinstance(config, dict):
+    raise SystemExit("docker image inspection is missing image config")
+labels = config.get("Labels")
+if not isinstance(labels, dict):
+    raise SystemExit("docker image inspection is missing immutable recovery labels")
 
 metadata_spec = contract.get("metadata")
 if not isinstance(metadata_spec, dict):
@@ -119,6 +163,38 @@ except ValueError as error:
 if not int(status_spec.get("minimum", 500)) <= status <= int(status_spec.get("maximum", 599)):
     raise SystemExit("FAULT_HTTP_STATUS must be between 500 and 599")
 
+behavior_config = {
+    "contractVersion": contract.get("contractVersion"),
+    "mode": mode,
+    "faultPath": fault_path,
+    "faultErrorCode": fault_error_code,
+    "faultErrorMessage": fault_error_message,
+    "faultHttpStatus": status,
+}
+canonical = json.dumps(behavior_config, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+behavior_sha = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+label_prefix = "org.kdt.travelplanner.recovery."
+if labels.get(label_prefix + "contract-version") != contract.get("contractVersion"):
+    raise SystemExit("image label contract version does not match the artifact contract")
+if labels.get(label_prefix + "behavior-sha256") != behavior_sha:
+    raise SystemExit("image immutable behavior digest does not match selected parameters")
+environment = config.get("Env")
+if not isinstance(environment, list):
+    raise SystemExit("docker image inspection is missing image environment")
+for variable in (
+    "FAULT_MODE",
+    "FAULT_PATH",
+    "FAULT_ERROR_CODE",
+    "FAULT_ERROR_MESSAGE",
+    "FAULT_HTTP_STATUS",
+):
+    if any(isinstance(item, str) and item.startswith(variable + "=") for item in environment):
+        raise SystemExit(f"image contains runtime-overridable {variable}; immutable config is required")
+if f"IMMUTABLE_BEHAVIOR_SHA256={behavior_sha}" not in environment:
+    raise SystemExit("image immutable behavior environment binding is missing")
+if f"IMMUTABLE_CONTRACT_VERSION={contract.get('contractVersion')}" not in environment:
+    raise SystemExit("image immutable contract environment binding is missing")
+
 try:
     metadata = json.loads(Path(metadata_path).read_text(encoding="utf-8"))
 except (OSError, json.JSONDecodeError) as error:
@@ -144,7 +220,8 @@ for field, value in expected.items():
     if metadata.get(field) != value:
         raise SystemExit(f"artifact metadata mismatch for {field}")
 print("fault_image_contract=verified")
-print(f"artifact_metadata=verified mode={mode} image_ref={image_ref}")
+print(f"artifact_metadata=derived_from_image mode={mode} image_ref={image_ref}")
+print(f"immutable_behavior_sha256=verified value={behavior_sha}")
 PY
 
 echo "deployment_image_ref=verified"

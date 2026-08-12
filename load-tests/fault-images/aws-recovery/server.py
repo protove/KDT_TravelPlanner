@@ -11,12 +11,14 @@ store.
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import re
 import signal
 import uuid
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -25,6 +27,16 @@ ALLOWED_MODES = {"normal", "probe_failure", "business_error"}
 ERROR_CODE_PATTERN = re.compile(r"^[A-Z][A-Z0-9_]{1,63}$")
 PATH_PATTERN = re.compile(r"^/api/v1/[A-Za-z0-9_./{}:-]+$")
 MAX_BODY_BYTES = 1_048_576
+IMMUTABLE_CONFIG_PATH = "/app/fault-config.json"
+IMMUTABLE_CONFIG_FIELDS = {
+    "contractVersion",
+    "mode",
+    "faultPath",
+    "faultErrorCode",
+    "faultErrorMessage",
+    "faultHttpStatus",
+}
+CONTRACT_VERSION = "aws-recovery-fault-image-v1"
 
 
 def _env_port(name: str, default: int) -> int:
@@ -75,19 +87,106 @@ def _env_error_status(mode: str = "normal") -> int:
     return status
 
 
+def _validate_fault_values(values: dict[str, Any]) -> dict[str, Any]:
+    if set(values) != IMMUTABLE_CONFIG_FIELDS:
+        raise ValueError("immutable fault configuration fields are invalid")
+    if values["contractVersion"] != CONTRACT_VERSION:
+        raise ValueError("immutable fault configuration contract version is invalid")
+    mode = str(values["mode"]).strip().lower()
+    if mode not in ALLOWED_MODES:
+        raise ValueError(f"FAULT_MODE must be one of {sorted(ALLOWED_MODES)}")
+    path = str(values["faultPath"]).strip()
+    if not PATH_PATTERN.fullmatch(path):
+        raise ValueError("FAULT_PATH must be a safe /api/v1/... path")
+    code = str(values["faultErrorCode"]).strip()
+    if not ERROR_CODE_PATTERN.fullmatch(code):
+        raise ValueError("FAULT_ERROR_CODE must be an uppercase error code")
+    message = values["faultErrorMessage"]
+    if not isinstance(message, str) or len(message) > 256:
+        raise ValueError("FAULT_ERROR_MESSAGE must be at most 256 characters")
+    try:
+        status = int(values["faultHttpStatus"])
+    except (TypeError, ValueError) as error:
+        raise ValueError("FAULT_HTTP_STATUS must be an integer") from error
+    if mode == "business_error" and not 500 <= status <= 599:
+        raise ValueError(
+            "FAULT_HTTP_STATUS for business_error must be between 500 and 599"
+        )
+    if mode != "business_error" and not 400 <= status <= 599:
+        raise ValueError("FAULT_HTTP_STATUS must be an HTTP 4xx or 5xx status")
+    return {
+        "contractVersion": CONTRACT_VERSION,
+        "mode": mode,
+        "faultPath": path,
+        "faultErrorCode": code,
+        "faultErrorMessage": message,
+        "faultHttpStatus": status,
+    }
+
+
+def _load_immutable_fault_config() -> dict[str, Any] | None:
+    path = Path(IMMUTABLE_CONFIG_PATH)
+    if not path.is_file():
+        return None
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise ValueError(f"unable to read immutable fault configuration: {error}") from error
+    if not isinstance(raw, dict):
+        raise ValueError("immutable fault configuration must be a JSON object")
+    values = _validate_fault_values(raw)
+    canonical = json.dumps(values, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    behavior_sha = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    declared_sha = os.getenv("IMMUTABLE_BEHAVIOR_SHA256")
+    if declared_sha and declared_sha != behavior_sha:
+        raise ValueError("immutable fault configuration digest mismatch")
+    declared_contract = os.getenv("IMMUTABLE_CONTRACT_VERSION")
+    if declared_contract and declared_contract != CONTRACT_VERSION:
+        raise ValueError("immutable fault configuration contract mismatch")
+
+    environment_values = {
+        "FAULT_MODE": values["mode"],
+        "FAULT_PATH": values["faultPath"],
+        "FAULT_ERROR_CODE": values["faultErrorCode"],
+        "FAULT_ERROR_MESSAGE": values["faultErrorMessage"],
+        "FAULT_HTTP_STATUS": values["faultHttpStatus"],
+    }
+    for name, expected in environment_values.items():
+        supplied = os.getenv(name)
+        if supplied is None:
+            continue
+        normalized = supplied.strip().lower() if name == "FAULT_MODE" else supplied.strip()
+        if name == "FAULT_HTTP_STATUS":
+            try:
+                normalized = int(normalized)
+            except ValueError as error:
+                raise ValueError(f"{name} runtime override is invalid") from error
+        if normalized != expected:
+            raise ValueError(f"{name} runtime override differs from immutable image configuration")
+    return values
+
+
 class FixtureConfig:
     def __init__(self) -> None:
-        self.mode = _env_mode()
+        immutable = _load_immutable_fault_config()
+        if immutable is None:
+            self.mode = _env_mode()
+            self.fault_path = _env_fault_path()
+            self.error_code = _env_error_code()
+            self.error_status = _env_error_status(self.mode)
+            self.error_message = os.getenv(
+                "FAULT_ERROR_MESSAGE", "서버 내부 오류가 발생했습니다."
+            )[:256]
+        else:
+            self.mode = immutable["mode"]
+            self.fault_path = immutable["faultPath"]
+            self.error_code = immutable["faultErrorCode"]
+            self.error_status = immutable["faultHttpStatus"]
+            self.error_message = immutable["faultErrorMessage"]
         self.application_port = _env_port("PORT", 8080)
         self.management_port = _env_port("MANAGEMENT_PORT", 9091)
         if self.application_port == self.management_port:
             raise ValueError("PORT and MANAGEMENT_PORT must be different")
-        self.fault_path = _env_fault_path()
-        self.error_code = _env_error_code()
-        self.error_status = _env_error_status(self.mode)
-        self.error_message = os.getenv(
-            "FAULT_ERROR_MESSAGE", "서버 내부 오류가 발생했습니다."
-        )[:256]
 
 
 class FixtureHandler(BaseHTTPRequestHandler):
