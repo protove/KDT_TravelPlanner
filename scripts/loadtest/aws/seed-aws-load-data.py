@@ -114,6 +114,17 @@ def provider_user_id(run_id: str, index: int) -> str:
     return f"loadtest-aws-{run_id}-{index:03d}"[:255]
 
 
+def provider_user_id_regex(run_id: str) -> str:
+    """Match only this run's complete synthetic provider-user ID.
+
+    A prefix-only LIKE predicate would make ``run-a`` overlap ``run-a-x``.
+    The provider ID contract always terminates in a three-digit index, so an
+    anchored PostgreSQL regular expression gives reset and count one exact
+    ownership boundary without accepting a longer Run ID.
+    """
+    return f"^loadtest-aws-{run_id}-[0-9]{{3}}$"
+
+
 def synthetic_email(run_id: str, index: int) -> str:
     # @loadtest.local matches the synthetic_email pattern already scanned by
     # scripts/loadtest/verify-evidence-safety.py, so existing evidence
@@ -365,11 +376,11 @@ class AwsSeed:
 
     def reset_synthetic_planners(self, run_id: str) -> int:
         """Delete only this run's planners; FK cascades remove its fixture rows."""
-        pattern = sql_literal(f"loadtest-aws-{run_id}-%")
+        pattern = sql_literal(provider_user_id_regex(run_id))
         result = self.psql(
             "WITH deleted AS ("
             "DELETE FROM planners_table WHERE owner_id IN ("
-            "SELECT id FROM user_table WHERE provider = 'GOOGLE' AND provider_user_id LIKE "
+            "SELECT id FROM user_table WHERE provider = 'GOOGLE' AND provider_user_id ~ "
             f"{pattern}"
             ") RETURNING id) SELECT count(*) FROM deleted"
         ).strip()
@@ -380,10 +391,10 @@ class AwsSeed:
 
     def fixture_counts(self, run_id: str) -> dict[str, int]:
         """Return sanitized counts for this run's users, planners and timeline rows."""
-        pattern = sql_literal(f"loadtest-aws-{run_id}-%")
+        pattern = sql_literal(provider_user_id_regex(run_id))
         result = self.psql(
             "WITH synthetic_users AS ("
-            "SELECT id FROM user_table WHERE provider = 'GOOGLE' AND provider_user_id LIKE "
+            "SELECT id FROM user_table WHERE provider = 'GOOGLE' AND provider_user_id ~ "
             f"{pattern}), synthetic_planners AS ("
             "SELECT p.id FROM planners_table p JOIN synthetic_users u ON u.id = p.owner_id), "
             "planner_counts AS ("

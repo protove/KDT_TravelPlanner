@@ -202,6 +202,8 @@ class AwsOrchestrationContractTests(unittest.TestCase):
         self.assertIn('payload.get("profileSha256") != profile_sha', source)
         self.assertIn('(payload.get("confirmedRate") or "") != confirmed_rate', source)
         self.assertIn('payload.get("inputDigest") != input_digest', source)
+        self.assertIn('"fixtureResultPath": f"fixtures/{stage}.json"', source)
+        self.assertIn('"fixtureExpectedUsers": int(users_raw)', source)
         self.assertIn('"albArn": alb_arn', source)
         self.assertIn('"baseUrl": base_url', source)
         self.assertIn('"runnerId": runner_id', source)
@@ -278,6 +280,9 @@ source {fragment}
 
             marker = json.loads((stage_dir / "smoke.json").read_text(encoding="utf-8"))
             self.assertEqual(len(marker["inputDigest"]), 64)
+            self.assertEqual(marker["fixtureId"], "smoke")
+            self.assertEqual(marker["fixtureResultPath"], "fixtures/smoke.json")
+            self.assertEqual(marker["fixtureExpectedUsers"], 20)
             self.assertNotIn("not-written-to-marker", (stage_dir / "smoke.json").read_text(encoding="utf-8"))
 
             same = subprocess.run(

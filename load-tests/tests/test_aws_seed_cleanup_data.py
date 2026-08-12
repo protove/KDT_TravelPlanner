@@ -113,6 +113,14 @@ class SeedAwsLoadDataTest(unittest.TestCase):
         b = SEED.provider_user_id("run-b", 1)
         self.assertNotEqual(a, b)
 
+    def test_provider_user_id_regex_is_anchored_to_exact_run_id(self):
+        pattern = SEED.provider_user_id_regex("run-a")
+        self.assertEqual(pattern, r"^loadtest-aws-run-a-[0-9]{3}$")
+        self.assertRegex("loadtest-aws-run-a-001", pattern)
+        self.assertNotRegex("loadtest-aws-run-a-x-001", pattern)
+        self.assertNotRegex("loadtest-aws-run-ab-001", pattern)
+        self.assertNotRegex("loadtest-aws-run-a-01", pattern)
+
     def test_synthetic_nickname_fits_unique_column_limit(self):
         nickname = SEED.synthetic_nickname("aws-b01-20260809-001", 199)
         self.assertLessEqual(len(nickname), 30)
@@ -133,7 +141,7 @@ class SeedAwsLoadDataTest(unittest.TestCase):
         self.assertEqual(runtime.reset_synthetic_planners("aws-b01-fixture"), 2)
         self.assertEqual(len(captured), 1)
         self.assertIn("DELETE FROM planners_table", captured[0])
-        self.assertIn("provider_user_id LIKE 'loadtest-aws-aws-b01-fixture-%'", captured[0])
+        self.assertIn("provider_user_id ~ '^loadtest-aws-aws-b01-fixture-[0-9]{3}$'", captured[0])
         self.assertNotIn("FLUSH", captured[0].upper())
 
     def test_fixture_counts_parse_sanitized_cardinality_contract(self):
@@ -152,6 +160,19 @@ class SeedAwsLoadDataTest(unittest.TestCase):
             },
         )
         self.assertIn("planner_counts", captured[0])
+        self.assertIn("provider_user_id ~ '^loadtest-aws-aws-b01-fixture-[0-9]{3}$'", captured[0])
+
+    def test_reset_and_fixture_count_use_the_same_exact_run_predicate(self):
+        runtime = object.__new__(SEED.AwsSeed)
+        captured = []
+        runtime.psql = lambda sql: captured.append(sql) or ("0\n" if "DELETE" in sql else "0|0|0|0|0\n")
+
+        runtime.reset_synthetic_planners("run-a")
+        runtime.fixture_counts("run-a")
+
+        predicates = [statement.split("provider_user_id ~ ", 1)[1].split(")", 1)[0] for statement in captured]
+        self.assertEqual(predicates[0], predicates[1])
+        self.assertNotIn("LIKE", "\n".join(captured).upper())
 
     def test_fixture_count_validation_requires_normalized_three_item_planners(self):
         valid = {

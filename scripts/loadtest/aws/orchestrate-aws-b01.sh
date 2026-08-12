@@ -400,21 +400,28 @@ mark_stage_complete() {
   local stage_rate stage_digest
   stage_rate="$(stage_confirmed_rate "$stage")"
   stage_digest="$(stage_input_digest "$stage")"
-  python3 - "$STAGE_DIR/$stage.json" "$stage" "$RUN_ID" "$PROFILE_SHA256" "$stage_rate" "$stage_digest" <<'PY'
+  python3 - "$STAGE_DIR/$stage.json" "$stage" "$RUN_ID" "$PROFILE_SHA256" "$stage_rate" "$stage_digest" "$USERS" <<'PY'
 import json
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-output, stage, run_id, profile_sha, confirmed_rate, input_digest = sys.argv[1:]
-Path(output).write_text(json.dumps({
+output, stage, run_id, profile_sha, confirmed_rate, input_digest, users_raw = sys.argv[1:]
+payload = {
     "stage": stage,
     "runId": run_id,
     "profileSha256": profile_sha,
     "confirmedRate": confirmed_rate or None,
     "inputDigest": input_digest,
     "completedAtUtc": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
-}, indent=2) + "\n", encoding="utf-8")
+}
+if stage == "seed" or stage in {"smoke", "ramp", "spike"} or stage.startswith("baseline-"):
+    payload.update({
+        "fixtureId": stage,
+        "fixtureResultPath": f"fixtures/{stage}.json",
+        "fixtureExpectedUsers": int(users_raw),
+    })
+Path(output).write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
 PY
 }
 

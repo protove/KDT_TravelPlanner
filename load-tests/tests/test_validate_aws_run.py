@@ -92,6 +92,48 @@ def write_phase_dir(
     return phase_dir
 
 
+def write_valid_fixture_bundle(root: Path, *, run_id: str = "run-valid") -> Path:
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "metadata.json").write_text(json.dumps({"runId": run_id}), encoding="utf-8")
+    (root / "operations.jsonl").write_text(
+        json.dumps({"ts": "2026-01-01T00:00:00Z", "event": "RUN_START"}) + "\n"
+        + json.dumps({"ts": "2026-01-01T01:00:00Z", "event": "RUN_END"}) + "\n",
+        encoding="utf-8",
+    )
+    (root / "evidence-safety.json").write_text(json.dumps({"safe": True, "findingCount": 0}), encoding="utf-8")
+    stages = root / "stages"
+    fixtures = root / "fixtures"
+    stages.mkdir()
+    fixtures.mkdir()
+    start = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    for phase in VALIDATE.ASSESSED_PHASES:
+        write_phase_dir(
+            root, phase, run_start=start, warmup_seconds=0 if phase == "smoke" else 180,
+            rate=None if phase == "smoke" else 12, k6_exit_code=0, dropped_iterations=0,
+            p95_ms=100, completed=10, successful=10, unexpected=0, contract_failures=0,
+        )
+        (stages / f"{phase}.json").write_text(json.dumps({
+            "stage": phase,
+            "runId": run_id,
+            "fixtureId": phase,
+            "fixtureResultPath": f"fixtures/{phase}.json",
+            "fixtureExpectedUsers": 2,
+        }), encoding="utf-8")
+        (fixtures / f"{phase}.json").write_text(json.dumps({
+            "runId": run_id,
+            "fixtureId": phase,
+            "expected": {"users": 2, "planners": 2, "timelineItems": 6, "timelineItemsPerPlanner": 3},
+            "actual": {
+                "users": 2,
+                "planners": 2,
+                "timelineItems": 6,
+                "minimumTimelineItemsPerPlanner": 3,
+                "maximumTimelineItemsPerPlanner": 3,
+            },
+        }), encoding="utf-8")
+    return root
+
+
 class HelpersTest(unittest.TestCase):
     def test_timestamp_accepts_k6_nanosecond_precision(self):
         parsed = VALIDATE.timestamp("2026-01-01T00:00:00.123456789Z")
@@ -278,6 +320,64 @@ class BundleStructureTest(unittest.TestCase):
 
             self.assertTrue(result["safe"])
             self.assertTrue(result["hasRunBoundaries"])
+
+
+class FixtureGateTest(unittest.TestCase):
+    def assert_fixture_rejected(self, mutate):
+        with tempfile.TemporaryDirectory() as directory:
+            root = write_valid_fixture_bundle(Path(directory))
+            mutate(root)
+            report = VALIDATE.evaluate(root, None, confirmed_rate=12)
+            self.assertFalse(report["fixtures"]["passed"])
+            self.assertFalse(report["passed"])
+
+    def test_valid_fixture_evidence_is_required_and_passes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            report = VALIDATE.evaluate(write_valid_fixture_bundle(Path(directory)), None, confirmed_rate=12)
+            self.assertTrue(report["fixtures"]["passed"])
+            self.assertTrue(report["passed"])
+            self.assertTrue(all(phase["passed"] for phase in report["fixtures"]["phases"]))
+            gate_report = json.loads((Path(directory) / "gate-report.json").read_text(encoding="utf-8"))
+            self.assertTrue(gate_report["fixtures"]["passed"])
+
+    def test_missing_fixture_artifact_rejects_gate(self):
+        self.assert_fixture_rejected(lambda root: (root / "fixtures" / "spike.json").unlink())
+
+    def test_stale_fixture_run_id_rejects_gate(self):
+        def mutate(root):
+            path = root / "fixtures" / "ramp.json"
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            payload["runId"] = "run-old"
+            path.write_text(json.dumps(payload), encoding="utf-8")
+
+        self.assert_fixture_rejected(mutate)
+
+    def test_swapped_fixture_phase_rejects_gate(self):
+        def mutate(root):
+            path = root / "fixtures" / "baseline-2.json"
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            payload["fixtureId"] = "baseline-1"
+            path.write_text(json.dumps(payload), encoding="utf-8")
+
+        self.assert_fixture_rejected(mutate)
+
+    def test_wrong_fixture_count_rejects_gate(self):
+        def mutate(root):
+            path = root / "fixtures" / "baseline-1.json"
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            payload["actual"]["timelineItems"] = 7
+            path.write_text(json.dumps(payload), encoding="utf-8")
+
+        self.assert_fixture_rejected(mutate)
+
+    def test_wrong_per_planner_count_rejects_gate(self):
+        def mutate(root):
+            path = root / "fixtures" / "baseline-3.json"
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            payload["actual"]["minimumTimelineItemsPerPlanner"] = 2
+            path.write_text(json.dumps(payload), encoding="utf-8")
+
+        self.assert_fixture_rejected(mutate)
 
 
 if __name__ == "__main__":
