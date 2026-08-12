@@ -21,6 +21,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+try:
+    from slo_contract import CONTRACT_PATH, load_contract, satisfies, verify_input_digest_manifest
+except ImportError:  # pragma: no cover - supports direct import by external callers
+    from scripts.loadtest.aws.slo_contract import CONTRACT_PATH, load_contract, satisfies, verify_input_digest_manifest
+
 
 CORE_COUNTERS = (
     "core_operations_total",
@@ -30,6 +35,7 @@ CORE_COUNTERS = (
     "core_contract_failures_total",
 )
 REQUIRED_EVENTS = ("RUN_START", "T0", "T1", "T2", "T3", "T4", "T5", "RUN_END")
+SLO_CONTRACT = load_contract()
 
 
 class RecoveryValidationError(RuntimeError):
@@ -121,6 +127,25 @@ def validate_freeze(path: Path) -> dict:
         raise RecoveryValidationError("D-006 freeze metadata has no approver")
     if not isinstance(payload.get("runId"), str) or not payload["runId"].strip():
         raise RecoveryValidationError("D-006 freeze metadata has no B-01 runId")
+    manifest_ref = payload.get("freezeInputManifest")
+    if not isinstance(manifest_ref, str) or not manifest_ref.strip() or Path(manifest_ref).is_absolute():
+        raise RecoveryValidationError("D-006 freeze metadata has no relative freezeInputManifest")
+    manifest_path = (path.parent / manifest_ref).resolve()
+    try:
+        manifest_path.relative_to(path.parent.resolve())
+    except ValueError as error:
+        raise RecoveryValidationError("D-006 freezeInputManifest escapes the evidence directory") from error
+    manifest = read_json(manifest_path)
+    try:
+        verify_input_digest_manifest(manifest, contract_path=CONTRACT_PATH)
+    except ValueError as error:
+        raise RecoveryValidationError(str(error)) from error
+    if manifest.get("runId") != payload["runId"]:
+        raise RecoveryValidationError("D-006 freezeInputManifest runId does not match freeze metadata")
+    if payload.get("freezeInputDigest") != manifest.get("inputDigest"):
+        raise RecoveryValidationError("D-006 freezeInputDigest does not match freeze input manifest")
+    if payload.get("sloContractSha256") != manifest.get("contract", {}).get("sha256"):
+        raise RecoveryValidationError("D-006 sloContractSha256 does not match freeze input manifest")
     return payload
 
 
@@ -407,9 +432,10 @@ def evaluate(args: argparse.Namespace) -> dict:
         raise RecoveryValidationError("runner bottleneck is marked suspected")
     observability = validate_observability(run_dir, profile)
 
-    bucket_seconds = int(profile["recovery"]["bucketSeconds"])
-    window_seconds = int(profile["recovery"]["stableWindowSeconds"])
-    budget_seconds = int(profile["recovery"]["budgetSeconds"])
+    recovery_contract = SLO_CONTRACT["recovery"]
+    bucket_seconds = int(recovery_contract["bucketSeconds"])
+    window_seconds = int(recovery_contract["stableWindowSeconds"])
+    budget_seconds = int(recovery_contract["budgetSeconds"])
     durations, counters, observed = load_points(run_dir / "raw.json", bucket_seconds)
     missing_core = [name for name in CORE_COUNTERS if name not in observed]
     if "core_operation_duration" not in observed:
@@ -453,13 +479,25 @@ def evaluate(args: argparse.Namespace) -> dict:
         unexpected_rate = unexpected_total / completed_total if completed_total else math.inf
         contract_rate = contract_total / completed_total if completed_total else math.inf
         bucket_rates_pass = all(
-            (float(item["unexpected"]) / int(item["completed"])) < float(profile["recovery"]["unexpectedErrorRate"])
-            and (float(item["contractFailures"]) / int(item["completed"])) <= float(profile["recovery"]["contractFailureRate"])
+            satisfies(
+                SLO_CONTRACT,
+                "unexpectedErrorRate",
+                float(item["unexpected"]) / int(item["completed"]),
+            )
+            and satisfies(
+                SLO_CONTRACT,
+                "recoveryContractFailureRate",
+                float(item["contractFailures"]) / int(item["completed"]),
+            )
             for item in stats
         )
         bucket_pass = all(
-            float(item["p95Ms"]) <= float(profile["recovery"]["p95Ms"])
-            and float(item["successRps"]) >= float(profile["recovery"]["capacityFloorRatio"]) * base_success_rps
+            satisfies(SLO_CONTRACT, "p95Ms", float(item["p95Ms"]))
+            and satisfies(
+                SLO_CONTRACT,
+                "capacityFloorRatio",
+                float(item["successRps"]) / base_success_rps,
+            )
             for item in stats
         )
         if bucket_pass and bucket_rates_pass:
@@ -473,7 +511,9 @@ def evaluate(args: argparse.Namespace) -> dict:
         raise RecoveryValidationError("T6 recovery window ends after RUN_END")
     t1_to_t6 = t6 - t1
     t4_to_t6 = t6 - t4
-    if t1_to_t6 > budget_seconds or t4_to_t6 > budget_seconds:
+    if not satisfies(SLO_CONTRACT, "recoveryBudgetSeconds", t1_to_t6) or not satisfies(
+        SLO_CONTRACT, "recoveryBudgetSeconds", t4_to_t6
+    ):
         raise RecoveryValidationError(f"recovery budget exceeded: T1->T6={t1_to_t6:.1f}s T4->T6={t4_to_t6:.1f}s")
     if "T6" in events and abs(events["T6"] - t6) > bucket_seconds:
         raise RecoveryValidationError("existing T6 event does not match evaluated recovery window")

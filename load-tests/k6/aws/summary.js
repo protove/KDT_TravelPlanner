@@ -3,7 +3,9 @@
 // aws-load-test-handoff/plans/01_AWS_K6_WORKLOAD_PLAN.md and
 // contracts/RUN_METADATA_CONTRACT.md. Does not modify ../summary.js, which
 // Compose scenarios continue to use unchanged.
-import { ENVIRONMENT, REGION, REQUEST_MIX_VERSION, SEED_VERSION, SLO_VERSION } from './config.js';
+import {
+  ENVIRONMENT, REGION, REQUEST_MIX_VERSION, SEED_VERSION, SLO_CONTRACT_VERSION, SLO_VERSION,
+} from './config.js';
 
 export function makeAwsSummaryHandler(scenarioName) {
   return function handleSummary(data) {
@@ -17,6 +19,7 @@ export function makeAwsSummaryHandler(scenarioName) {
       region: REGION,
       environment: ENVIRONMENT,
       sloVersion: SLO_VERSION,
+      sloContractVersion: SLO_CONTRACT_VERSION,
       seedVersion: SEED_VERSION,
       requestMixVersion: REQUEST_MIX_VERSION,
       metrics: {

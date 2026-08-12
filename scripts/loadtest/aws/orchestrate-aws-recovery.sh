@@ -192,6 +192,48 @@ if rate > profile["limits"]["maxRate"]:
     raise SystemExit("--rate exceeds Recovery profile limits.maxRate")
 PY
 
+# D-006 approval is not sufficient by itself: the freeze must carry the
+# non-circular, hash-bound input manifest produced by B-01's freeze stage.
+# Validate it before any AWS target discovery or Recovery workload action.
+python3 - "$FREEZE_METADATA" "$REPOSITORY_ROOT" <<'PY'
+import importlib.util
+import json
+import sys
+from pathlib import Path
+
+freeze_path, repository_root = sys.argv[1:]
+root = Path(repository_root)
+helper_path = root / "scripts/loadtest/aws/slo_contract.py"
+spec = importlib.util.spec_from_file_location("slo_contract", helper_path)
+if not spec or not spec.loader:
+    raise SystemExit("cannot load SLO contract helper")
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+freeze = json.loads(Path(freeze_path).read_text(encoding="utf-8"))
+manifest_ref = freeze.get("freezeInputManifest")
+if not isinstance(manifest_ref, str) or not manifest_ref.strip() or Path(manifest_ref).is_absolute():
+    raise SystemExit("D-006 freezeInputManifest must be a relative path")
+manifest_path = (Path(freeze_path).parent / manifest_ref).resolve()
+try:
+    manifest_path.relative_to(Path(freeze_path).parent.resolve())
+except ValueError as error:
+    raise SystemExit("D-006 freezeInputManifest escapes the evidence directory") from error
+manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+try:
+    module.verify_input_digest_manifest(
+        manifest,
+        contract_path=root / "load-tests/aws/contracts/slo-v1.0.json",
+    )
+except ValueError as error:
+    raise SystemExit(str(error)) from error
+if manifest.get("runId") != freeze.get("runId"):
+    raise SystemExit("D-006 freezeInputManifest runId does not match freeze metadata")
+if freeze.get("freezeInputDigest") != manifest.get("inputDigest"):
+    raise SystemExit("D-006 freezeInputDigest does not match freeze input manifest")
+if freeze.get("sloContractSha256") != manifest.get("contract", {}).get("sha256"):
+    raise SystemExit("D-006 sloContractSha256 does not match freeze input manifest")
+PY
+
 python3 - "$D005_RATE_FILE" "$FREEZE_METADATA" "$B01_PROFILE" "$BASELINE_CANDIDATE" "$SOURCE_SHA" "$RATE" <<'PY'
 import hashlib
 import json

@@ -38,10 +38,16 @@ from pathlib import Path
 REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 SAFETY_SCRIPT = REPOSITORY_ROOT / "scripts/loadtest/verify-evidence-safety.py"
 
-P95_MS = 500.0
-UNEXPECTED_ERROR_RATE = 0.01
-CONTRACT_FAILURE_RATE = 0.01
-SUCCESS_RATE_FLOOR = 0.99
+try:
+    from slo_contract import load_contract, satisfies
+except ImportError:  # pragma: no cover - supports direct import by external callers
+    from scripts.loadtest.aws.slo_contract import load_contract, satisfies
+
+SLO_CONTRACT = load_contract()
+P95_MS = float(SLO_CONTRACT["baseline"]["p95Ms"])
+UNEXPECTED_ERROR_RATE = float(SLO_CONTRACT["baseline"]["unexpectedErrorRate"])
+CONTRACT_FAILURE_RATE = float(SLO_CONTRACT["baseline"]["contractFailureRate"])
+SUCCESS_RATE_FLOOR = float(SLO_CONTRACT["baseline"]["successRate"])
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 COMMIT_SHA_PATTERN = re.compile(r"^[0-9a-f]{40}$")
 CORE_COUNTERS = (
@@ -226,11 +232,14 @@ def evaluate_phase(run_dir: Path) -> dict:
         k6_exit_code == 0
         and dropped_iterations == 0
         and completed > 0
-        and p95_ms is not None and p95_ms <= P95_MS
-        and success_rate is not None and success_rate >= SUCCESS_RATE_FLOOR
-        and unexpected_error_rate is not None and unexpected_error_rate < UNEXPECTED_ERROR_RATE
-        and contract_failure_rate is not None and contract_failure_rate < CONTRACT_FAILURE_RATE
-        and not bottleneck_suspected
+        and p95_ms is not None and satisfies(SLO_CONTRACT, "p95Ms", p95_ms)
+        and success_rate is not None and satisfies(SLO_CONTRACT, "successRate", success_rate)
+        and unexpected_error_rate is not None and satisfies(SLO_CONTRACT, "unexpectedErrorRate", unexpected_error_rate)
+        and contract_failure_rate is not None and satisfies(
+            SLO_CONTRACT, "baselineContractFailureRate", contract_failure_rate
+        )
+        and satisfies(SLO_CONTRACT, "droppedIterations", dropped_iterations)
+        and satisfies(SLO_CONTRACT, "runnerBottleneckSuspected", bottleneck_suspected)
     )
 
     return {
@@ -410,6 +419,7 @@ def evaluate_baseline_candidate_only(evidence_root: Path, confirmed_rate: float 
         "baselineCandidate": candidate,
         "passed": candidate["frozen"],
         "sloVersion": "v0.2-candidate (D-005 baseline gate)",
+        "sloContractVersion": SLO_CONTRACT["sloVersion"],
     }
     (evidence_root / "baseline-candidate.json").write_text(
         json.dumps(report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
@@ -540,6 +550,7 @@ def evaluate(evidence_root: Path, data_file: Path | None, confirmed_rate: float 
         "spikeRecorded": spike_recorded,
         "fixtures": fixtures,
         "sloVersion": "v0.2-candidate (not v1.0-frozen; see D-006 in decisions/OPEN_DECISIONS.md)",
+        "sloContractVersion": SLO_CONTRACT["sloVersion"],
     }
     report["passed"] = (
         structure["hasRunBoundaries"]
