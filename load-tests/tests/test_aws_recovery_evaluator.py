@@ -372,5 +372,73 @@ class AwsRecoveryEvaluatorTest(unittest.TestCase):
             self.assertEqual(invalid["status"], "INVALID_RUN")
 
 
+
+class ObservabilityEmptyIsValidTests(unittest.TestCase):
+    """Plan 07's empty-is-valid contract: a healthy run has zero error counters.
+
+    k6 Counters emit no Point unless incremented, so core_unexpected_errors_total
+    and core_contract_failures_total are structurally zero whenever a recovery
+    run is clean. Without this contract the gate can never be satisfied by a
+    successful experiment.
+    """
+
+    PROFILE = json.loads(PROFILE_PATH.read_text(encoding="utf-8"))
+    REQUIRED = PROFILE["observability"]["required"]
+
+    def status_file(self, root: Path, overrides: dict | None = None) -> None:
+        metrics = {name: {"status": "collected", "datapointCount": 1} for name in self.REQUIRED}
+        for name, value in (overrides or {}).items():
+            metrics[name] = value
+        (root / "monitoring").mkdir(parents=True, exist_ok=True)
+        (root / "monitoring" / "required-metrics.json").write_text(
+            json.dumps({"metrics": metrics}), encoding="utf-8"
+        )
+
+    def test_zero_error_counters_pass_when_declared_empty_is_valid(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.status_file(root, {
+                "core_unexpected_errors_total": {"status": "collected", "datapointCount": 0, "emptyIsValid": True},
+                "core_contract_failures_total": {"status": "collected", "datapointCount": 0, "emptyIsValid": True},
+            })
+            result = MODULE.validate_observability(root, self.PROFILE)
+            self.assertEqual(
+                result["emptyIsValid"],
+                ["core_contract_failures_total", "core_unexpected_errors_total"],
+            )
+
+    def test_zero_without_declaration_is_still_invalid(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.status_file(root, {
+                "core_unexpected_errors_total": {"status": "collected", "datapointCount": 0},
+            })
+            with self.assertRaisesRegex(MODULE.RecoveryValidationError, "core_unexpected_errors_total:empty"):
+                MODULE.validate_observability(root, self.PROFILE)
+
+    def test_throughput_metric_cannot_be_waived(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.status_file(root, {
+                "core_operations_total": {"status": "collected", "datapointCount": 0, "emptyIsValid": True},
+            })
+            with self.assertRaisesRegex(MODULE.RecoveryValidationError, "core_operations_total:empty"):
+                MODULE.validate_observability(root, self.PROFILE)
+
+    def test_missing_and_uncollected_metrics_still_fail(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.status_file(root, {
+                "core_unexpected_errors_total": {"status": "pending", "datapointCount": 0, "emptyIsValid": True},
+            })
+            with self.assertRaisesRegex(MODULE.RecoveryValidationError, "status=pending"):
+                MODULE.validate_observability(root, self.PROFILE)
+            payload = json.loads((root / "monitoring" / "required-metrics.json").read_text())
+            del payload["metrics"]["aws_asg_activities"]
+            (root / "monitoring" / "required-metrics.json").write_text(json.dumps(payload), encoding="utf-8")
+            with self.assertRaisesRegex(MODULE.RecoveryValidationError, "aws_asg_activities:missing"):
+                MODULE.validate_observability(root, self.PROFILE)
+
+
 if __name__ == "__main__":
     unittest.main()
