@@ -60,6 +60,7 @@ variables {
   public_subnet_ids                  = ["subnet-public-a", "subnet-public-c"]
   redis_auth_secret_arn              = "arn:aws:secretsmanager:ap-northeast-2:123456789012:secret:redis"
   redis_primary_endpoint             = "redis.internal"
+  rollout_normal_backend_image_uri   = "123456789012.dkr.ecr.ap-northeast-2.amazonaws.com/kdt-travelplanner-dev-backend@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
   vpc_id                             = "vpc-12345678"
 }
 
@@ -119,9 +120,94 @@ run "backend_is_private_and_rolls_without_capacity_loss" {
   }
 
   assert {
-    condition     = aws_autoscaling_policy.cpu.target_tracking_configuration[0].target_value == 60
+    condition     = aws_autoscaling_policy.cpu[0].target_tracking_configuration[0].target_value == 60
     error_message = "CPU target tracking must use the agreed 60 percent target."
   }
+}
+
+run "experiment_uses_checkpoint_contract_and_disables_scaling" {
+  command = plan
+
+  variables {
+    rollout_mode                   = "EXPERIMENT"
+    rollout_max_healthy_percentage = 150
+    rollout_checkpoint_percentages = [50]
+    rollout_scaling_policy_enabled = false
+  }
+
+  assert {
+    condition = (
+      aws_autoscaling_group.backend.instance_refresh[0].preferences[0].min_healthy_percentage == 100 &&
+      aws_autoscaling_group.backend.instance_refresh[0].preferences[0].max_healthy_percentage == 150 &&
+      tolist(aws_autoscaling_group.backend.instance_refresh[0].preferences[0].checkpoint_percentages) == tolist([50]) &&
+      length(aws_autoscaling_policy.cpu) == 0
+    )
+    error_message = "Experiment rollouts must use 100/150, checkpoint [50], and no CPU target-tracking policy."
+  }
+}
+
+run "fault_requires_distinct_pinned_digest" {
+  command = plan
+
+  variables {
+    rollout_mode                    = "FAULT"
+    rollout_max_healthy_percentage  = 150
+    rollout_checkpoint_percentages  = [50, 100]
+    rollout_scaling_policy_enabled  = false
+    rollout_fault_backend_image_uri = "123456789012.dkr.ecr.ap-northeast-2.amazonaws.com/kdt-travelplanner-dev-backend@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    backend_image_uri               = "123456789012.dkr.ecr.ap-northeast-2.amazonaws.com/kdt-travelplanner-dev-backend@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  }
+
+  assert {
+    condition = (
+      tolist(aws_autoscaling_group.backend.instance_refresh[0].preferences[0].checkpoint_percentages) == tolist([50, 100]) &&
+      length(aws_autoscaling_policy.cpu) == 0
+    )
+    error_message = "Fault rollouts must bind the exact fault digest and remain scaling-disabled."
+  }
+}
+
+run "manual_baseline_requires_exact_restore_digest" {
+  command = plan
+
+  variables {
+    rollout_mode                      = "MANUAL_BASELINE"
+    rollout_restore_backend_image_uri = "123456789012.dkr.ecr.ap-northeast-2.amazonaws.com/kdt-travelplanner-dev-backend@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  }
+
+  assert {
+    condition = (
+      aws_autoscaling_group.backend.instance_refresh[0].preferences[0].min_healthy_percentage == 100 &&
+      aws_autoscaling_group.backend.instance_refresh[0].preferences[0].max_healthy_percentage == 200 &&
+      length(aws_autoscaling_group.backend.instance_refresh[0].preferences[0].checkpoint_percentages) == 0 &&
+      length(aws_autoscaling_policy.cpu) == 1
+    )
+    error_message = "MANUAL_BASELINE must create a new normal-digest rollout with the default 100/200 policy."
+  }
+}
+
+run "experiment_rejects_production_refresh_shape" {
+  command = plan
+
+  variables {
+    rollout_mode                   = "EXPERIMENT"
+    rollout_max_healthy_percentage = 200
+    rollout_checkpoint_percentages = []
+    rollout_scaling_policy_enabled = true
+  }
+
+  expect_failures = [aws_autoscaling_group.backend]
+}
+
+run "manual_baseline_rejects_mismatched_restore_digest" {
+  command = plan
+
+  variables {
+    rollout_mode                      = "MANUAL_BASELINE"
+    rollout_restore_backend_image_uri = "123456789012.dkr.ecr.ap-northeast-2.amazonaws.com/kdt-travelplanner-dev-backend@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  }
+
+  expect_failures = [aws_autoscaling_group.backend]
 }
 
 run "tagged_image_is_rejected" {

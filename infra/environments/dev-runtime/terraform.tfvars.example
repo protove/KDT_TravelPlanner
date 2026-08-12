@@ -9,6 +9,19 @@ postgres_engine_version = "17.8"
 # Tags are rejected. Replace this example digest with an image that exists in the persistent dev ECR repository.
 backend_image_uri = "123456789012.dkr.ecr.ap-northeast-2.amazonaws.com/kdt-travelplanner-dev-backend@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
+# Rollout contract defaults. Keep NORMAL values for the ordinary dev-runtime
+# baseline. Recovery experiments must set all fields together in a separate,
+# uniquely named tfvars/plan file; never edit a previously approved plan.
+backend_rollout_mode                   = "NORMAL"
+backend_rollout_min_healthy_percentage = 100
+backend_rollout_max_healthy_percentage = 200
+backend_rollout_checkpoint_percentages = []
+backend_rollout_checkpoint_delay_seconds = 60
+backend_rollout_scaling_policy_enabled = true
+# backend_rollout_normal_image_uri  = "...@sha256:<previous-normal-digest>"
+# backend_rollout_fault_image_uri   = "...@sha256:<fault-digest>"
+# backend_rollout_restore_image_uri = "...@sha256:<previous-normal-digest>"
+
 # D-001-R1 후속 "Seed/Cleanup 최소권한": ARN of a dedicated, least-privilege
 # test-only DB Secret (JSON {"username":..,"password":..}), created by the
 # Infra owner separately (console or approved IaC) — never the RDS master
