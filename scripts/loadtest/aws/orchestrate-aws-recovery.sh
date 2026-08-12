@@ -28,6 +28,8 @@ DATA_FILE=""
 FREEZE_METADATA=""
 D005_RATE_FILE=""
 SOURCE_SHA=""
+SOURCE_LINEAGE=""
+PROTECTED_EVIDENCE_MANIFEST=""
 B01_PROFILE=""
 BASELINE_CANDIDATE=""
 OBSERVABILITY_STATUS=""
@@ -56,7 +58,9 @@ Required for every mode:
   --d005-rate-file PATH     D-005 record containing arrivalRate
   --b01-profile PATH        exact B-01 profile used for the D-005 record
   --baseline-candidate PATH exact baseline-candidate.json referenced by D-005
-  --source-sha SHA          exact source commit SHA used by the Runner
+  --source-sha SHA          exact controller source commit SHA used by the Runner
+  --source-lineage PATH     split measurement/controller source contract
+  --protected-evidence-manifest PATH  manifest of pre-existing evidence files
 
 Required for run:
   --k6-image IMAGE@sha256:DIGEST
@@ -94,6 +98,8 @@ while [[ "$#" -gt 0 ]]; do
     --b01-profile) B01_PROFILE="$2"; shift 2 ;;
     --baseline-candidate) BASELINE_CANDIDATE="$2"; shift 2 ;;
     --source-sha) SOURCE_SHA="$2"; shift 2 ;;
+    --source-lineage) SOURCE_LINEAGE="$2"; shift 2 ;;
+    --protected-evidence-manifest) PROTECTED_EVIDENCE_MANIFEST="$2"; shift 2 ;;
     --observability-status) OBSERVABILITY_STATUS="$2"; shift 2 ;;
     --event) EVENT="$2"; shift 2 ;;
     --detail) EVENT_DETAIL="$2"; shift 2 ;;
@@ -151,7 +157,72 @@ if [[ "$(git -C "$REPOSITORY_ROOT" rev-parse HEAD)" != "$SOURCE_SHA" ]]; then
   exit 2
 fi
 
+MEASUREMENT_SOURCE_SHA="$SOURCE_SHA"
+SOURCE_LINEAGE_SHA256=""
+if [[ -n "$SOURCE_LINEAGE" ]]; then
+  if [[ -z "$PROTECTED_EVIDENCE_MANIFEST" ]]; then
+    echo "--protected-evidence-manifest is required with --source-lineage" >&2
+    exit 2
+  fi
+  if [[ ! -f "$SOURCE_LINEAGE" || ! -f "$PROTECTED_EVIDENCE_MANIFEST" ]]; then
+    echo "source-lineage and protected evidence manifest must exist" >&2
+    exit 2
+  fi
+  lineage_values="$({
+    python3 - "$SOURCE_LINEAGE" "$PROTECTED_EVIDENCE_MANIFEST" "$D005_RATE_FILE" "$FREEZE_METADATA" "$B01_PROFILE" "$BASELINE_CANDIDATE" "$REPOSITORY_ROOT" "$SOURCE_SHA" <<'PY'
+import sys
+from pathlib import Path
+
+lineage_path = Path(sys.argv[1]).resolve()
+protected_path = Path(sys.argv[2]).resolve()
+d005_path = Path(sys.argv[3]).resolve()
+freeze_path = Path(sys.argv[4]).resolve()
+b01_profile_path = Path(sys.argv[5]).resolve()
+candidate_path = Path(sys.argv[6]).resolve()
+root = Path(sys.argv[7]).resolve()
+sys.path.insert(0, str(root / "scripts/loadtest/aws"))
+from source_lineage import read_json, validate_lineage, sha256_file
+
+d005 = read_json(d005_path, "D-005 rate record")
+freeze = read_json(freeze_path, "D-006 freeze metadata")
+lineage = read_json(lineage_path, "source lineage")
+result = validate_lineage(
+    lineage,
+    repository_root=root,
+    expected_controller_sha=sys.argv[8],
+    expected_run_id=d005.get("runId"),
+    expected_protected_manifest=protected_path,
+    expected_inputs={
+        "b01ProfileSha256": sha256_file(b01_profile_path),
+        "baselineCandidateSha256": sha256_file(candidate_path),
+        "d005RateRecordSha256": sha256_file(d005_path),
+        "freezeInputDigest": freeze.get("freezeInputDigest"),
+    },
+    require_clean_worktree=True,
+)
+print(result["measurementSourceCommitSha"])
+print(sha256_file(lineage_path))
+PY
+  } )" || exit 2
+  MEASUREMENT_SOURCE_SHA="$(printf '%s\n' "$lineage_values" | sed -n '1p')"
+  SOURCE_LINEAGE_SHA256="$(printf '%s\n' "$lineage_values" | sed -n '2p')"
+fi
+
 RUN_DIR="$REPOSITORY_ROOT/evidence/aws-recovery/$RUN_ID"
+if [[ -n "$PROTECTED_EVIDENCE_MANIFEST" ]]; then
+  python3 - "$RUN_DIR" "$REPOSITORY_ROOT" "$PROTECTED_EVIDENCE_MANIFEST" <<'PY'
+import sys
+from pathlib import Path
+root = Path(sys.argv[2]).resolve()
+sys.path.insert(0, str(root / "scripts/loadtest/aws"))
+from source_lineage import assert_new_output_path
+assert_new_output_path(
+    Path(sys.argv[1]),
+    repository_root=root,
+    protected_manifest=Path(sys.argv[3]).resolve(),
+)
+PY
+fi
 mkdir -p "$RUN_DIR"
 OBSERVABILITY_STATUS="${OBSERVABILITY_STATUS:-$RUN_DIR/monitoring/required-metrics.json}"
 
@@ -234,14 +305,14 @@ if freeze.get("sloContractSha256") != manifest.get("contract", {}).get("sha256")
     raise SystemExit("D-006 sloContractSha256 does not match freeze input manifest")
 PY
 
-python3 - "$D005_RATE_FILE" "$FREEZE_METADATA" "$B01_PROFILE" "$BASELINE_CANDIDATE" "$SOURCE_SHA" "$RATE" <<'PY'
+python3 - "$D005_RATE_FILE" "$FREEZE_METADATA" "$B01_PROFILE" "$BASELINE_CANDIDATE" "$MEASUREMENT_SOURCE_SHA" "$RATE" <<'PY'
 import hashlib
 import json
 import math
 import sys
 from pathlib import Path
 
-d005_path, freeze_path, b01_profile_path, candidate_path, source_sha, rate_raw = sys.argv[1:]
+d005_path, freeze_path, b01_profile_path, candidate_path, measurement_source_sha, rate_raw = sys.argv[1:]
 def read(path):
     try:
         return json.loads(Path(path).read_text(encoding="utf-8"))
@@ -253,8 +324,8 @@ freeze = read(freeze_path)
 for field in ("runId", "sourceCommitSha", "profileSha256", "baselineCandidateSha256", "arrivalRate"):
     if field not in d005 or d005[field] in (None, ""):
         raise SystemExit(f"D-005 field is missing: {field}")
-if d005["sourceCommitSha"] != source_sha:
-    raise SystemExit("D-005 sourceCommitSha does not match --source-sha")
+if d005["sourceCommitSha"] != measurement_source_sha:
+    raise SystemExit("D-005 sourceCommitSha does not match measurement source SHA")
 expected_b01_sha = hashlib.sha256(Path(b01_profile_path).read_bytes()).hexdigest()
 if d005["profileSha256"] != expected_b01_sha:
     raise SystemExit("D-005 profileSha256 does not match --b01-profile")
@@ -377,7 +448,7 @@ PY
     target_health='{"status":"dry-run"}'
   fi
 
-  python3 - "$RUN_DIR/metadata.json" "$RUN_ID" "$PROFILE" "$B01_PROFILE" "$REGION" "$ENVIRONMENT" "$RATE" "$ALB_ARN" "$ASG_NAME" "$LAUNCH_TEMPLATE_ID" "$LAUNCH_TEMPLATE_VERSION" "$RUNNER_ID" "$BASE_URL" "$EXPECTED_ACCOUNT_ID" "$REPOSITORY_ROOT" "$existing_preflight_outputs" <<'PY'
+  python3 - "$RUN_DIR/metadata.json" "$RUN_ID" "$PROFILE" "$B01_PROFILE" "$REGION" "$ENVIRONMENT" "$RATE" "$ALB_ARN" "$ASG_NAME" "$LAUNCH_TEMPLATE_ID" "$LAUNCH_TEMPLATE_VERSION" "$RUNNER_ID" "$BASE_URL" "$EXPECTED_ACCOUNT_ID" "$REPOSITORY_ROOT" "$existing_preflight_outputs" "$MEASUREMENT_SOURCE_SHA" "$SOURCE_LINEAGE_SHA256" <<'PY'
 import hashlib
 import json
 import subprocess
@@ -385,7 +456,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-output, run_id, profile_path, b01_profile_path, region, environment, rate, alb_arn, asg_name, launch_template_id, launch_template_version, runner_id, base_url, account_id, repo_root, existing_outputs_raw = sys.argv[1:]
+output, run_id, profile_path, b01_profile_path, region, environment, rate, alb_arn, asg_name, launch_template_id, launch_template_version, runner_id, base_url, account_id, repo_root, existing_outputs_raw, measurement_source_sha, source_lineage_sha256 = sys.argv[1:]
 profile_sha = hashlib.sha256(Path(profile_path).read_bytes()).hexdigest()
 b01_profile_sha = hashlib.sha256(Path(b01_profile_path).read_bytes()).hexdigest()
 commit_sha = subprocess.run(["git", "-C", repo_root, "rev-parse", "HEAD"], capture_output=True, text=True, check=True).stdout.strip()
@@ -396,6 +467,8 @@ expected = {
     "environment": environment,
     "region": region,
     "commitSha": commit_sha,
+    "controllerSourceCommitSha": commit_sha,
+    "measurementSourceCommitSha": measurement_source_sha,
     "profileSha256": profile_sha,
     "b01ProfileSha256": b01_profile_sha,
     "rate": float(rate),
@@ -412,6 +485,8 @@ expected = {
         "baseUrl": base_url,
     },
 }
+if source_lineage_sha256:
+    expected["sourceLineageSha256"] = source_lineage_sha256
 output_path = Path(output)
 existing_outputs = int(existing_outputs_raw)
 if existing_outputs:
@@ -491,6 +566,7 @@ case "$MODE" in
     [[ -f "$DATA_FILE" ]] || { echo "--data-file must exist for run" >&2; exit 2; }
     target_preflight
     export REPOSITORY_ROOT BASE_URL RUN_ID REGION ENVIRONMENT RATE DATA_FILE
+    export MEASUREMENT_SOURCE_COMMIT_SHA="$MEASUREMENT_SOURCE_SHA" SOURCE_LINEAGE_SHA256
     export K6_IMAGE_DIGEST="$K6_IMAGE" AWS_RECOVERY_PROFILE_FILE="$PROFILE"
     export EFFECTIVE_MAX_VUS="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["recovery"]["maxVUs"])' "$PROFILE")"
     export RUN_DIR
@@ -514,7 +590,11 @@ case "$MODE" in
       "$RUN_DIR" --run-id "$RUN_ID" --profile "$PROFILE" --b01-profile "$B01_PROFILE"
       --freeze-metadata "$FREEZE_METADATA" --d005-rate-file "$D005_RATE_FILE"
       --baseline-candidate "$BASELINE_CANDIDATE" --rate "$RATE" --source-sha "$SOURCE_SHA"
+      --measurement-source-sha "$MEASUREMENT_SOURCE_SHA"
     )
+    if [[ -n "$SOURCE_LINEAGE" ]]; then
+      evaluate_args+=(--source-lineage "$SOURCE_LINEAGE" --protected-evidence-manifest "$PROTECTED_EVIDENCE_MANIFEST")
+    fi
     evaluate_args+=(--k6-image "$K6_IMAGE")
     python3 "$REPOSITORY_ROOT/scripts/loadtest/aws/evaluate-aws-recovery.py" "${evaluate_args[@]}"
     ;;

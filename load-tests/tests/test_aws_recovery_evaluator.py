@@ -198,6 +198,18 @@ class AwsRecoveryEvaluatorTest(unittest.TestCase):
             self.assertLess(events.index("T6"), events.index("RUN_END"))
             self.assertTrue((root / "recovery-verdict.json").exists())
 
+    def test_existing_verdict_is_never_overwritten_on_retry(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_id, freeze, d005, b01_profile, candidate = self.build_run(root)
+            args = self.args(root, run_id, freeze, d005, b01_profile, candidate)
+            MODULE.evaluate(args)
+            verdict_path = root / "recovery-verdict.json"
+            before = verdict_path.read_bytes()
+            with self.assertRaises(MODULE.RecoveryValidationError):
+                MODULE.evaluate(args)
+            self.assertEqual(verdict_path.read_bytes(), before)
+
     def test_missing_required_metric_is_invalid(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -331,6 +343,33 @@ class AwsRecoveryEvaluatorTest(unittest.TestCase):
             args.source_sha = "c" * 40
             with self.assertRaises(MODULE.RecoveryValidationError):
                 MODULE.evaluate(args)
+
+    def test_slo_failure_is_recorded_separately_from_invalid_run(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_id, freeze, d005, b01_profile, candidate = self.build_run(root)
+            for bucket in range(80, 200, 10):
+                self.set_recovery_bucket_metric(root, bucket, "core_operation_duration", 1000)
+            args = self.args(root, run_id, freeze, d005, b01_profile, candidate)
+            with self.assertRaises(MODULE.RecoverySloFailure):
+                MODULE.evaluate(args)
+            failed = MODULE.write_failure_verdict(args, "FAILED", MODULE.RecoverySloFailure("p95 SLO failed"))
+            self.assertEqual(failed["status"], "FAILED")
+            self.assertEqual(json.loads((root / "recovery-verdict.json").read_text())["status"], "FAILED")
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            # Leave a gap in every possible post-T5 12-bucket window.  A
+            # single gap is not sufficient because the evaluator may legally
+            # select a later complete window.
+            run_id, freeze, d005, b01_profile, candidate = self.build_run(
+                root, gaps=set(range(80, 200, 10))
+            )
+            args = self.args(root, run_id, freeze, d005, b01_profile, candidate)
+            with self.assertRaises(MODULE.RecoveryValidationError):
+                MODULE.evaluate(args)
+            invalid = MODULE.write_failure_verdict(args, "INVALID_RUN", MODULE.RecoveryValidationError("metric gap"))
+            self.assertEqual(invalid["status"], "INVALID_RUN")
 
 
 if __name__ == "__main__":

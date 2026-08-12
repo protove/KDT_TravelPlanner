@@ -39,13 +39,15 @@ PY
 mkdir -p "$RUN_DIR"
 started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 git_sha="$(git -C "$REPOSITORY_ROOT" rev-parse HEAD)"
-python3 - "$RUN_DIR/metadata.json" "$RUN_ID" "$started_at" "$git_sha" "$K6_IMAGE_DIGEST" "$RATE" "$REGION" "$ENVIRONMENT" "$AWS_RECOVERY_PROFILE_FILE" <<'PY'
+measurement_sha="${MEASUREMENT_SOURCE_COMMIT_SHA:-$git_sha}"
+lineage_sha="${SOURCE_LINEAGE_SHA256:-}"
+python3 - "$RUN_DIR/metadata.json" "$RUN_ID" "$started_at" "$git_sha" "$measurement_sha" "$lineage_sha" "$K6_IMAGE_DIGEST" "$RATE" "$REGION" "$ENVIRONMENT" "$AWS_RECOVERY_PROFILE_FILE" <<'PY'
 import hashlib
 import json
 import sys
 from pathlib import Path
 
-output, run_id, started_at, commit_sha, image, rate, region, environment, profile_path = sys.argv[1:]
+output, run_id, started_at, commit_sha, measurement_sha, lineage_sha, image, rate, region, environment, profile_path = sys.argv[1:]
 profile = json.loads(Path(profile_path).read_text(encoding="utf-8"))
 output_path = Path(output)
 metadata = {}
@@ -61,6 +63,8 @@ metadata.update({
     "region": region,
     "environment": environment,
     "commitSha": commit_sha,
+    "controllerSourceCommitSha": commit_sha,
+    "measurementSourceCommitSha": measurement_sha,
     "profileSha256": hashlib.sha256(Path(profile_path).read_bytes()).hexdigest(),
     "k6Image": image,
     "rate": float(rate),
@@ -70,6 +74,8 @@ metadata.update({
     "sloVersion": profile["sloVersion"],
     "profileVersion": profile["profileVersion"],
 })
+if lineage_sha:
+    metadata["sourceLineageSha256"] = lineage_sha
 output_path.write_text(json.dumps(metadata, indent=2) + chr(10), encoding="utf-8")
 PY
 
