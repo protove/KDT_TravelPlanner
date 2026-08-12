@@ -62,6 +62,12 @@ class AwsSourceLineageTest(unittest.TestCase):
             manifest, protected_file = self.protected_fixture(root)
             with self.assertRaises(MODULE.SourceLineageError):
                 MODULE.assert_new_output_path(protected_file, repository_root=ROOT, protected_manifest=manifest)
+            with self.assertRaises(MODULE.SourceLineageError):
+                MODULE.assert_new_output_path(
+                    protected_file.parent / "new-verdict.json",
+                    repository_root=ROOT,
+                    protected_manifest=manifest,
+                )
             existing = root / "control.json"
             existing.write_text("{}\n", encoding="utf-8")
             with self.assertRaises(MODULE.SourceLineageError):

@@ -248,10 +248,17 @@ def assert_new_output_path(
         protected_paths = {protected_root / entry["path"] for entry in manifest["files"]}
         if candidate in protected_paths:
             raise SourceLineageError(f"refusing to overwrite protected evidence: {output_path}")
-        # A pre-existing directory containing protected files is never a safe
-        # target for a new run; callers must choose a fresh Run ID.
-        if candidate.is_dir() and any(path == candidate or candidate in path.parents for path in protected_paths):
-            raise SourceLineageError(f"output path contains protected evidence: {output_path}")
+        # A path in, beside, or above a protected evidence tree is never a
+        # safe target: a later append (for example T6) could mutate a sibling
+        # operations.jsonl even when the new verdict file itself is absent.
+        for path in protected_paths:
+            if (
+                candidate == path
+                or candidate in path.parents
+                or path in candidate.parents
+                or candidate.parent == path.parent
+            ):
+                raise SourceLineageError(f"output path is adjacent to protected evidence: {output_path}")
     if output_path.exists() or output_path.is_symlink():
         if allow_existing_directory and output_path.is_dir() and not output_path.is_symlink():
             return candidate
