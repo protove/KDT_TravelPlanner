@@ -36,6 +36,8 @@ aws s3 cp "s3://${monitoring_bucket_name}/grafana/dashboards/backend-overview.js
   /etc/travel-planner/grafana/dashboards/backend-overview.json
 aws s3 cp "s3://${monitoring_bucket_name}/grafana/dashboards/aws-load-test.json" \
   /etc/travel-planner/grafana/dashboards/aws-load-test.json
+aws s3 cp "s3://${monitoring_bucket_name}/grafana/dashboards/aws-recovery.json" \
+  /etc/travel-planner/grafana/dashboards/aws-recovery.json
 
 # ── 데이터 소유권 (컨테이너 내부 사용자와 맞춤) ──────────────────
 chown -R 65534:65534 /var/lib/travel-planner/prometheus
