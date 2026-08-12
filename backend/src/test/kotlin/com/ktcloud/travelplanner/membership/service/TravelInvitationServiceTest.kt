@@ -97,6 +97,24 @@ class TravelInvitationServiceTest {
 	}
 
 	@Test
+	fun `invitee rejects pending invitation and row is deleted instead of saved`() {
+		val member = invitation()
+		`when`(travelMemberRepository.findByIdForUpdate(INVITATION_ID)).thenReturn(Optional.of(member))
+
+		val response = service.respondToInvitation(
+			INVITATION_ID,
+			INVITEE_ID,
+			TravelInvitationRespondRequest(TravelInvitationAction.REJECT),
+		)
+
+		assertEquals(INVITATION_ID, response.invitationId)
+		assertEquals(InvitationStatus.REJECTED, response.status)
+		assertEquals(TestFixtures.FIXED_INSTANT, response.respondedAt)
+		verify(travelMemberRepository).delete(member)
+		verify(travelMemberRepository, never()).save(member)
+	}
+
+	@Test
 	fun `user other than invitee cannot respond to invitation`() {
 		val member = invitation()
 		`when`(travelMemberRepository.findByIdForUpdate(INVITATION_ID)).thenReturn(Optional.of(member))

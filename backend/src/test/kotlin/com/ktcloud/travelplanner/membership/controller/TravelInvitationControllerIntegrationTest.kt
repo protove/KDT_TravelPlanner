@@ -23,12 +23,14 @@ import org.springframework.http.HttpHeaders
 import org.springframework.http.MediaType
 import org.springframework.test.context.ActiveProfiles
 import org.springframework.test.web.servlet.MockMvc
+import org.springframework.test.web.servlet.patch
 import org.springframework.test.web.servlet.post
 import org.springframework.transaction.annotation.Transactional
 import java.time.Instant
 import java.time.LocalDate
 import java.util.UUID
 import kotlin.test.assertEquals
+import kotlin.test.assertNotEquals
 import kotlin.test.assertNotNull
 
 @ActiveProfiles("test")
@@ -95,6 +97,36 @@ class TravelInvitationControllerIntegrationTest(
 				status { isConflict() }
 				jsonPath("$.code", equalTo("CONFLICT"))
 			}
+	}
+
+	@Test
+	fun `owner can invite the same user again after they reject the previous invitation`() {
+		val owner = saveUser("owner-reinvite")
+		val invitee = saveUser("invitee-reinvite")
+		val travel = saveTravel(owner)
+		val firstInvitation = travelMemberRepository.saveAndFlush(
+			TravelMember(travel = travel, user = invitee, role = TravelRole.READ_ONLY, invitedAt = Instant.now()),
+		)
+
+		mockMvc.patch("/api/v1/travel-invitations/${firstInvitation.id}") {
+			header(HttpHeaders.AUTHORIZATION, bearer(invitee))
+			contentType = MediaType.APPLICATION_JSON
+			content = """{"action":"REJECT"}"""
+		}.andExpect {
+			status { isOk() }
+		}
+
+		postInvitation(travel, owner, "invitee-reinvite")
+			.andExpect {
+				status { isOk() }
+				jsonPath("$.data.invitationId", notNullValue())
+			}
+
+		entityManager.flush()
+		entityManager.clear()
+		val member = travelMemberRepository.findAll().single { it.user.id == invitee.id }
+		assertEquals(InvitationStatus.PENDING, member.status)
+		assertNotEquals(firstInvitation.id, member.id)
 	}
 
 	@Test
