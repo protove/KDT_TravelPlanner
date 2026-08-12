@@ -113,6 +113,14 @@ class SeedAwsLoadDataTest(unittest.TestCase):
         b = SEED.provider_user_id("run-b", 1)
         self.assertNotEqual(a, b)
 
+    def test_provider_user_id_regex_is_anchored_to_exact_run_id(self):
+        pattern = SEED.provider_user_id_regex("run-a")
+        self.assertEqual(pattern, r"^loadtest-aws-run-a-[0-9]{3}$")
+        self.assertRegex("loadtest-aws-run-a-001", pattern)
+        self.assertNotRegex("loadtest-aws-run-a-x-001", pattern)
+        self.assertNotRegex("loadtest-aws-run-ab-001", pattern)
+        self.assertNotRegex("loadtest-aws-run-a-01", pattern)
+
     def test_synthetic_nickname_fits_unique_column_limit(self):
         nickname = SEED.synthetic_nickname("aws-b01-20260809-001", 199)
         self.assertLessEqual(len(nickname), 30)
@@ -124,6 +132,59 @@ class SeedAwsLoadDataTest(unittest.TestCase):
 
     def test_sql_literal_escapes_single_quotes(self):
         self.assertEqual(SEED.sql_literal("o'brien"), "'o''brien'")
+
+    def test_fixture_reset_is_scoped_to_run_owned_planners(self):
+        runtime = object.__new__(SEED.AwsSeed)
+        captured = []
+        runtime.psql = lambda sql: captured.append(sql) or "2\n"
+
+        self.assertEqual(runtime.reset_synthetic_planners("aws-b01-fixture"), 2)
+        self.assertEqual(len(captured), 1)
+        self.assertIn("DELETE FROM planners_table", captured[0])
+        self.assertIn("provider_user_id ~ '^loadtest-aws-aws-b01-fixture-[0-9]{3}$'", captured[0])
+        self.assertNotIn("FLUSH", captured[0].upper())
+
+    def test_fixture_counts_parse_sanitized_cardinality_contract(self):
+        runtime = object.__new__(SEED.AwsSeed)
+        captured = []
+        runtime.psql = lambda sql: captured.append(sql) or "2|2|6|3|3\n"
+
+        self.assertEqual(
+            runtime.fixture_counts("aws-b01-fixture"),
+            {
+                "users": 2,
+                "planners": 2,
+                "timelineItems": 6,
+                "minimumTimelineItemsPerPlanner": 3,
+                "maximumTimelineItemsPerPlanner": 3,
+            },
+        )
+        self.assertIn("planner_counts", captured[0])
+        self.assertIn("provider_user_id ~ '^loadtest-aws-aws-b01-fixture-[0-9]{3}$'", captured[0])
+
+    def test_reset_and_fixture_count_use_the_same_exact_run_predicate(self):
+        runtime = object.__new__(SEED.AwsSeed)
+        captured = []
+        runtime.psql = lambda sql: captured.append(sql) or ("0\n" if "DELETE" in sql else "0|0|0|0|0\n")
+
+        runtime.reset_synthetic_planners("run-a")
+        runtime.fixture_counts("run-a")
+
+        predicates = [statement.split("provider_user_id ~ ", 1)[1].split(")", 1)[0] for statement in captured]
+        self.assertEqual(predicates[0], predicates[1])
+        self.assertNotIn("LIKE", "\n".join(captured).upper())
+
+    def test_fixture_count_validation_requires_normalized_three_item_planners(self):
+        valid = {
+            "users": 2,
+            "planners": 2,
+            "timelineItems": 6,
+            "minimumTimelineItemsPerPlanner": 3,
+            "maximumTimelineItemsPerPlanner": 3,
+        }
+        SEED.validate_fixture_counts(valid, 2)
+        with self.assertRaises(SEED.SeedError):
+            SEED.validate_fixture_counts({**valid, "timelineItems": 7}, 2)
 
     def test_opaque_token_matches_backend_format(self):
         token = SEED.new_opaque_token()
@@ -429,6 +490,72 @@ class SeedAwsLoadDataTest(unittest.TestCase):
         # But the expensive travel/timeline creation only ran for the 2
         # genuinely-new users.
         self.assertEqual(calls["create_travel"], 2)
+
+    def test_verified_fixture_is_recorded_before_complete_seed_state(self):
+        runtime = object.__new__(SEED.AwsSeed)
+        writes = []
+        fixture_results = []
+        runtime.insert_user = lambda run_id, index: (f"user-{index}", False)
+        runtime.seed_redis_token = lambda user_id, ttl_ms, token, family_id: (token, family_id)
+        runtime.refresh = lambda token: ("access-token", "r" * 43)
+        runtime.has_existing_travel = lambda user_id: False
+        runtime.create_travel = lambda access_token, index: f"travel-{index}"
+        runtime.create_timeline_items = lambda access_token, travel_id: [
+            f"{travel_id}-item-{item}" for item in (1, 2, 3)
+        ]
+        runtime.fixture_counts = lambda run_id: {
+            "users": 2,
+            "planners": 2,
+            "timelineItems": 6,
+            "minimumTimelineItemsPerPlanner": 3,
+            "maximumTimelineItemsPerPlanner": 3,
+        }
+        runtime.write_credentials = lambda payload, path: writes.append(json.loads(json.dumps(payload)))
+        runtime.write_fixture_result = lambda payload, path: fixture_results.append(json.loads(json.dumps(payload)))
+        args = type("Args", (), {
+            "run_id": "aws-b01-fixture-verified", "users": 2, "refresh_ttl_ms": 1000,
+            "data_file": Path("/tmp/unused.json"), "fixture_id": "baseline-1",
+            "fixture_result_file": Path("/tmp/fixture.json"),
+        })()
+
+        SEED.seed_all(runtime, args, reset_deleted_planners=2, verify_fixture=True)
+
+        self.assertEqual(writes[-1]["seedState"], "complete")
+        self.assertEqual(writes[-1]["fixtureState"], "verified")
+        self.assertEqual(writes[-1]["fixtureId"], "baseline-1")
+        self.assertTrue(writes[-1]["fixtureResetApplied"])
+        self.assertEqual(writes[-1]["plannersDeletedBeforeSeed"], 2)
+        self.assertEqual(fixture_results[-1]["actual"]["timelineItems"], 6)
+
+    def test_fixture_mismatch_keeps_seed_in_progress_and_never_complete(self):
+        runtime = object.__new__(SEED.AwsSeed)
+        writes = []
+        runtime.insert_user = lambda run_id, index: (f"user-{index}", False)
+        runtime.seed_redis_token = lambda user_id, ttl_ms, token, family_id: (token, family_id)
+        runtime.refresh = lambda token: ("access-token", "r" * 43)
+        runtime.has_existing_travel = lambda user_id: False
+        runtime.create_travel = lambda access_token, index: f"travel-{index}"
+        runtime.create_timeline_items = lambda access_token, travel_id: [f"{travel_id}-item-1"]
+        runtime.fixture_counts = lambda run_id: {
+            "users": 1,
+            "planners": 1,
+            "timelineItems": 1,
+            "minimumTimelineItemsPerPlanner": 1,
+            "maximumTimelineItemsPerPlanner": 1,
+        }
+        runtime.write_credentials = lambda payload, path: writes.append(json.loads(json.dumps(payload)))
+        args = type("Args", (), {
+            "run_id": "aws-b01-fixture-invalid", "users": 1, "refresh_ttl_ms": 1000,
+            "data_file": Path("/tmp/unused.json"), "fixture_id": "baseline-1",
+            "fixture_result_file": None,
+        })()
+
+        with self.assertRaises(SEED.SeedError):
+            SEED.seed_all(runtime, args, reset_deleted_planners=1, verify_fixture=True)
+
+        self.assertEqual(writes[-1]["seedState"], "in-progress")
+        self.assertEqual(writes[-1]["fixtureState"], "invalid")
+        self.assertNotIn("complete", [payload["seedState"] for payload in writes])
 
     def test_seed_checkpoints_token_before_redis_mutation(self):
         runtime = object.__new__(SEED.AwsSeed)

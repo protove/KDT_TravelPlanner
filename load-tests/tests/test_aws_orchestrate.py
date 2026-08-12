@@ -36,6 +36,7 @@ class AwsOrchestrationContractTests(unittest.TestCase):
         self.assertIn('EFFECTIVE_MAX_VUS="${EFFECTIVE_MAX_VUS:?', runner_source)
         self.assertIn('len(credentials) < required', runner_source)
         self.assertIn('payload.get("seedState") != "complete"', runner_source)
+        self.assertIn('payload.get("fixtureState") != "verified"', runner_source)
         self.assertIn('--user 0:0', runner_source)
         self.assertIn('--cap-drop ALL', runner_source)
         self.assertIn('--security-opt no-new-privileges', runner_source)
@@ -103,7 +104,9 @@ class AwsOrchestrationContractTests(unittest.TestCase):
         phase_runner_source = AWS_PHASE_RUNNER.read_text(encoding="utf-8")
 
         self.assertIn("USERS=80", orchestrator_source)
-        self.assertIn('seed_credentials\n  export REPOSITORY_ROOT', orchestrator_source)
+        self.assertIn('seed_credentials "seed"', orchestrator_source)
+        self.assertIn('--reset-fixture --fixture-id "$fixture_id"', orchestrator_source)
+        self.assertIn('--fixture-result-file "$FIXTURES_DIR/$fixture_id.json"', orchestrator_source)
         self.assertIn('validate_phase_credential_capacity "$phase"', orchestrator_source)
         self.assertIn('configure_phase_max_vus ramp "${RAMP_MAX_VUS:-}"', phase_runner_source)
         self.assertIn('configure_phase_max_vus baseline "${BASELINE_MAX_VUS:-}"', phase_runner_source)
@@ -199,6 +202,8 @@ class AwsOrchestrationContractTests(unittest.TestCase):
         self.assertIn('payload.get("profileSha256") != profile_sha', source)
         self.assertIn('(payload.get("confirmedRate") or "") != confirmed_rate', source)
         self.assertIn('payload.get("inputDigest") != input_digest', source)
+        self.assertIn('"fixtureResultPath": f"fixtures/{stage}.json"', source)
+        self.assertIn('"fixtureExpectedUsers": int(users_raw)', source)
         self.assertIn('"albArn": alb_arn', source)
         self.assertIn('"baseUrl": base_url', source)
         self.assertIn('"runnerId": runner_id', source)
@@ -275,6 +280,9 @@ source {fragment}
 
             marker = json.loads((stage_dir / "smoke.json").read_text(encoding="utf-8"))
             self.assertEqual(len(marker["inputDigest"]), 64)
+            self.assertEqual(marker["fixtureId"], "smoke")
+            self.assertEqual(marker["fixtureResultPath"], "fixtures/smoke.json")
+            self.assertEqual(marker["fixtureExpectedUsers"], 20)
             self.assertNotIn("not-written-to-marker", (stage_dir / "smoke.json").read_text(encoding="utf-8"))
 
             same = subprocess.run(

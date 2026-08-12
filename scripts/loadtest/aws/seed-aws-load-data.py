@@ -77,11 +77,13 @@ from refresh_credential_lifecycle import (  # noqa: E402
 
 DEFAULT_REFRESH_TTL_MS = 4 * 60 * 60 * 1000  # 4h — short-lived by design; this is a shared, persistent store
 RUN_ID_PATTERN = re.compile(r"^[A-Za-z0-9-]{1,40}$")
+FIXTURE_ID_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 ACCOUNT_ID_PATTERN = re.compile(r"^\d{12}$")
 TOKEN_PATTERN = re.compile(r"^[A-Za-z0-9_-]{43}$")
 REDIS_TOKEN_HASH_PATTERN = re.compile(r"^[a-f0-9]{64}$")
 POSTGRES_CLIENT_IMAGE = "postgres:17-alpine"
 REDIS_CLIENT_IMAGE = "redis:7-alpine"
+EXPECTED_TIMELINE_ITEMS_PER_PLANNER = 3
 
 
 class SeedError(RuntimeError):
@@ -110,6 +112,17 @@ def provider_user_id(run_id: str, index: int) -> str:
     """Deterministic per (run_id, index) — this is what makes seeding
     idempotent and what cleanup-aws-load-data.py filters on."""
     return f"loadtest-aws-{run_id}-{index:03d}"[:255]
+
+
+def provider_user_id_regex(run_id: str) -> str:
+    """Match only this run's complete synthetic provider-user ID.
+
+    A prefix-only LIKE predicate would make ``run-a`` overlap ``run-a-x``.
+    The provider ID contract always terminates in a three-digit index, so an
+    anchored PostgreSQL regular expression gives reset and count one exact
+    ownership boundary without accepting a longer Run ID.
+    """
+    return f"^loadtest-aws-{run_id}-[0-9]{{3}}$"
 
 
 def synthetic_email(run_id: str, index: int) -> str:
@@ -142,6 +155,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--redis-replication-group-id", required=True, help="ElastiCache replication group ID the IAM auth token is signed for")
     parser.add_argument("--base-url", required=True, help="ALB HTTPS base URL, e.g. https://api.kdt-travelplanner.protove.net")
     parser.add_argument("--data-file", type=Path, required=True, help="Where to write synthetic credentials (0600); cleanup-aws-load-data.py reads this to remove exact Redis keys")
+    parser.add_argument("--reset-fixture", action="store_true", help="Delete this run's synthetic planners (and cascaded timeline rows) before seeding")
+    parser.add_argument("--fixture-id", default="seed", help="Sanitized phase fixture identifier recorded in evidence")
+    parser.add_argument("--fixture-result-file", type=Path, help="Optional sanitized phase fixture evidence JSON path")
     parser.add_argument("--refresh-ttl-ms", type=int, default=DEFAULT_REFRESH_TTL_MS)
     return parser.parse_args()
 
@@ -358,6 +374,54 @@ class AwsSeed:
         ).strip()
         return [line for line in result.splitlines() if line]
 
+    def reset_synthetic_planners(self, run_id: str) -> int:
+        """Delete only this run's planners; FK cascades remove its fixture rows."""
+        pattern = sql_literal(provider_user_id_regex(run_id))
+        result = self.psql(
+            "WITH deleted AS ("
+            "DELETE FROM planners_table WHERE owner_id IN ("
+            "SELECT id FROM user_table WHERE provider = 'GOOGLE' AND provider_user_id ~ "
+            f"{pattern}"
+            ") RETURNING id) SELECT count(*) FROM deleted"
+        ).strip()
+        try:
+            return int(result or "0")
+        except ValueError as error:
+            raise SeedError("fixture reset returned a non-integer planner count") from error
+
+    def fixture_counts(self, run_id: str) -> dict[str, int]:
+        """Return sanitized counts for this run's users, planners and timeline rows."""
+        pattern = sql_literal(provider_user_id_regex(run_id))
+        result = self.psql(
+            "WITH synthetic_users AS ("
+            "SELECT id FROM user_table WHERE provider = 'GOOGLE' AND provider_user_id ~ "
+            f"{pattern}), synthetic_planners AS ("
+            "SELECT p.id FROM planners_table p JOIN synthetic_users u ON u.id = p.owner_id), "
+            "planner_counts AS ("
+            "SELECT p.id, count(t.id)::int AS item_count FROM synthetic_planners p "
+            "LEFT JOIN timeline_table t ON t.planner_id = p.id GROUP BY p.id) "
+            "SELECT "
+            "(SELECT count(*) FROM synthetic_users)::text || '|' || "
+            "(SELECT count(*) FROM synthetic_planners)::text || '|' || "
+            "(SELECT count(*) FROM timeline_table t JOIN synthetic_planners p ON p.id = t.planner_id)::text || '|' || "
+            "COALESCE((SELECT min(item_count) FROM planner_counts), 0)::text || '|' || "
+            "COALESCE((SELECT max(item_count) FROM planner_counts), 0)::text"
+        ).strip()
+        fields = result.split("|")
+        if len(fields) != 5:
+            raise SeedError("fixture verification returned an invalid count shape")
+        try:
+            users, planners, timeline_items, minimum, maximum = (int(field) for field in fields)
+        except ValueError as error:
+            raise SeedError("fixture verification returned a non-integer count") from error
+        return {
+            "users": users,
+            "planners": planners,
+            "timelineItems": timeline_items,
+            "minimumTimelineItemsPerPlanner": minimum,
+            "maximumTimelineItemsPerPlanner": maximum,
+        }
+
     def seed_redis_token(
         self, user_id: str, ttl_ms: int, token: str | None = None, family_id: str | None = None,
     ) -> tuple[str, str]:
@@ -441,8 +505,37 @@ class AwsSeed:
         temporary_path.chmod(0o600)
         os.replace(temporary_path, path)
 
+    def write_fixture_result(self, payload: dict, path: Path) -> None:
+        """Write non-sensitive fixture counts as an ordinary evidence artifact."""
+        path = path.resolve()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=path.parent, delete=False) as temporary:
+            temporary_path = Path(temporary.name)
+            json.dump(payload, temporary, indent=2)
+            temporary.write("\n")
+        temporary_path.chmod(0o644)
+        os.replace(temporary_path, path)
 
-def seed_all(runtime: AwsSeed, args: argparse.Namespace) -> None:
+
+def validate_fixture_counts(counts: dict[str, int], expected_users: int) -> None:
+    expected = {
+        "users": expected_users,
+        "planners": expected_users,
+        "timelineItems": expected_users * EXPECTED_TIMELINE_ITEMS_PER_PLANNER,
+        "minimumTimelineItemsPerPlanner": EXPECTED_TIMELINE_ITEMS_PER_PLANNER,
+        "maximumTimelineItemsPerPlanner": EXPECTED_TIMELINE_ITEMS_PER_PLANNER,
+    }
+    if counts != expected:
+        raise SeedError("seed fixture verification failed: expected normalized users/planners/timeline counts")
+
+
+def seed_all(
+    runtime: AwsSeed,
+    args: argparse.Namespace,
+    *,
+    reset_deleted_planners: int | None = None,
+    verify_fixture: bool = False,
+) -> None:
     # Every user always gets a credentials[] entry, whether freshly created
     # or already-seeded from a prior run. This fixes two related bugs: (1)
     # an all-skipped retry used to write {"credentials": []}, silently
@@ -458,6 +551,7 @@ def seed_all(runtime: AwsSeed, args: argparse.Namespace) -> None:
     # DB/API-side work (user insert, travel/timeline creation) is skipped
     # when already fully seeded.
     run_id = args.run_id
+    fixture_id = getattr(args, "fixture_id", "seed")
     credentials = []
     skipped = 0
     for index in range(1, args.users + 1):
@@ -492,18 +586,66 @@ def seed_all(runtime: AwsSeed, args: argparse.Namespace) -> None:
         })
         credentials.append(pending_credential)
         write_seed_checkpoint(runtime, args, credentials, skipped)
-    runtime.write_credentials(
-        {
-            "runId": run_id,
-            "seedVersion": "aws-s2",
-            "seedState": "complete",
-            "seededAt": datetime.now(timezone.utc).isoformat(),
-            "skippedAlreadySeeded": skipped,
-            "credentials": credentials,
-        },
-        args.data_file,
-    )
-    print(f"[seed] complete: {len(credentials)} synthetic users seeded, {skipped} already present")
+    fixture_counts = None
+    if verify_fixture:
+        fixture_counts = runtime.fixture_counts(run_id)
+        try:
+            validate_fixture_counts(fixture_counts, args.users)
+        except SeedError:
+            # Preserve a private, incomplete checkpoint so k6 cannot consume
+            # a fixture whose cardinality was not proven.
+            runtime.write_credentials(
+                {
+                    "runId": run_id,
+                    "seedVersion": "aws-s2",
+                    "seedState": "in-progress",
+                    "seededAt": datetime.now(timezone.utc).isoformat(),
+                    "fixtureId": fixture_id,
+                    "fixtureState": "invalid",
+                    "fixture": fixture_counts,
+                    "skippedAlreadySeeded": skipped,
+                    "credentials": credentials,
+                },
+                args.data_file,
+            )
+            raise
+
+    payload = {
+        "runId": run_id,
+        "seedVersion": "aws-s2",
+        "seedState": "complete",
+        "seededAt": datetime.now(timezone.utc).isoformat(),
+        "fixtureId": fixture_id,
+        "fixtureResetApplied": reset_deleted_planners is not None,
+        "plannersDeletedBeforeSeed": reset_deleted_planners or 0,
+        "fixtureState": "verified" if fixture_counts is not None else "not-verified",
+        "skippedAlreadySeeded": skipped,
+        "credentials": credentials,
+    }
+    if fixture_counts is not None:
+        payload["fixture"] = fixture_counts
+    runtime.write_credentials(payload, args.data_file)
+    fixture_result_file = getattr(args, "fixture_result_file", None)
+    if fixture_counts is not None and fixture_result_file is not None:
+        runtime.write_fixture_result(
+            {
+                "runId": run_id,
+                "fixtureId": fixture_id,
+                "seedVersion": "aws-s2",
+                "resetApplied": reset_deleted_planners is not None,
+                "plannersDeletedBeforeSeed": reset_deleted_planners or 0,
+                "expected": {
+                    "users": args.users,
+                    "planners": args.users,
+                    "timelineItems": args.users * EXPECTED_TIMELINE_ITEMS_PER_PLANNER,
+                    "timelineItemsPerPlanner": EXPECTED_TIMELINE_ITEMS_PER_PLANNER,
+                },
+                "actual": fixture_counts,
+                "completedAtUtc": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
+            },
+            fixture_result_file,
+        )
+    print(f"[seed] complete: {len(credentials)} synthetic users seeded, {skipped} already present, fixture={fixture_id}")
 
 
 def write_seed_checkpoint(
@@ -518,6 +660,7 @@ def write_seed_checkpoint(
             "seedVersion": "aws-s2",
             "seedState": "in-progress",
             "seededAt": datetime.now(timezone.utc).isoformat(),
+            "fixtureId": getattr(args, "fixture_id", "seed"),
             "skippedAlreadySeeded": skipped,
             "credentials": credentials,
         },
@@ -550,12 +693,20 @@ def main() -> int:
         raise SeedError("--run-id must be 1-40 chars of [A-Za-z0-9-]")
     if args.users < 1 or args.users > 200:
         raise SeedError("--users must be between 1 and 200")
+    if not FIXTURE_ID_PATTERN.fullmatch(args.fixture_id):
+        raise SeedError("--fixture-id must be 1-64 chars of [A-Za-z0-9._-]")
     args.data_file = args.data_file.resolve()
+    if args.fixture_result_file is not None:
+        args.fixture_result_file = args.fixture_result_file.resolve()
     verify_account(args.expected_account_id, args.region)
     database_username, database_password = read_secret_credential(args.database_secret_arn, args.region)
     runtime = AwsSeed(args, database_username, database_password)
     revoke_previous_credentials(runtime, args)
-    seed_all(runtime, args)
+    reset_deleted_planners = None
+    if args.reset_fixture:
+        reset_deleted_planners = runtime.reset_synthetic_planners(args.run_id)
+        print(f"[seed] reset fixture: deleted {reset_deleted_planners} planner(s) with cascaded timeline rows")
+    seed_all(runtime, args, reset_deleted_planners=reset_deleted_planners, verify_fixture=True)
     return 0
 
 

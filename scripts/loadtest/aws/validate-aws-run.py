@@ -48,6 +48,8 @@ CORE_COUNTERS = (
     "core_unexpected_errors_total",
     "core_contract_failures_total",
 )
+ASSESSED_PHASES = ("smoke", "ramp", "baseline-1", "baseline-2", "baseline-3", "spike")
+TIMELINE_ITEMS_PER_PLANNER = 3
 
 
 class ValidationError(RuntimeError):
@@ -287,6 +289,81 @@ def evaluate_baseline_candidate(reps: list[dict], confirmed_rate: float | None) 
     }
 
 
+def fixture_failure(phase: str, reason: str) -> dict:
+    """Return a sanitized, machine-readable fixture rejection."""
+    return {"phase": phase, "passed": False, "reason": reason}
+
+
+def evaluate_fixture_phase(evidence_root: Path, run_id: str, phase: str) -> dict:
+    """Validate the fixture artifact that belongs to one assessed phase."""
+    marker_path = evidence_root / "stages" / f"{phase}.json"
+    if not marker_path.exists():
+        return fixture_failure(phase, "missing_stage_marker")
+    try:
+        marker = read_json(marker_path)
+    except (ValidationError, OSError, json.JSONDecodeError):
+        return fixture_failure(phase, "invalid_stage_marker")
+    if marker.get("runId") != run_id:
+        return fixture_failure(phase, "stage_run_id_mismatch")
+    if marker.get("fixtureId") != phase:
+        return fixture_failure(phase, "stage_fixture_id_mismatch")
+    expected_path = f"fixtures/{phase}.json"
+    if marker.get("fixtureResultPath") != expected_path:
+        return fixture_failure(phase, "stage_fixture_path_mismatch")
+    expected_users = marker.get("fixtureExpectedUsers")
+    if not isinstance(expected_users, int) or isinstance(expected_users, bool) or expected_users < 1:
+        return fixture_failure(phase, "invalid_expected_user_count")
+
+    artifact_path = evidence_root / expected_path
+    if not artifact_path.exists():
+        return fixture_failure(phase, "missing_fixture_artifact")
+    try:
+        artifact = read_json(artifact_path)
+    except (ValidationError, OSError, json.JSONDecodeError):
+        return fixture_failure(phase, "invalid_fixture_artifact")
+    if artifact.get("runId") != run_id:
+        return fixture_failure(phase, "fixture_run_id_mismatch")
+    if artifact.get("fixtureId") != phase:
+        return fixture_failure(phase, "fixture_id_mismatch")
+
+    expected = artifact.get("expected")
+    expected_contract = {
+        "users": expected_users,
+        "planners": expected_users,
+        "timelineItems": expected_users * TIMELINE_ITEMS_PER_PLANNER,
+        "timelineItemsPerPlanner": TIMELINE_ITEMS_PER_PLANNER,
+    }
+    if expected != expected_contract:
+        return fixture_failure(phase, "fixture_expected_count_mismatch")
+
+    actual = artifact.get("actual")
+    actual_contract = {
+        "users": expected_users,
+        "planners": expected_users,
+        "timelineItems": expected_users * TIMELINE_ITEMS_PER_PLANNER,
+        "minimumTimelineItemsPerPlanner": TIMELINE_ITEMS_PER_PLANNER,
+        "maximumTimelineItemsPerPlanner": TIMELINE_ITEMS_PER_PLANNER,
+    }
+    if actual != actual_contract:
+        return fixture_failure(phase, "fixture_actual_count_mismatch")
+    return {
+        "phase": phase,
+        "passed": True,
+        "fixtureId": phase,
+        "fixtureResultPath": expected_path,
+        "expectedUsers": expected_users,
+        "actual": actual,
+    }
+
+
+def evaluate_fixture_evidence(evidence_root: Path, run_id: str) -> dict:
+    phases = [evaluate_fixture_phase(evidence_root, run_id, phase) for phase in ASSESSED_PHASES]
+    return {
+        "passed": all(phase["passed"] for phase in phases),
+        "phases": phases,
+    }
+
+
 def evaluate_bundle_structure(evidence_root: Path, data_file: Path | None) -> dict:
     metadata = read_json(evidence_root / "metadata.json")
     operations_path = evidence_root / "operations.jsonl"
@@ -316,6 +393,7 @@ def evaluate(evidence_root: Path, data_file: Path | None, confirmed_rate: float 
     structure = evaluate_bundle_structure(evidence_root, data_file)
     phases = discover_phases(evidence_root)
     baseline_candidate = evaluate_baseline_candidate(phases["baseline"], confirmed_rate)
+    fixtures = evaluate_fixture_evidence(evidence_root, structure["runId"])
 
     smoke_pass = phases["smoke"] is not None and phases["smoke"]["k6ExitCode"] == 0 and phases["smoke"]["droppedIterations"] == 0
     ramp_pass = phases["ramp"] is not None and phases["ramp"]["k6ExitCode"] == 0 and phases["ramp"]["droppedIterations"] == 0
@@ -332,6 +410,7 @@ def evaluate(evidence_root: Path, data_file: Path | None, confirmed_rate: float 
         "baselineCandidate": baseline_candidate,
         "spike": phases["spike"],
         "spikeRecorded": spike_recorded,
+        "fixtures": fixtures,
         "sloVersion": "v0.2-candidate (not v1.0-frozen; see D-006 in decisions/OPEN_DECISIONS.md)",
     }
     report["passed"] = (
@@ -341,6 +420,7 @@ def evaluate(evidence_root: Path, data_file: Path | None, confirmed_rate: float 
         and ramp_pass
         and baseline_candidate["frozen"]
         and spike_recorded
+        and fixtures["passed"]
     )
     (evidence_root / "gate-report.json").write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     return report
