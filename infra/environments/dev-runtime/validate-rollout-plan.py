@@ -37,6 +37,8 @@ _DIGEST_RE = re.compile(
 _ALLOWED_MODES = {"NORMAL", "EXPERIMENT", "FAULT", "MANUAL_BASELINE"}
 _NOOP = ("no-op",)
 _LAUNCH_TEMPLATE_VERSION_RE = re.compile(r"^[1-9][0-9]*$")
+_ROLLOUT_REVISION_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
+_LAUNCH_TEMPLATE_ADDRESS = "module.backend_service.aws_launch_template.backend"
 
 
 def _actions(resource: dict[str, Any]) -> tuple[str, ...]:
@@ -67,7 +69,12 @@ def _allowed_actions(address: str) -> set[tuple[str, ...]] | None:
     return None
 
 
-def validate_plan(plan: dict[str, Any], *, refresh_only: bool = False) -> dict[str, Any]:
+def validate_plan(
+    plan: dict[str, Any],
+    *,
+    refresh_only: bool = False,
+    require_launch_template_update: bool = False,
+) -> dict[str, Any]:
     """Validate Terraform JSON plan actions and return sanitized summary."""
 
     resources = plan.get("resource_changes")
@@ -76,6 +83,7 @@ def validate_plan(plan: dict[str, Any], *, refresh_only: bool = False) -> dict[s
 
     changed: list[dict[str, Any]] = []
     violations: list[str] = []
+    launch_template_updated = False
     for resource in resources:
         if not isinstance(resource, dict) or not isinstance(resource.get("address"), str):
             violations.append("resource change has no address")
@@ -88,6 +96,8 @@ def validate_plan(plan: dict[str, Any], *, refresh_only: bool = False) -> dict[s
             continue
         if actions != _NOOP:
             changed.append({"address": address, "actions": list(actions)})
+        if address == _LAUNCH_TEMPLATE_ADDRESS and actions == ("update",):
+            launch_template_updated = True
         allowed = _allowed_actions(address)
         if allowed is None:
             if actions != _NOOP:
@@ -97,11 +107,17 @@ def validate_plan(plan: dict[str, Any], *, refresh_only: bool = False) -> dict[s
 
     if refresh_only and changed:
         violations.append("refresh-only restore plan must contain no resource actions")
+    if require_launch_template_update and not launch_template_updated:
+        violations.append(
+            "an EXPERIMENT rollout plan must update the backend Launch Template; "
+            "bump rollout_revision so the same digest still produces a new numbered version"
+        )
     if violations:
         raise RolloutPlanError("; ".join(violations))
     return {
         "passed": True,
         "refreshOnly": refresh_only,
+        "launchTemplateUpdated": launch_template_updated,
         "changedResources": changed,
     }
 
@@ -154,6 +170,13 @@ def validate_contract(contract: dict[str, Any], *, refresh_only: bool = False) -
         launch_template_version = _value(contract, "launchTemplateVersion", "launch_template_version")
     if not isinstance(launch_template_version, str) or not _LAUNCH_TEMPLATE_VERSION_RE.fullmatch(launch_template_version):
         raise RolloutPlanError("rollout contract requires a numbered Launch Template version")
+    revision = _value(contract, "rolloutRevision", "rollout_revision")
+    if revision is not None and (
+        not isinstance(revision, str) or not _ROLLOUT_REVISION_RE.fullmatch(revision)
+    ):
+        raise RolloutPlanError("rolloutRevision must be 1-64 characters of letters, digits, dot, underscore, or hyphen")
+    if mode == "EXPERIMENT" and revision is None:
+        raise RolloutPlanError("EXPERIMENT rollout requires an explicit rolloutRevision")
     desired_capacity = _require_int(_value(contract, "desiredCapacity", "desired_capacity"), "desiredCapacity")
     min_size = _require_int(_value(contract, "minSize", "min_size"), "minSize")
     max_size = _require_int(_value(contract, "maxSize", "max_size"), "maxSize")
@@ -210,6 +233,7 @@ def validate_contract(contract: dict[str, Any], *, refresh_only: bool = False) -
         "scalingPolicyEnabled": scaling_enabled,
         "autoRollback": False,
         "launchTemplateVersion": launch_template_version,
+        "rolloutRevision": revision,
         "desiredCapacity": desired_capacity,
         "minSize": min_size,
         "maxSize": max_size,
@@ -238,8 +262,14 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: Iterable[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
-        plan_result = validate_plan(_load(args.plan_json), refresh_only=args.refresh_only)
         contract_result = validate_contract(_load(args.contract), refresh_only=args.refresh_only)
+        plan_result = validate_plan(
+            _load(args.plan_json),
+            refresh_only=args.refresh_only,
+            require_launch_template_update=(
+                contract_result["mode"] == "EXPERIMENT" and not args.refresh_only
+            ),
+        )
     except RolloutPlanError as exc:
         print(json.dumps({"passed": False, "error": str(exc)}, separators=(",", ":")))
         return 1

@@ -18,6 +18,10 @@ backend_rollout_max_healthy_percentage = 200
 backend_rollout_checkpoint_percentages = []
 backend_rollout_checkpoint_delay_seconds = 60
 backend_rollout_scaling_policy_enabled = true
+# Changing only this marker creates a new numbered Launch Template version and
+# a real Instance Refresh with the same digest (R-01). Use a unique value per
+# experiment run, e.g. "r01-<run-id>".
+backend_rollout_revision = "baseline"
 # backend_rollout_normal_image_uri  = "...@sha256:<previous-normal-digest>"
 # backend_rollout_fault_image_uri   = "...@sha256:<fault-digest>"
 # backend_rollout_restore_image_uri = "...@sha256:<previous-normal-digest>"

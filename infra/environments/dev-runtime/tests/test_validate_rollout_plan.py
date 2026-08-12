@@ -94,6 +94,7 @@ def test_normal_contract_preserves_default_invariant() -> None:
         "scalingPolicyEnabled": True,
         "autoRollback": False,
         "launchTemplateVersion": "7",
+        "rolloutRevision": None,
         "desiredCapacity": 2,
         "minSize": 2,
         "maxSize": 4,
@@ -108,11 +109,112 @@ def test_experiment_contract_requires_checkpoint_and_scaling_disabled() -> None:
             maxHealthyPercentage=150,
             checkpointPercentages=[50, 100],
             scalingPolicyEnabled=False,
+            rolloutRevision="r01-test-1",
         )
     )
     assert result["manualBaseline"] is False
     with pytest.raises(MODULE.RolloutPlanError, match="experiment/fault"):
-        MODULE.validate_contract(normal_contract(mode="EXPERIMENT", maxHealthyPercentage=200))
+        MODULE.validate_contract(
+            normal_contract(
+                mode="EXPERIMENT", maxHealthyPercentage=200, rolloutRevision="r01-test-1"
+            )
+        )
+
+
+def test_experiment_contract_requires_rollout_revision() -> None:
+    with pytest.raises(MODULE.RolloutPlanError, match="rolloutRevision"):
+        MODULE.validate_contract(
+            normal_contract(
+                mode="EXPERIMENT",
+                maxHealthyPercentage=150,
+                checkpointPercentages=[50],
+                scalingPolicyEnabled=False,
+            )
+        )
+
+
+@pytest.mark.parametrize("revision", ["", "has space", "a" * 65, "한글", 7])
+def test_contract_rejects_malformed_rollout_revision(revision: object) -> None:
+    with pytest.raises(MODULE.RolloutPlanError, match="rolloutRevision"):
+        MODULE.validate_contract(
+            normal_contract(
+                mode="EXPERIMENT",
+                maxHealthyPercentage=150,
+                checkpointPercentages=[50],
+                scalingPolicyEnabled=False,
+                rolloutRevision=revision,
+            )
+        )
+
+
+def test_contract_summary_reports_rollout_revision() -> None:
+    result = MODULE.validate_contract(
+        normal_contract(
+            mode="EXPERIMENT",
+            maxHealthyPercentage=150,
+            checkpointPercentages=[50],
+            scalingPolicyEnabled=False,
+            rolloutRevision="r01-aws-r01-20260812-a1",
+        )
+    )
+    assert result["rolloutRevision"] == "r01-aws-r01-20260812-a1"
+
+
+def test_experiment_plan_requires_launch_template_update() -> None:
+    plan_without_lt_update = {
+        "resource_changes": [
+            resource("module.backend_service.aws_launch_template.backend", ["no-op"]),
+            resource("module.backend_service.aws_autoscaling_group.backend", ["update"]),
+        ]
+    }
+    with pytest.raises(MODULE.RolloutPlanError, match="rollout_revision"):
+        MODULE.validate_plan(plan_without_lt_update, require_launch_template_update=True)
+    result = MODULE.validate_plan(
+        {
+            "resource_changes": [
+                resource("module.backend_service.aws_launch_template.backend", ["update"]),
+                resource("module.backend_service.aws_autoscaling_group.backend", ["update"]),
+            ]
+        },
+        require_launch_template_update=True,
+    )
+    assert result["launchTemplateUpdated"] is True
+
+
+def test_main_derives_launch_template_requirement_from_experiment_mode(tmp_path) -> None:
+    import json as _json
+
+    plan_path = tmp_path / "plan.json"
+    contract_path = tmp_path / "contract.json"
+    experiment_contract = normal_contract(
+        mode="EXPERIMENT",
+        maxHealthyPercentage=150,
+        checkpointPercentages=[50],
+        scalingPolicyEnabled=False,
+        rolloutRevision="r01-test-1",
+    )
+    plan_path.write_text(
+        _json.dumps(
+            {
+                "resource_changes": [
+                    resource("module.backend_service.aws_launch_template.backend", ["no-op"]),
+                ]
+            }
+        )
+    )
+    contract_path.write_text(_json.dumps(experiment_contract))
+    assert MODULE.main([str(plan_path), "--contract", str(contract_path)]) == 1
+    plan_path.write_text(
+        _json.dumps(
+            {
+                "resource_changes": [
+                    resource("module.backend_service.aws_launch_template.backend", ["update"]),
+                    resource("module.backend_service.aws_autoscaling_group.backend", ["update"]),
+                ]
+            }
+        )
+    )
+    assert MODULE.main([str(plan_path), "--contract", str(contract_path)]) == 0
 
 
 def test_fault_contract_binds_distinct_digest() -> None:

@@ -212,6 +212,17 @@ variable "backend_rollout_scaling_policy_enabled" {
   default     = true
 }
 
+variable "backend_rollout_revision" {
+  type        = string
+  description = "Rollout revision marker bound into the backend Launch Template; changing it alone forces a new numbered Launch Template version and a real Instance Refresh."
+  default     = "baseline"
+
+  validation {
+    condition     = can(regex("^[A-Za-z0-9._-]{1,64}$", var.backend_rollout_revision))
+    error_message = "backend_rollout_revision must be 1 to 64 characters of letters, digits, dot, underscore, or hyphen."
+  }
+}
+
 variable "backend_rollout_normal_image_uri" {
   type        = string
   description = "Previously healthy Backend ECR digest used for normal and MANUAL_BASELINE contracts."

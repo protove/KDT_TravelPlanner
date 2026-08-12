@@ -264,9 +264,10 @@ resource "aws_launch_template" "backend" {
   tag_specifications {
     resource_type = "instance"
     tags = merge(var.tags, {
-      Name    = "${local.name}-backend"
-      Service = "travel-planner-backend"
-      Version = var.alloy_image_reference
+      Name            = "${local.name}-backend"
+      Service         = "travel-planner-backend"
+      Version         = var.alloy_image_reference
+      RolloutRevision = var.rollout_revision
     })
   }
 
