@@ -28,10 +28,16 @@ Management server는 `9091` 포트, application server는 `8080` 포트에서
 모드와 장애 파라미터는 runtime 환경변수만으로 결정되지 않는다. Build
 helper가 canonical immutable configuration을 생성하고 Dockerfile이 이를
 `/app/fault-config.json`으로 이미지 안에 기록한다. 같은 configuration의
-SHA-256과 contract/behavior label도 이미지 config에 함께 굽는다. behavior
-hash에는 mode와 모든 fault parameter가 포함된다. 컨테이너가
+SHA-256과 contract/behavior label도 이미지 config에 함께 굽는다. Dockerfile은
+canonical behavior SHA와 contract를 startup executable인 `/app/server.py`의
+build-time 상수로 삽입한다. behavior hash에는 mode와 모든 fault parameter가
+포함된다.
+컨테이너가
 실행될 때 fault 환경변수가 이미지 설정과 다르면 즉시 종료하므로 runtime
-override로 metadata와 실제 동작이 갈라지지 않는다. immutable 선언이 하나라도
+override로 metadata와 실제 동작이 갈라지지 않는다. runtime에서
+`IMMUTABLE_BEHAVIOR_SHA256`를 바꿔도 executable-coupled binding과 다르면
+시작에 실패한다.
+immutable 선언이 하나라도
 있으면 `/app/fault-config.json`은 반드시 regular file이어야 하며, 파일 누락,
 directory masking, malformed JSON, 빈 hash/contract는 모두 시작 전에
 fail-closed된다. 두 immutable 선언과 config가 모두 없는 경우에만 source-level
@@ -118,9 +124,12 @@ metadata의 `faultHttpStatus`를 `500..599` 중 승인된 값으로 맞춘다. `
 또한 같은 digest의 이미지 label/config가 선택한 mode·parameter hash와
 다르면 통과하지 않는다. verifier는 exact digest 이미지가 local Docker
 daemon에 없거나 `RepoDigests`가 일치하지 않아도 fail-closed한다.
-배포 시 `/app/fault-config.json`을 volume으로 가리거나 runtime `FAULT_*`
-값을 주입해 immutable 설정을 우회할 수 없으며, 그런 경우 fixture process가
-비정상 종료해야 한다.
+배포 시 `/app/fault-config.json`을 volume으로 가리거나 runtime `FAULT_*` 및
+`IMMUTABLE_*` 값을 주입해 immutable 설정을 우회할 수 없으며, executable-coupled
+binding과 현재 config/선언이 다르면 fixture process가 비정상 종료해야 한다.
+이 계약의 runtime threat boundary는 `/app/server.py` startup executable 자체를
+교체하지 않는 것으로 정의한다. executable 자체 교체는 별도 image-integrity
+검증 범위다.
 
 ## 로컬 contract test
 

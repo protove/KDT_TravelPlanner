@@ -53,15 +53,42 @@ fi
 
 INSPECT_JSON="$(mktemp "${TMPDIR:-/tmp}/recovery-fault-image-inspect.XXXXXX")"
 INSPECT_ERR="$(mktemp "${TMPDIR:-/tmp}/recovery-fault-image-inspect-error.XXXXXX")"
-trap 'rm -f "$INSPECT_JSON" "$INSPECT_ERR"' EXIT
+AUTHORITY_JSON="$(mktemp "${TMPDIR:-/tmp}/recovery-fault-image-authority.XXXXXX")"
+AUTHORITY_ERR="$(mktemp "${TMPDIR:-/tmp}/recovery-fault-image-authority-error.XXXXXX")"
+trap 'rm -f "$INSPECT_JSON" "$INSPECT_ERR" "$AUTHORITY_JSON" "$AUTHORITY_ERR"' EXIT
 if ! "$DOCKER_BIN" image inspect "$IMAGE_REF" >"$INSPECT_JSON" 2>"$INSPECT_ERR"; then
   echo "docker image inspect failed for the exact digest-pinned image" >&2
   exit 1
 fi
 
+python3 - "$INSPECT_JSON" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+try:
+    inspected = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+except (OSError, json.JSONDecodeError) as error:
+    raise SystemExit(f"unable to read docker image inspection: {error}") from error
+if not isinstance(inspected, list) or len(inspected) != 1 or not isinstance(inspected[0], dict):
+    raise SystemExit("docker image inspection must contain exactly one image")
+config = inspected[0].get("Config")
+if not isinstance(config, dict):
+    raise SystemExit("docker image inspection is missing image config")
+if config.get("Entrypoint") != ["python", "/app/server.py"]:
+    raise SystemExit("image Config.Entrypoint must exactly be ['python', '/app/server.py']")
+PY
+
+if ! "$DOCKER_BIN" run --rm --network none --entrypoint python "$IMAGE_REF" \
+    -c 'import json, runpy; module = runpy.run_path("/app/server.py", run_name="recovery_fault_server_authority"); print(json.dumps({"contractVersion": module.get("PACKAGED_CONTRACT_VERSION"), "behaviorSha256": module.get("PACKAGED_BEHAVIOR_SHA256")}, sort_keys=True))' \
+    >"$AUTHORITY_JSON" 2>"$AUTHORITY_ERR"; then
+  echo "direct packaged executable authority proof failed" >&2
+  exit 1
+fi
+
 python3 - "$CONTRACT" "$METADATA_FILE" "$IMAGE_REF" "$BASE_IMAGE" \
   "$MODE" "$FAULT_PATH" "$FAULT_ERROR_CODE" "$FAULT_ERROR_MESSAGE" "$FAULT_HTTP_STATUS" \
-  "$INSPECT_JSON" <<'PY'
+  "$INSPECT_JSON" "$AUTHORITY_JSON" <<'PY'
 import hashlib
 import json
 import re
@@ -79,6 +106,7 @@ from pathlib import Path
     fault_error_message,
     fault_http_status,
     inspect_path,
+    authority_path,
 ) = sys.argv[1:]
 try:
     contract = json.loads(Path(contract_path).read_text(encoding="utf-8"))
@@ -117,6 +145,13 @@ if not isinstance(config, dict):
 labels = config.get("Labels")
 if not isinstance(labels, dict):
     raise SystemExit("docker image inspection is missing immutable recovery labels")
+
+try:
+    authority = json.loads(Path(authority_path).read_text(encoding="utf-8"))
+except (OSError, json.JSONDecodeError) as error:
+    raise SystemExit(f"unable to read direct packaged executable authority: {error}") from error
+if not isinstance(authority, dict) or set(authority) != {"contractVersion", "behaviorSha256"}:
+    raise SystemExit("direct packaged executable authority fields are invalid")
 
 metadata_spec = contract.get("metadata")
 if not isinstance(metadata_spec, dict):
@@ -178,6 +213,12 @@ if labels.get(label_prefix + "contract-version") != contract.get("contractVersio
     raise SystemExit("image label contract version does not match the artifact contract")
 if labels.get(label_prefix + "behavior-sha256") != behavior_sha:
     raise SystemExit("image immutable behavior digest does not match selected parameters")
+if labels.get(label_prefix + "executable-binding-sha256") != behavior_sha:
+    raise SystemExit("image executable binding label does not match selected parameters")
+if authority.get("contractVersion") != contract.get("contractVersion"):
+    raise SystemExit("direct packaged executable contract does not match selected parameters")
+if authority.get("behaviorSha256") != behavior_sha:
+    raise SystemExit("direct packaged executable behavior does not match selected parameters")
 environment = config.get("Env")
 if not isinstance(environment, list):
     raise SystemExit("docker image inspection is missing image environment")
@@ -222,6 +263,7 @@ for field, value in expected.items():
 print("fault_image_contract=verified")
 print(f"artifact_metadata=derived_from_image mode={mode} image_ref={image_ref}")
 print(f"immutable_behavior_sha256=verified value={behavior_sha}")
+print("direct_executable_authority=verified")
 PY
 
 echo "deployment_image_ref=verified"

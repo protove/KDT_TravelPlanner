@@ -94,10 +94,16 @@ class RecoveryFaultFixtureTest(unittest.TestCase):
         module,
         config_path: Path,
         env: dict[str, str],
+        packaged_digest: Optional[str] = None,
+        packaged_contract: Optional[str] = None,
     ):
         with mock.patch.object(module, "IMMUTABLE_CONFIG_PATH", str(config_path)):
-            with mock.patch.dict(module.os.environ, env, clear=True):
-                return module.FixtureConfig()
+            with mock.patch.object(module, "PACKAGED_BEHAVIOR_SHA256", packaged_digest):
+                with mock.patch.object(
+                    module, "PACKAGED_CONTRACT_VERSION", packaged_contract
+                ):
+                    with mock.patch.dict(module.os.environ, env, clear=True):
+                        return module.FixtureConfig()
 
     def start_fixture(
         self, mode: str, error_status: int = 500
@@ -193,6 +199,11 @@ class RecoveryFaultFixtureTest(unittest.TestCase):
         fault_http_status: int = 500,
         include_metadata_argument: bool = True,
         image_mode: Optional[str] = None,
+        direct_behavior_sha: Optional[str] = None,
+        include_direct_authority: bool = True,
+        image_entrypoint: Optional[list[str]] = None,
+        include_entrypoint: bool = True,
+        require_exact_authority_path: bool = False,
     ) -> subprocess.CompletedProcess[str]:
         with tempfile.TemporaryDirectory() as directory:
             metadata_path = Path(directory) / "artifact-metadata.json"
@@ -215,17 +226,34 @@ class RecoveryFaultFixtureTest(unittest.TestCase):
                 separators=(",", ":"),
             )
             behavior_sha = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+            direct_sha = direct_behavior_sha or behavior_sha
             docker_mock.write_text(
                 "#!/usr/bin/env python3\n"
                 "import json, os, sys\n"
+                "if sys.argv[1:2] == ['run']:\n"
+                "    command = ' '.join(sys.argv)\n"
+                "    if os.environ.get('MOCK_REQUIRE_EXACT_AUTHORITY_PATH') == '1' and (\n"
+                "        'runpy.run_path' not in command or '/app/server.py' not in command or 'import server' in command\n"
+                "    ):\n"
+                "        print('authority proof did not use the exact executable path', file=sys.stderr)\n"
+                "        raise SystemExit(7)\n"
+                "    if os.environ.get('MOCK_INCLUDE_DIRECT_AUTHORITY') != '1':\n"
+                "        print(json.dumps({}))\n"
+                "    else:\n"
+                "        print(json.dumps({'contractVersion': 'aws-recovery-fault-image-v1', 'behaviorSha256': os.environ['MOCK_DIRECT_BEHAVIOR_SHA256']}))\n"
+                "    raise SystemExit(0)\n"
                 "image_ref = sys.argv[-1]\n"
                 "repository = image_ref.split('@', 1)[0].rsplit(':', 1)[0]\n"
                 "repo_digest = repository + '@' + image_ref.split('@', 1)[1]\n"
-                "print(json.dumps([{'RepoDigests': [repo_digest], 'Config': {'Labels': {"
+                "config = {'Labels': {"
                 "'org.kdt.travelplanner.recovery.contract-version': 'aws-recovery-fault-image-v1', "
-                "'org.kdt.travelplanner.recovery.behavior-sha256': os.environ['MOCK_BEHAVIOR_SHA256']}, "
+                "'org.kdt.travelplanner.recovery.behavior-sha256': os.environ['MOCK_BEHAVIOR_SHA256'], "
+                "'org.kdt.travelplanner.recovery.executable-binding-sha256': os.environ['MOCK_BEHAVIOR_SHA256']}, "
                 "'Env': ['IMMUTABLE_BEHAVIOR_SHA256=' + os.environ['MOCK_BEHAVIOR_SHA256'], "
-                "'IMMUTABLE_CONTRACT_VERSION=aws-recovery-fault-image-v1']}}]))\n",
+                "'IMMUTABLE_CONTRACT_VERSION=aws-recovery-fault-image-v1']}\n"
+                "if os.environ.get('MOCK_INCLUDE_ENTRYPOINT') == '1':\n"
+                "    config['Entrypoint'] = json.loads(os.environ['MOCK_ENTRYPOINT'])\n"
+                "print(json.dumps([{'RepoDigests': [repo_digest], 'Config': config}]))\n",
                 encoding="utf-8",
             )
             docker_mock.chmod(0o755)
@@ -259,6 +287,15 @@ class RecoveryFaultFixtureTest(unittest.TestCase):
                     "DOCKER_BIN": str(docker_mock),
                     "MOCK_IMAGE_MODE": inspected_mode,
                     "MOCK_BEHAVIOR_SHA256": behavior_sha,
+                    "MOCK_DIRECT_BEHAVIOR_SHA256": direct_sha,
+                    "MOCK_INCLUDE_DIRECT_AUTHORITY": "1" if include_direct_authority else "0",
+                    "MOCK_INCLUDE_ENTRYPOINT": "1" if include_entrypoint else "0",
+                    "MOCK_ENTRYPOINT": json.dumps(
+                        image_entrypoint or ["python", "/app/server.py"]
+                    ),
+                    "MOCK_REQUIRE_EXACT_AUTHORITY_PATH": "1"
+                    if require_exact_authority_path
+                    else "0",
                 },
             )
 
@@ -363,6 +400,8 @@ class RecoveryFaultFixtureTest(unittest.TestCase):
                         "IMMUTABLE_BEHAVIOR_SHA256": "a" * 64,
                         "IMMUTABLE_CONTRACT_VERSION": "aws-recovery-fault-image-v1",
                     },
+                    "a" * 64,
+                    "aws-recovery-fault-image-v1",
                 )
 
     def test_immutable_config_directory_fails_closed_when_declared(self):
@@ -378,6 +417,8 @@ class RecoveryFaultFixtureTest(unittest.TestCase):
                         "IMMUTABLE_BEHAVIOR_SHA256": "a" * 64,
                         "IMMUTABLE_CONTRACT_VERSION": "aws-recovery-fault-image-v1",
                     },
+                    "a" * 64,
+                    "aws-recovery-fault-image-v1",
                 )
 
     def test_immutable_config_malformed_fails_closed(self):
@@ -393,6 +434,8 @@ class RecoveryFaultFixtureTest(unittest.TestCase):
                         "IMMUTABLE_BEHAVIOR_SHA256": "a" * 64,
                         "IMMUTABLE_CONTRACT_VERSION": "aws-recovery-fault-image-v1",
                     },
+                    "a" * 64,
+                    "aws-recovery-fault-image-v1",
                 )
 
     def test_immutable_declarations_must_be_nonempty_and_exact(self):
@@ -421,7 +464,9 @@ class RecoveryFaultFixtureTest(unittest.TestCase):
             ):
                 with self.subTest(env=env):
                     with self.assertRaises(ValueError):
-                        self.load_config_with_env(module, config_path, env)
+                        self.load_config_with_env(
+                            module, config_path, env, digest, "aws-recovery-fault-image-v1"
+                        )
 
     def test_every_fault_runtime_override_fails_closed(self):
         module = self.load_server_module()
@@ -448,7 +493,54 @@ class RecoveryFaultFixtureTest(unittest.TestCase):
                                 "IMMUTABLE_CONTRACT_VERSION": "aws-recovery-fault-image-v1",
                                 name: value,
                             },
+                            digest,
+                            "aws-recovery-fault-image-v1",
                         )
+
+    def test_alternate_config_and_matching_runtime_digest_fail_against_baked_binding(self):
+        module = self.load_server_module()
+        packaged_values = self.immutable_values(mode="probe_failure")
+        alternate_values = self.immutable_values(
+            mode="business_error",
+            fault_path="/api/v1/custom",
+            fault_error_code="CUSTOM_FAILURE",
+            fault_error_message="custom",
+            fault_http_status=599,
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config_path = root / "fault-config.json"
+            alternate_digest = self.write_immutable_config(config_path, alternate_values)
+            with self.assertRaisesRegex(ValueError, "differs from baked image binding"):
+                self.load_config_with_env(
+                    module,
+                    config_path,
+                    {
+                        "IMMUTABLE_BEHAVIOR_SHA256": alternate_digest,
+                        "IMMUTABLE_CONTRACT_VERSION": "aws-recovery-fault-image-v1",
+                    },
+                    self.immutable_sha(packaged_values),
+                    "aws-recovery-fault-image-v1",
+                )
+
+    def test_invalid_packaged_executable_binding_fails_closed(self):
+        module = self.load_server_module()
+        values = self.immutable_values()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config_path = root / "fault-config.json"
+            digest = self.write_immutable_config(config_path, values)
+            with self.assertRaisesRegex(ValueError, "packaged behavior binding digest is invalid"):
+                self.load_config_with_env(
+                    module,
+                    config_path,
+                    {
+                        "IMMUTABLE_BEHAVIOR_SHA256": digest,
+                        "IMMUTABLE_CONTRACT_VERSION": "aws-recovery-fault-image-v1",
+                    },
+                    "not-a-digest",
+                    "aws-recovery-fault-image-v1",
+                )
 
     def test_build_helper_rejects_unpinned_base_image_without_building(self):
         result = subprocess.run(
@@ -506,10 +598,48 @@ class RecoveryFaultFixtureTest(unittest.TestCase):
                     metadata,
                     mode=mode,
                     fault_http_status=500,
+                    require_exact_authority_path=True,
                 )
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertIn("deployment_image_ref=verified", result.stdout)
                 self.assertIn(f"artifact_metadata=derived_from_image mode={mode}", result.stdout)
+                self.assertIn("direct_executable_authority=verified", result.stdout)
+
+    def test_deployment_verifier_rejects_wrong_entrypoint(self):
+        metadata = self.metadata("probe_failure")
+        result = self.verify_metadata(
+            metadata,
+            image_entrypoint=["python", "/app/decoy.py"],
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Config.Entrypoint", result.stderr)
+
+    def test_deployment_verifier_rejects_missing_entrypoint(self):
+        metadata = self.metadata("probe_failure")
+        result = self.verify_metadata(metadata, include_entrypoint=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Config.Entrypoint", result.stderr)
+
+    def test_deployment_verifier_uses_exact_server_path_not_decoy_module(self):
+        metadata = self.metadata("probe_failure")
+        result = self.verify_metadata(
+            metadata,
+            require_exact_authority_path=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("direct_executable_authority=verified", result.stdout)
+
+    def test_deployment_verifier_rejects_metadata_only_authority(self):
+        metadata = self.metadata("probe_failure")
+        result = self.verify_metadata(metadata, include_direct_authority=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("direct packaged executable authority fields are invalid", result.stderr)
+
+    def test_deployment_verifier_rejects_direct_authority_mismatch(self):
+        metadata = self.metadata("probe_failure")
+        result = self.verify_metadata(metadata, direct_behavior_sha="b" * 64)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("direct packaged executable behavior", result.stderr)
 
     def test_deployment_verifier_requires_metadata(self):
         result = self.verify_metadata(None, include_metadata_argument=False)

@@ -37,6 +37,11 @@ IMMUTABLE_CONFIG_FIELDS = {
     "faultHttpStatus",
 }
 CONTRACT_VERSION = "aws-recovery-fault-image-v1"
+# These two values are replaced in the packaged executable during Docker
+# build. Source-level tests deliberately keep them unset so mutable fallback
+# remains available only outside a packaged image.
+PACKAGED_BEHAVIOR_SHA256: str | None = None
+PACKAGED_CONTRACT_VERSION: str | None = None
 
 
 def _env_port(name: str, default: int) -> int:
@@ -124,8 +129,24 @@ def _validate_fault_values(values: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _load_packaged_behavior_binding() -> dict[str, str] | None:
+    if PACKAGED_BEHAVIOR_SHA256 is None and PACKAGED_CONTRACT_VERSION is None:
+        return None
+    if not isinstance(PACKAGED_BEHAVIOR_SHA256, str) or not re.fullmatch(
+        r"[0-9a-f]{64}", PACKAGED_BEHAVIOR_SHA256
+    ):
+        raise ValueError("packaged behavior binding digest is invalid")
+    if PACKAGED_CONTRACT_VERSION != CONTRACT_VERSION:
+        raise ValueError("packaged behavior binding contract is invalid")
+    return {
+        "contractVersion": PACKAGED_CONTRACT_VERSION,
+        "behaviorSha256": PACKAGED_BEHAVIOR_SHA256,
+    }
+
+
 def _load_immutable_fault_config() -> dict[str, Any] | None:
     path = Path(IMMUTABLE_CONFIG_PATH)
+    binding = _load_packaged_behavior_binding()
     behavior_sha_declared = "IMMUTABLE_BEHAVIOR_SHA256" in os.environ
     contract_declared = "IMMUTABLE_CONTRACT_VERSION" in os.environ
     behavior_sha = os.environ.get("IMMUTABLE_BEHAVIOR_SHA256", "")
@@ -133,20 +154,25 @@ def _load_immutable_fault_config() -> dict[str, Any] | None:
 
     # Source-level subprocess tests may use mutable FAULT_* values only when
     # the packaged immutable contract is entirely absent. A packaged image
-    # always declares both values, so every other state fails closed.
-    if not behavior_sha_declared and not contract_declared:
+    # always contains the executable-coupled binding and declares both values, so every
+    # other state fails closed.
+    if binding is None and not behavior_sha_declared and not contract_declared:
         if not path.exists():
             return None
         raise ValueError(
             "immutable config exists but immutable declarations are missing"
         )
+    if binding is None:
+        raise ValueError("immutable behavior binding is missing")
     if not behavior_sha_declared or not contract_declared:
         raise ValueError(
             "IMMUTABLE_BEHAVIOR_SHA256 and IMMUTABLE_CONTRACT_VERSION are both required"
         )
     if not re.fullmatch(r"[0-9a-f]{64}", behavior_sha):
         raise ValueError("IMMUTABLE_BEHAVIOR_SHA256 must be a 64-character lowercase hex digest")
-    if declared_contract != CONTRACT_VERSION:
+    if behavior_sha != binding["behaviorSha256"]:
+        raise ValueError("immutable behavior declaration differs from baked image binding")
+    if declared_contract != binding["contractVersion"]:
         raise ValueError("immutable fault configuration contract mismatch")
     if not path.is_file():
         raise ValueError("immutable fault configuration file is missing or not a regular file")

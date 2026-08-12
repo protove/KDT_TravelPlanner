@@ -47,10 +47,24 @@ Path("/app/fault-config.json").write_text(
     json.dumps(config, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
     encoding="utf-8",
 )
+server_path = Path("/app/server.py")
+server_source = server_path.read_text(encoding="utf-8")
+sentinel = (
+    "PACKAGED_BEHAVIOR_SHA256: str | None = None\n"
+    "PACKAGED_CONTRACT_VERSION: str | None = None"
+)
+if server_source.count(sentinel) != 1:
+    raise SystemExit("server.py packaged binding sentinel is missing or duplicated")
+replacement = (
+    f"PACKAGED_BEHAVIOR_SHA256: str | None = {expected_sha!r}\n"
+    f"PACKAGED_CONTRACT_VERSION: str | None = {config['contractVersion']!r}"
+)
+server_path.write_text(server_source.replace(sentinel, replacement), encoding="utf-8")
 PY
 
 LABEL org.kdt.travelplanner.recovery.contract-version="${CONTRACT_VERSION}"
 LABEL org.kdt.travelplanner.recovery.behavior-sha256="${BEHAVIOR_SHA256}"
+LABEL org.kdt.travelplanner.recovery.executable-binding-sha256="${BEHAVIOR_SHA256}"
 
 RUN chown -R faultfixture:faultfixture /app
 
