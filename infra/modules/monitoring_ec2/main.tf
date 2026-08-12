@@ -11,6 +11,7 @@ locals {
     filemd5("${path.module}/../../../monitoring/grafana/provisioning/dashboards/dashboards.yml"),
     filemd5("${path.module}/../../../monitoring/grafana/dashboards/backend-overview.json"),
     filemd5("${path.module}/../../../monitoring/grafana/dashboards/aws-load-test.json"),
+    filemd5("${path.module}/../../../monitoring/grafana/dashboards/aws-recovery.json"),
   ]))
 }
 
@@ -94,6 +95,13 @@ resource "aws_s3_object" "grafana_dashboard_aws_load_test" {
   key    = "grafana/dashboards/aws-load-test.json"
   source = "${path.module}/../../../monitoring/grafana/dashboards/aws-load-test.json"
   etag   = filemd5("${path.module}/../../../monitoring/grafana/dashboards/aws-load-test.json")
+}
+
+resource "aws_s3_object" "grafana_dashboard_aws_recovery" {
+  bucket = aws_s3_bucket.monitoring_config.id
+  key    = "grafana/dashboards/aws-recovery.json"
+  source = "${path.module}/../../../monitoring/grafana/dashboards/aws-recovery.json"
+  etag   = filemd5("${path.module}/../../../monitoring/grafana/dashboards/aws-recovery.json")
 }
 
 # ── Monitoring EC2 IAM 권한 ─────────────────────────────────────
@@ -206,6 +214,7 @@ resource "aws_instance" "monitoring" {
     aws_s3_object.grafana_dashboards_provisioning,
     aws_s3_object.grafana_dashboard_backend_overview,
     aws_s3_object.grafana_dashboard_aws_load_test,
+    aws_s3_object.grafana_dashboard_aws_recovery,
   ]
 
   tags = merge(var.tags, {
