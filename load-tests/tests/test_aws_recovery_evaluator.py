@@ -198,6 +198,18 @@ class AwsRecoveryEvaluatorTest(unittest.TestCase):
             self.assertLess(events.index("T6"), events.index("RUN_END"))
             self.assertTrue((root / "recovery-verdict.json").exists())
 
+    def test_existing_verdict_is_never_overwritten_on_retry(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_id, freeze, d005, b01_profile, candidate = self.build_run(root)
+            args = self.args(root, run_id, freeze, d005, b01_profile, candidate)
+            MODULE.evaluate(args)
+            verdict_path = root / "recovery-verdict.json"
+            before = verdict_path.read_bytes()
+            with self.assertRaises(MODULE.RecoveryValidationError):
+                MODULE.evaluate(args)
+            self.assertEqual(verdict_path.read_bytes(), before)
+
     def test_missing_required_metric_is_invalid(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

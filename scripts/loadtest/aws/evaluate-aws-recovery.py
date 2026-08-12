@@ -402,11 +402,27 @@ def _bucket_stats(
 
 def evaluate(args: argparse.Namespace) -> dict:
     run_dir = args.run_dir
+    verdict_path = run_dir / "recovery-verdict.json"
+    protected_manifest = getattr(args, "protected_evidence_manifest", None)
+    if protected_manifest:
+        # Guard the success path before any event/evidence mutation.  This is
+        # intentionally the same boundary used by failure verdicts: an
+        # evaluator retry must never overwrite a prior verdict or a protected
+        # evidence file.
+        try:
+            assert_new_output_path(
+                verdict_path,
+                repository_root=Path(__file__).resolve().parents[3],
+                protected_manifest=protected_manifest,
+            )
+        except ValueError as error:
+            raise RecoveryValidationError(str(error)) from error
+    if verdict_path.exists() or verdict_path.is_symlink():
+        raise RecoveryValidationError("recovery-verdict.json already exists; refusing overwrite")
     profile = load_profile(args.profile)
     freeze = validate_freeze(args.freeze_metadata)
     measurement_source_sha = getattr(args, "measurement_source_sha", "") or args.source_sha
     source_lineage = getattr(args, "source_lineage", None)
-    protected_manifest = getattr(args, "protected_evidence_manifest", None)
     if measurement_source_sha != args.source_sha and not source_lineage:
         raise RecoveryValidationError("split source lineage is required when measurement and controller SHA differ")
     if source_lineage:
