@@ -9,7 +9,7 @@ import {
 } from "@/lib/api/travel";
 import { fetchCountries, fetchCitiesByCountry, type Country, type City } from "@/lib/api/location";
 import { fetchTravelMembers, updateMemberRole, removeMember, leaveTravel, type TravelMember } from "@/lib/api/members";
-import { createInvitation } from "@/lib/api/invitations";
+import { createInvitation, cancelInvitation } from "@/lib/api/invitations";
 import { toTravelRole } from "@/lib/api/permission";
 import { createTimelineItem, updateTimelineItem, deleteTimelineItem } from "@/lib/api/timelineItems";
 import { ApiError } from "@/lib/api/client";
@@ -115,11 +115,18 @@ export function useTripEditor(id: string | undefined, accessToken: string | null
 
   async function handleRemoveMember(memberId: string) {
     if (!accessToken || !id) return;
+    // PENDING(초대 대기) 멤버는 "추방" 대상이 아니라 "초대 취소" 대상이라 백엔드 API가 다르다 —
+    // /members/{userId}는 ACCEPTED 전용이라 PENDING한테 쓰면 거부당한다(이슈 #232).
+    const target = travelMembers.find((m) => m.userId === memberId);
     try {
-      await removeMember(accessToken, id, memberId);
+      if (target?.status === "PENDING" && target.invitationId) {
+        await cancelInvitation(accessToken, id, target.invitationId);
+      } else {
+        await removeMember(accessToken, id, memberId);
+      }
       refreshMembers();
     } catch (e) {
-      console.error("참여자 추방 실패", e);
+      console.error("참여자 추방/초대 취소 실패", e);
     }
   }
 

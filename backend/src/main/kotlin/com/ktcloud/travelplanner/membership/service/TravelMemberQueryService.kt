@@ -34,7 +34,7 @@ class TravelMemberQueryService(
                         nickname = if (ownerIsDeleted) "탈퇴한 사용자" else ownerProjection?.getNickname(),
                         profileImageUrl = if (ownerIsDeleted) null else ownerProjection?.getProfileImageUrl(),
                 )
-                val members = travelMemberRepository.findAcceptedMembers(travelId).map(TravelMemberResponse::fromMember)
+                val members = travelMemberRepository.findVisibleMembers(travelId).map(TravelMemberResponse::fromMember)
                 return listOf(owner) + members
         }
 }
