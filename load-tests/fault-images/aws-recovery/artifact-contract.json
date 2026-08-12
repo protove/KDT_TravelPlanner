@@ -1,0 +1,49 @@
+{
+  "contractVersion": "aws-recovery-fault-image-v1",
+  "artifactKind": "test-only-backend-fault-fixture",
+  "image": {
+    "deploymentReference": "RECOVERY_FAULT_IMAGE_DIGEST",
+    "requiresDigest": true,
+    "digestPattern": "^[A-Za-z0-9._/-]+:[A-Za-z0-9._-]+@sha256:[0-9a-f]{64}$",
+    "baseImageRequiresDigest": true,
+    "baseImagePattern": "^python:3\\.12-alpine@sha256:[0-9a-f]{64}$"
+  },
+  "ports": {
+    "application": 8080,
+    "management": 9091,
+    "readinessPath": "/actuator/health/readiness",
+    "livenessPath": "/actuator/health/liveness"
+  },
+  "modes": {
+    "normal": {
+      "readinessStatus": 200,
+      "coreApiStatus": 200
+    },
+    "probe_failure": {
+      "readinessStatus": 503,
+      "livenessStatus": 200,
+      "coreApiStatus": 200,
+      "purpose": "readiness failure while process and application port remain reachable"
+    },
+    "business_error": {
+      "readinessStatus": 200,
+      "livenessStatus": 200,
+      "coreApiStatus": 500,
+      "errorEnvelope": {
+        "requiredFields": ["code", "message", "requestId"],
+        "defaultCode": "INTERNAL_SERVER_ERROR"
+      },
+      "purpose": "readiness succeeds but the registered core API path returns a deterministic error"
+    }
+  },
+  "safety": {
+    "usesDatabase": false,
+    "usesRedis": false,
+    "usesAws": false,
+    "usesGoogleApis": false,
+    "readsSecrets": false,
+    "productionBackendChanges": false,
+    "defaultFaultPath": "/api/v1/travels",
+    "defaultFaultStatus": 500
+  }
+}
