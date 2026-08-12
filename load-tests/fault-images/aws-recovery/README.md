@@ -19,6 +19,40 @@ Management server는 `9091` 포트, application server는 `8080` 포트에서
 `business_error`의 기본 응답은 Backend의 `ApiErrorResponse` 모양을 따르며
 `code`, `message`, `requestId`를 포함한다. `FAULT_PATH`는 `/api/v1/...`
 경로만 허용하고, `FAULT_ERROR_CODE`는 대문자 error code만 허용한다.
+`business_error`에서 `FAULT_HTTP_STATUS`는 Core API 오류의 의미가 바뀌지
+않도록 `500..599`만 허용한다. 따라서 `400`이나 `499`를 지정하면 포트를
+열기 전에 fixture가 종료된다.
+
+## Immutable artifact metadata
+
+모드가 이미지의 runtime `FAULT_MODE` 환경 변수에만 남지 않도록, 배포 시
+승인된 이미지 digest와 선택한 모드를 `artifact-metadata.json` sidecar에
+함께 기록한다. metadata는 다음 8개 필드만 허용하며 모두 verifier의 CLI
+입력과 exact-match해야 한다.
+
+```json
+{
+  "contractVersion": "aws-recovery-fault-image-v1",
+  "imageRef": "registry.example/recovery-fault:20260812@sha256:<64 lowercase hex>",
+  "baseImage": "python:3.12-alpine@sha256:<64 lowercase hex>",
+  "mode": "business_error",
+  "faultPath": "/api/v1/travels",
+  "faultErrorCode": "INTERNAL_SERVER_ERROR",
+  "faultErrorMessage": "서버 내부 오류가 발생했습니다.",
+  "faultHttpStatus": 500
+}
+```
+
+`contractVersion`, image digest reference, base-image digest, mode, fault path,
+error code/message/status 중 하나라도 없거나 다르면 검증은 fail-closed한다.
+`faultHttpStatus`는 metadata에서도 `500..599`만 허용한다. Metadata에는
+credentials, tokens, 개인 정보 또는 외부 서비스 설정을 넣지 않는다.
+
+Build helper는 `--mode`와 fault parameter를 검증하고 Docker build에 같은
+`FAULT_MODE`를 전달한다. Registry digest를 확인한 뒤에는 `--image-digest`
+와 `--metadata-file`을 함께 사용해 같은 sidecar를 재검증한다. 배포 직전
+verifier에는 `--mode`, `--metadata-file` 및 동일한 fault parameter를
+반드시 전달한다.
 
 ## Digest 계약
 
@@ -39,6 +73,7 @@ artifact metadata로 제공한다. 이 branch에서는 image build/push를 하�
 ./scripts/loadtest/aws/build-recovery-fault-image.sh \
   --image-ref 419496180357.dkr.ecr.ap-northeast-2.amazonaws.com/travel-planner-recovery-fault:20260812 \
   --base-image python:3.12-alpine@sha256:<approved-base-digest> \
+  --mode probe_failure \
   --dry-run
 ```
 
@@ -54,8 +89,14 @@ Registry에서 확인한 최종 digest reference와 base image는 배포 직전�
 ```bash
 ./scripts/loadtest/aws/verify-recovery-fault-image.sh \
   --image-ref 419496180357.dkr.ecr.ap-northeast-2.amazonaws.com/travel-planner-recovery-fault:20260812@sha256:<approved-image-digest> \
-  --base-image python:3.12-alpine@sha256:<approved-base-digest>
+  --base-image python:3.12-alpine@sha256:<approved-base-digest> \
+  --mode probe_failure \
+  --metadata-file artifact-metadata.json
 ```
+
+`business_error` 검증은 위 명령의 `--mode`를 `business_error`로 바꾸고
+metadata의 `faultHttpStatus`를 `500..599` 중 승인된 값으로 맞춘다. `--mode`
+와 metadata가 서로 다른 경우 이미지 digest가 같아도 통과하지 않는다.
 
 ## 로컬 contract test
 

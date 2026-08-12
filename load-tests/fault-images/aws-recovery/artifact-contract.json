@@ -8,6 +8,38 @@
     "baseImageRequiresDigest": true,
     "baseImagePattern": "^python:3\\.12-alpine@sha256:[0-9a-f]{64}$"
   },
+  "metadata": {
+    "fileName": "artifact-metadata.json",
+    "requiredFields": [
+      "contractVersion",
+      "imageRef",
+      "baseImage",
+      "mode",
+      "faultPath",
+      "faultErrorCode",
+      "faultErrorMessage",
+      "faultHttpStatus"
+    ],
+    "faultParameters": {
+      "faultPath": {
+        "default": "/api/v1/travels",
+        "pattern": "^/api/v1/[A-Za-z0-9_./{}:-]+$"
+      },
+      "faultErrorCode": {
+        "default": "INTERNAL_SERVER_ERROR",
+        "pattern": "^[A-Z][A-Z0-9_]{1,63}$"
+      },
+      "faultErrorMessage": {
+        "default": "서버 내부 오류가 발생했습니다.",
+        "maxLength": 256
+      },
+      "faultHttpStatus": {
+        "default": 500,
+        "minimum": 500,
+        "maximum": 599
+      }
+    }
+  },
   "ports": {
     "application": 8080,
     "management": 9091,

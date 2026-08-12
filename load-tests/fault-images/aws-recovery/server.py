@@ -59,13 +59,18 @@ def _env_error_code() -> str:
     return code
 
 
-def _env_error_status() -> int:
+def _env_error_status(mode: str = "normal") -> int:
     raw = os.getenv("FAULT_HTTP_STATUS", "500")
     try:
         status = int(raw)
     except ValueError as error:
         raise ValueError("FAULT_HTTP_STATUS must be an integer") from error
-    if not 400 <= status <= 599:
+    if mode == "business_error":
+        if not 500 <= status <= 599:
+            raise ValueError(
+                "FAULT_HTTP_STATUS for business_error must be between 500 and 599"
+            )
+    elif not 400 <= status <= 599:
         raise ValueError("FAULT_HTTP_STATUS must be an HTTP 4xx or 5xx status")
     return status
 
@@ -79,7 +84,7 @@ class FixtureConfig:
             raise ValueError("PORT and MANAGEMENT_PORT must be different")
         self.fault_path = _env_fault_path()
         self.error_code = _env_error_code()
-        self.error_status = _env_error_status()
+        self.error_status = _env_error_status(self.mode)
         self.error_message = os.getenv(
             "FAULT_ERROR_MESSAGE", "서버 내부 오류가 발생했습니다."
         )[:256]
