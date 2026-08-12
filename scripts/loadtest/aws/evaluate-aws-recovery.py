@@ -23,8 +23,22 @@ from typing import Any
 
 try:
     from slo_contract import CONTRACT_PATH, load_contract, satisfies, verify_input_digest_manifest
+    from source_lineage import (
+        assert_new_output_path,
+        assert_protected_manifest_unchanged,
+        read_json as read_lineage_json,
+        sha256_file as lineage_sha256_file,
+        validate_lineage,
+    )
 except ImportError:  # pragma: no cover - supports direct import by external callers
     from scripts.loadtest.aws.slo_contract import CONTRACT_PATH, load_contract, satisfies, verify_input_digest_manifest
+    from scripts.loadtest.aws.source_lineage import (
+        assert_new_output_path,
+        assert_protected_manifest_unchanged,
+        read_json as read_lineage_json,
+        sha256_file as lineage_sha256_file,
+        validate_lineage,
+    )
 
 
 CORE_COUNTERS = (
@@ -40,6 +54,10 @@ SLO_CONTRACT = load_contract()
 
 class RecoveryValidationError(RuntimeError):
     """A structural or safety failure; it is never an SLO pass."""
+
+
+class RecoverySloFailure(RecoveryValidationError):
+    """A structurally valid run that did not satisfy the frozen SLO."""
 
 
 def timestamp(value: str) -> float:
@@ -386,11 +404,30 @@ def evaluate(args: argparse.Namespace) -> dict:
     run_dir = args.run_dir
     profile = load_profile(args.profile)
     freeze = validate_freeze(args.freeze_metadata)
+    measurement_source_sha = getattr(args, "measurement_source_sha", "") or args.source_sha
+    source_lineage = getattr(args, "source_lineage", None)
+    protected_manifest = getattr(args, "protected_evidence_manifest", None)
+    if measurement_source_sha != args.source_sha and not source_lineage:
+        raise RecoveryValidationError("split source lineage is required when measurement and controller SHA differ")
+    if source_lineage:
+        if not protected_manifest:
+            raise RecoveryValidationError("protected evidence manifest is required with source lineage")
+        try:
+            lineage = read_lineage_json(source_lineage, "source lineage")
+            validate_lineage(
+                lineage,
+                repository_root=Path(__file__).resolve().parents[3],
+                expected_controller_sha=args.source_sha,
+                expected_run_id=freeze["runId"],
+                expected_protected_manifest=protected_manifest,
+            )
+        except ValueError as error:
+            raise RecoveryValidationError(str(error)) from error
     profile_sha = hashlib.sha256(args.profile.read_bytes()).hexdigest()
     b01_profile_sha = hashlib.sha256(args.b01_profile.read_bytes()).hexdigest()
     d005_rate, d005 = read_d005(
         args.d005_rate_file,
-        expected_source_sha=args.source_sha,
+        expected_source_sha=measurement_source_sha,
         expected_b01_profile_sha=b01_profile_sha,
         baseline_candidate=args.baseline_candidate,
     )
@@ -417,6 +454,14 @@ def evaluate(args: argparse.Namespace) -> dict:
         raise RecoveryValidationError("metadata.k6Image is missing or not digest-pinned")
     if metadata.get("commitSha") != args.source_sha:
         raise RecoveryValidationError("metadata.commitSha does not match approved source SHA")
+    if metadata.get("controllerSourceCommitSha", args.source_sha) != args.source_sha:
+        raise RecoveryValidationError("metadata.controllerSourceCommitSha does not match approved controller SHA")
+    if metadata.get("measurementSourceCommitSha", measurement_source_sha) != measurement_source_sha:
+        raise RecoveryValidationError("metadata.measurementSourceCommitSha does not match approved measurement SHA")
+    if source_lineage:
+        expected_lineage_sha = lineage_sha256_file(source_lineage)
+        if metadata.get("sourceLineageSha256") != expected_lineage_sha:
+            raise RecoveryValidationError("metadata.sourceLineageSha256 does not match source lineage")
     if metadata.get("k6Image") != args.k6_image:
         raise RecoveryValidationError("metadata.k6Image does not match approved k6 image digest")
     if not math.isclose(float(metadata.get("rate")), expected_rate, rel_tol=0, abs_tol=1e-9):
@@ -465,6 +510,7 @@ def evaluate(args: argparse.Namespace) -> dict:
     # boundary after the event.
     start_bucket = math.ceil(t5 / bucket_seconds) * bucket_seconds
     candidates = []
+    complete_window_seen = False
     available_after_t5 = sorted(bucket for bucket in durations if bucket >= start_bucket)
     for first in available_after_t5:
         window = [first + offset * bucket_seconds for offset in range(required_buckets)]
@@ -473,6 +519,7 @@ def evaluate(args: argparse.Namespace) -> dict:
         stats = [_bucket_stats(bucket, durations, counters, bucket_seconds) for bucket in window]
         if any(not item["hasDuration"] or int(item["completed"]) <= 0 for item in stats):
             continue
+        complete_window_seen = True
         completed_total = sum(int(item["completed"]) for item in stats)
         unexpected_total = sum(int(item["unexpected"]) for item in stats)
         contract_total = sum(int(item["contractFailures"]) for item in stats)
@@ -505,7 +552,9 @@ def evaluate(args: argparse.Namespace) -> dict:
             break
 
     if not candidates:
-        raise RecoveryValidationError("no contiguous 120-second T6 SLO window after T5")
+        if complete_window_seen:
+            raise RecoverySloFailure("no contiguous 120-second T6 SLO window satisfied the frozen SLO")
+        raise RecoveryValidationError("no contiguous 120-second T6 evidence window after T5")
     t6, window_stats, completed_total, unexpected_total, contract_total, unexpected_rate, contract_rate = candidates[0]
     if t6 > events["RUN_END"]:
         raise RecoveryValidationError("T6 recovery window ends after RUN_END")
@@ -514,7 +563,7 @@ def evaluate(args: argparse.Namespace) -> dict:
     if not satisfies(SLO_CONTRACT, "recoveryBudgetSeconds", t1_to_t6) or not satisfies(
         SLO_CONTRACT, "recoveryBudgetSeconds", t4_to_t6
     ):
-        raise RecoveryValidationError(f"recovery budget exceeded: T1->T6={t1_to_t6:.1f}s T4->T6={t4_to_t6:.1f}s")
+        raise RecoverySloFailure(f"recovery budget exceeded: T1->T6={t1_to_t6:.1f}s T4->T6={t4_to_t6:.1f}s")
     if "T6" in events and abs(events["T6"] - t6) > bucket_seconds:
         raise RecoveryValidationError("existing T6 event does not match evaluated recovery window")
     if "T6" not in events:
@@ -525,6 +574,8 @@ def evaluate(args: argparse.Namespace) -> dict:
         "runId": args.run_id,
         "scenarioId": "AWS-RECOVERY",
         "sloVersion": freeze["sloVersion"],
+        "controllerSourceCommitSha": args.source_sha,
+        "measurementSourceCommitSha": measurement_source_sha,
         "d005ArrivalRate": d005_rate,
         "b01RunId": d005["runId"],
         "b01ProfileSha256": b01_profile_sha,
@@ -557,6 +608,63 @@ def evaluate(args: argparse.Namespace) -> dict:
     return verdict
 
 
+def _failure_detail(error: Exception) -> str:
+    detail = str(error).replace("\n", " ").strip()
+    return detail[:240] or error.__class__.__name__
+
+
+def write_failure_verdict(args: argparse.Namespace, status: str, error: Exception) -> dict:
+    """Persist a sanitized FAILED/INVALID_RUN result without overwriting evidence."""
+
+    run_dir = args.run_dir.resolve()
+    protected_manifest = getattr(args, "protected_evidence_manifest", None)
+    if protected_manifest:
+        assert_protected_manifest_unchanged(protected_manifest, Path(__file__).resolve().parents[3])
+        # The evaluator may be invoked directly, outside the orchestrator.
+        # Guard the run directory here as well so a caller cannot point a
+        # failure verdict at an existing protected evidence tree.
+        assert_new_output_path(
+            run_dir,
+            repository_root=Path(__file__).resolve().parents[3],
+            protected_manifest=protected_manifest,
+            allow_existing_directory=True,
+        )
+    payload = {
+        "status": status,
+        "runId": args.run_id,
+        "scenarioId": "AWS-RECOVERY",
+        "sloVersion": "v1.0-frozen",
+        "controllerSourceCommitSha": args.source_sha,
+        "measurementSourceCommitSha": getattr(args, "measurement_source_sha", "") or args.source_sha,
+        "errorType": error.__class__.__name__,
+        "detail": _failure_detail(error),
+        "evidence": {
+            "status": "recovery-verdict.json",
+            "failureArtifact": "raw.json",
+        },
+    }
+    source_lineage = getattr(args, "source_lineage", None)
+    if source_lineage:
+        payload["sourceLineageSha256"] = lineage_sha256_file(source_lineage)
+    output = run_dir / "recovery-verdict.json"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    encoded = json.dumps(payload, indent=2, ensure_ascii=False) + "\n"
+    if output.exists():
+        try:
+            existing = json.loads(output.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as read_error:
+            raise RecoveryValidationError("existing recovery-verdict.json is invalid; refusing overwrite") from read_error
+        if existing != payload:
+            raise RecoveryValidationError("existing recovery-verdict.json differs; refusing overwrite")
+    else:
+        try:
+            with output.open("x", encoding="utf-8") as handle:
+                handle.write(encoded)
+        except FileExistsError as race:
+            raise RecoveryValidationError("recovery-verdict.json was created concurrently") from race
+    return payload
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("run_dir", type=Path)
@@ -568,12 +676,22 @@ def main() -> int:
     parser.add_argument("--baseline-candidate", type=Path, required=True)
     parser.add_argument("--rate", required=True)
     parser.add_argument("--source-sha", required=True)
+    parser.add_argument("--measurement-source-sha", default="")
+    parser.add_argument("--source-lineage", type=Path, default=None)
+    parser.add_argument("--protected-evidence-manifest", type=Path, default=None)
     parser.add_argument("--k6-image", required=True)
     args = parser.parse_args()
     try:
         result = evaluate(args)
+    except RecoverySloFailure as error:
+        verdict = write_failure_verdict(args, "FAILED", error)
+        print(json.dumps(verdict, indent=2, ensure_ascii=False))
+        print(f"[recovery-verdict] FAILED: {error}", file=sys.stderr)
+        return 1
     except (OSError, RecoveryValidationError, ValueError, json.JSONDecodeError) as error:
-        print(f"[recovery-verdict] INVALID: {error}", file=sys.stderr)
+        verdict = write_failure_verdict(args, "INVALID_RUN", error)
+        print(json.dumps(verdict, indent=2, ensure_ascii=False))
+        print(f"[recovery-verdict] INVALID_RUN: {error}", file=sys.stderr)
         return 2
     print(json.dumps(result, indent=2, ensure_ascii=False))
     return 0
