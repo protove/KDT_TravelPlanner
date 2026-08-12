@@ -42,5 +42,20 @@ class AwsRecoveryDashboardContractTest(unittest.TestCase):
         self.assertNotIn('"runId"', json.dumps(self.payload))
 
 
+
+    def test_loki_panel_uses_this_deployments_log_label(self) -> None:
+        """Loki labels backend logs service="travel-planner-backend".
+
+        Alloy ships backend logs with a service label; there is no job label on
+        the log streams, so a {job="backend"} selector silently matches nothing
+        and the recovery markers panel renders "No data" even during a real
+        failure. Caught during the B-02 live run.
+        """
+        panel = next(item for item in self.payload["panels"] if item["id"] == 6)
+        expr = panel["targets"][0]["expr"]
+        self.assertIn('service="travel-planner-backend"', expr)
+        self.assertNotIn('{job="backend"}', expr)
+
+
 if __name__ == "__main__":
     unittest.main()
