@@ -293,6 +293,22 @@ variable "rollout_scaling_policy_enabled" {
   default     = true
 }
 
+variable "rollout_revision" {
+  type        = string
+  description = <<-EOT
+    Operator-supplied rollout revision marker bound into the Launch Template
+    instance tags. Changing only this value creates a new numbered Launch
+    Template version, so an EXPERIMENT rollout performs a real Instance
+    Refresh even when the backend image digest is unchanged.
+  EOT
+  default     = "baseline"
+
+  validation {
+    condition     = can(regex("^[A-Za-z0-9._-]{1,64}$", var.rollout_revision))
+    error_message = "rollout_revision must be 1 to 64 characters of letters, digits, dot, underscore, or hyphen."
+  }
+}
+
 variable "rollout_normal_backend_image_uri" {
   type        = string
   description = "Exact normal Backend ECR digest used as the MANUAL_BASELINE restore target."

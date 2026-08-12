@@ -176,6 +176,7 @@ module "backend_service" {
   rollout_checkpoint_percentages     = var.backend_rollout_checkpoint_percentages
   rollout_checkpoint_delay_seconds   = var.backend_rollout_checkpoint_delay_seconds
   rollout_scaling_policy_enabled     = var.backend_rollout_scaling_policy_enabled
+  rollout_revision                   = var.backend_rollout_revision
   rollout_normal_backend_image_uri   = coalesce(var.backend_rollout_normal_image_uri, var.backend_image_uri)
   rollout_fault_backend_image_uri    = var.backend_rollout_fault_image_uri
   rollout_restore_backend_image_uri  = var.backend_rollout_restore_image_uri

@@ -229,3 +229,32 @@ run "latest_alloy_image_is_rejected" {
 
   expect_failures = [var.alloy_image_reference]
 }
+
+run "rollout_revision_is_bound_into_launch_template_instance_tags" {
+  command = plan
+
+  variables {
+    rollout_mode                   = "EXPERIMENT"
+    rollout_max_healthy_percentage = 150
+    rollout_checkpoint_percentages = [50]
+    rollout_scaling_policy_enabled = false
+    rollout_revision               = "r01-test-1"
+  }
+
+  assert {
+    condition = (
+      aws_launch_template.backend.tag_specifications[0].tags["RolloutRevision"] == "r01-test-1"
+    )
+    error_message = "rollout_revision must be bound into the Launch Template instance tags so changing it alone creates a new numbered version."
+  }
+}
+
+run "malformed_rollout_revision_is_rejected" {
+  command = plan
+
+  variables {
+    rollout_revision = "not allowed!"
+  }
+
+  expect_failures = [var.rollout_revision]
+}

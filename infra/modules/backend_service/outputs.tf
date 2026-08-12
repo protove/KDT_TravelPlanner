@@ -40,6 +40,7 @@ output "rollout_contract" {
     maxSize                  = var.asg_max_size
     autoRollback             = false
     launchTemplateVersionRef = tostring(aws_launch_template.backend.latest_version)
+    rolloutRevision          = var.rollout_revision
   }
 }
 
