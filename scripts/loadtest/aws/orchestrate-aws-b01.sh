@@ -565,14 +565,15 @@ import sys
 from pathlib import Path
 
 output, alb_arn, target_group_arn, asg_name, db_identifier, cache_cluster_id = sys.argv[1:]
-def suffix(arn, marker):
+def suffix(arn, marker, include_marker=False):
     if not arn or marker not in arn:
         return None
-    return arn.split(marker, 1)[1]
+    value = arn.split(marker, 1)[1]
+    return f"{marker}{value}" if include_marker else value
 
 Path(output).write_text(json.dumps({
     "albDimension": suffix(alb_arn, "loadbalancer/"),
-    "targetGroupDimension": suffix(target_group_arn, "targetgroup/"),
+    "targetGroupDimension": suffix(target_group_arn, "targetgroup/", include_marker=True),
     "autoScalingGroupName": asg_name or None,
     "dbInstanceIdentifier": db_identifier or None,
     "cacheClusterId": cache_cluster_id or None,
