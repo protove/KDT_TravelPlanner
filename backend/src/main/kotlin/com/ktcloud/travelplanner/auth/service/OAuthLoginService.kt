@@ -83,6 +83,8 @@ class OAuthLoginService(
 			userService.upsert(profile)
 		} catch (exception: WithdrawnOAuthAccountException) {
 			return buildErrorRedirect(consumedState.frontendRedirectUrl, WITHDRAWN_ACCOUNT_ERROR)
+		} catch (exception: NicknameAssignmentFailedException) {
+			return buildErrorRedirect(consumedState.frontendRedirectUrl, SIGNUP_FAILED_ERROR)
 		}
 		val exchangeCode = exchangeCodeService.issue(requireNotNull(user.id))
 		return UriComponentsBuilder.fromUriString(consumedState.frontendRedirectUrl)
@@ -122,6 +124,7 @@ class OAuthLoginService(
 		private const val ERROR_QUERY_PARAMETER = "error"
 		private const val ACCESS_DENIED_ERROR = "access_denied"
 		private const val WITHDRAWN_ACCOUNT_ERROR = "withdrawn_account"
+		private const val SIGNUP_FAILED_ERROR = "signup_failed"
 	}
 }
 

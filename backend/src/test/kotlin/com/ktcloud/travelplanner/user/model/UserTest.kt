@@ -78,6 +78,30 @@ class UserTest {
 	}
 
 	@Test
+	fun `assigns a generated nickname without marking the profile as completed`() {
+		val user = createUser()
+
+		user.assignGeneratedNickname("여행러123456")
+
+		assertEquals("여행러123456", user.nickname)
+		assertFalse(user.isProfileCompleted)
+		assertNull(user.gender)
+		assertNull(user.birthYear)
+	}
+
+	@Test
+	fun `assigning a generated nickname rejects blank and oversized values`() {
+		val user = createUser()
+
+		assertThrows(IllegalArgumentException::class.java) {
+			user.assignGeneratedNickname(" ")
+		}
+		assertThrows(IllegalArgumentException::class.java) {
+			user.assignGeneratedNickname("a".repeat(31))
+		}
+	}
+
+	@Test
 	fun `soft delete records UTC deletion time only once`() {
 		val user = createUser()
 
