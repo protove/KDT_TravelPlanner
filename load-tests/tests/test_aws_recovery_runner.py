@@ -76,10 +76,57 @@ class AwsRecoveryRunnerContractTest(unittest.TestCase):
             source_sha = subprocess.check_output(
                 ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True
             ).strip()
+            manifest_inputs = {
+                "sourceCommitSha": source_sha,
+                "b01ProfileSha256": b01_sha,
+                "baselineCandidateSha256": candidate_sha,
+                "d005RateRecordSha256": "c" * 64,
+                "d005ArrivalRate": 1,
+            }
+            spike_effective = {
+                "scenario": "spike",
+                "classification": "diagnostic",
+                "profileSha256": b01_sha,
+                "baselineRate": 1.0,
+                "peakRateMultiplier": 2.0,
+                "peakRate": 2.0,
+                "hold": "1m",
+                "preAllocatedVUs": 1,
+                "maxVUs": 2,
+                "timeUnit": "1s",
+            }
+            spike_digest = hashlib.sha256(
+                json.dumps(spike_effective, sort_keys=True, separators=(",", ":")).encode("utf-8")
+            ).hexdigest()
+            manifest_inputs["spikeEffectiveConfigSha256"] = spike_digest
+            contract_path = ROOT / "load-tests/aws/contracts/slo-v1.0.json"
+            manifest = {
+                "schemaVersion": "aws-d006-freeze-input-manifest-v1",
+                "runId": "aws-b01-preflight-fixture",
+                "sloVersion": "v1.0-frozen",
+                "contract": {
+                    "path": "load-tests/aws/contracts/slo-v1.0.json",
+                    "sha256": hashlib.sha256(contract_path.read_bytes()).hexdigest(),
+                },
+                "inputs": manifest_inputs,
+                "spike": {
+                    "classification": "diagnostic",
+                    "effectiveConfigSha256": spike_digest,
+                    "effectiveConfig": spike_effective,
+                },
+                "inputDigest": hashlib.sha256(
+                    json.dumps(manifest_inputs, sort_keys=True, separators=(",", ":")).encode("utf-8")
+                ).hexdigest(),
+            }
+            freeze_manifest = fixture / "freeze-input-manifest.json"
+            freeze_manifest.write_text(json.dumps(manifest) + "\n", encoding="utf-8")
             freeze.write_text(json.dumps({
                 "runId": "aws-b01-preflight-fixture",
                 "sloVersion": "v1.0-frozen",
                 "approvedBy": "test",
+                "freezeInputManifest": "freeze-input-manifest.json",
+                "freezeInputDigest": manifest["inputDigest"],
+                "sloContractSha256": manifest["contract"]["sha256"],
             }) + "\n", encoding="utf-8")
             d005.write_text(json.dumps({
                 "runId": "aws-b01-preflight-fixture",

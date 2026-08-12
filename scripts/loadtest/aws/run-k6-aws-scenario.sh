@@ -98,13 +98,36 @@ if [[ "$SCENARIO" == "baseline" ]]; then
 fi
 python3 - "$RUN_DIR/metadata.json" "$RUN_ID" "$SCENARIO" "$started_at" "$BASE_URL" "$git_sha" \
   "$K6_IMAGE_DIGEST" "${RATE:-0}" "$REGION" "$ENVIRONMENT" "$warmup_seconds" "$AWS_PROFILE_FILE" <<'PY'
+import hashlib
 import json
+import os
 import sys
 from pathlib import Path
 
 (output, run_id, scenario, started_at, target, commit_sha, image, rate, region,
  environment, warmup_seconds, profile_path) = sys.argv[1:]
 profile = json.loads(Path(profile_path).read_text(encoding="utf-8"))
+profile_sha256 = hashlib.sha256(Path(profile_path).read_bytes()).hexdigest()
+rate_value = float(rate) if float(rate) else None
+scenario_profile = profile.get("scenarios", {}).get(scenario, {})
+effective_inputs = {
+    "scenario": scenario,
+    "profileSha256": profile_sha256,
+    "rate": rate_value,
+}
+if scenario == "spike":
+    baseline_rate = rate_value
+    peak_multiplier = float(os.environ.get("SPIKE_PEAK_MULTIPLIER") or scenario_profile.get("peakRateMultiplier"))
+    effective_inputs.update({
+        "classification": "diagnostic",
+        "baselineRate": baseline_rate,
+        "peakRateMultiplier": peak_multiplier,
+        "peakRate": baseline_rate * peak_multiplier if baseline_rate is not None else None,
+        "hold": os.environ.get("SPIKE_HOLD") or scenario_profile.get("hold"),
+        "preAllocatedVUs": int(os.environ.get("PREALLOCATED_VUS") or scenario_profile.get("preAllocatedVUs")),
+        "maxVUs": int(os.environ.get("MAX_VUS") or scenario_profile.get("maxVUs")),
+        "timeUnit": scenario_profile.get("timeUnit", "1s"),
+    })
 Path(output).write_text(json.dumps({
     "runId": run_id,
     "scenario": scenario,
@@ -115,12 +138,14 @@ Path(output).write_text(json.dumps({
     "environment": environment,
     "commitSha": commit_sha,
     "k6Image": image,
-    "rate": float(rate) if float(rate) else None,
+    "rate": rate_value,
     "warmupSeconds": int(warmup_seconds),
     "seedVersion": profile.get("seedVersion", "unknown"),
     "requestMixVersion": profile.get("requestMixVersion", "unknown"),
     "sloVersion": profile.get("sloVersion", "unknown"),
     "profileVersion": profile.get("profileVersion", "unknown"),
+    "profileSha256": profile_sha256,
+    "effectiveInputs": effective_inputs,
 }, indent=2) + "\n", encoding="utf-8")
 PY
 

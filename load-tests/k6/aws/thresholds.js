@@ -16,18 +16,18 @@
 import { SLO } from './config.js';
 
 export const smokeThresholds = {
-  http_req_duration: [`p(95)<${SLO.P95_MS}`],
+  http_req_duration: [`p(95)<=${SLO.P95_MS}`],
   unexpected_errors: [`rate<${SLO.UNEXPECTED_ERROR_RATE}`],
   contract_fail: [`rate<${SLO.CONTRACT_FAILURE_RATE}`],
-  checks: ['rate>0.99'],
+  checks: [`rate>=${SLO.SUCCESS_DELIVERY_RATE}`],
   dropped_iterations: ['count==0'],
 };
 
 export const b01BaselineThresholds = {
-  http_req_duration: [`p(95)<${SLO.P95_MS}`],
+  http_req_duration: [`p(95)<=${SLO.P95_MS}`],
   unexpected_errors: [`rate<${SLO.UNEXPECTED_ERROR_RATE}`],
   contract_fail: [`rate<${SLO.CONTRACT_FAILURE_RATE}`],
-  checks: [`rate>${SLO.SUCCESS_DELIVERY_RATE}`],
+  checks: [`rate>=${SLO.SUCCESS_DELIVERY_RATE}`],
   dropped_iterations: ['count==0'],
 };
 

@@ -1,6 +1,8 @@
 // Recovery-specific summary handler. It must not import aws/summary.js,
 // because that handler loads the B-01 profile/config at module init time.
-import { ENVIRONMENT, REGION, REQUEST_MIX_VERSION, SEED_VERSION, SLO_VERSION } from './recovery-config.js';
+import {
+  ENVIRONMENT, REGION, REQUEST_MIX_VERSION, SEED_VERSION, SLO_CONTRACT_VERSION, SLO_VERSION,
+} from './recovery-config.js';
 
 function metricValues(metrics, name, fallback = {}) {
   return metrics[name]?.values || fallback;
@@ -21,6 +23,7 @@ export function makeRecoverySummaryHandler(scenarioName) {
       region: REGION,
       environment: ENVIRONMENT,
       sloVersion: SLO_VERSION,
+      sloContractVersion: SLO_CONTRACT_VERSION,
       seedVersion: SEED_VERSION,
       requestMixVersion: REQUEST_MIX_VERSION,
       metrics: {

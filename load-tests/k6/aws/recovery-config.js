@@ -21,7 +21,28 @@ function loadProfile() {
   }
 }
 
+function loadSloContract() {
+  const contractPath = '../../aws/contracts/slo-v1.0.json';
+  let raw;
+  try {
+    raw = open(contractPath);
+  } catch (error) {
+    fail(`SLO contract file not found: ${contractPath}`);
+  }
+  let contract;
+  try {
+    contract = JSON.parse(raw);
+  } catch (error) {
+    fail(`SLO contract file is not valid JSON: ${contractPath}`);
+  }
+  if (contract.contractVersion !== 'v1.0' || contract.sloVersion !== 'v1.0-frozen') {
+    fail('SLO contract must be contractVersion=v1.0 and sloVersion=v1.0-frozen');
+  }
+  return contract;
+}
+
 const LOADED_PROFILE = loadProfile();
+const SLO_CONTRACT = loadSloContract();
 const TARGET = LOADED_PROFILE.target || fail('target is missing');
 const RECOVERY = LOADED_PROFILE.recovery || fail('recovery is missing');
 const LIMITS = LOADED_PROFILE.limits || fail('limits is missing');
@@ -56,6 +77,7 @@ export const K6_IMAGE_DIGEST = image;
 export const ENVIRONMENT = LOADED_PROFILE.environment || fail('environment is missing');
 export const REGION = LOADED_PROFILE.region || fail('region is missing');
 export const SLO_VERSION = LOADED_PROFILE.sloVersion || fail('sloVersion is missing');
+export const SLO_CONTRACT_VERSION = SLO_CONTRACT.sloVersion;
 export const SEED_VERSION = LOADED_PROFILE.seedVersion || fail('seedVersion is missing');
 export const REQUEST_MIX_VERSION = LOADED_PROFILE.requestMixVersion || fail('requestMixVersion is missing');
 export const REQUEST_MIX = LOADED_PROFILE.requestMix?.steady || fail('requestMix.steady is missing');

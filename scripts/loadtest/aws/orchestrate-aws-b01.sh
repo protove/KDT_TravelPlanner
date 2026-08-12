@@ -38,6 +38,7 @@ set -euo pipefail
 REPOSITORY_ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
 MODE="all"
 PROFILE="$REPOSITORY_ROOT/load-tests/aws/profiles/ec2-b01.json"
+SLO_CONTRACT="$REPOSITORY_ROOT/load-tests/aws/contracts/slo-v1.0.json"
 REGION=""
 ENVIRONMENT=""
 EXPECTED_ACCOUNT_ID=""
@@ -1069,18 +1070,29 @@ freeze_stage() {
     echo "provisional-review.json not found under $EVIDENCE_ROOT; run provisional-review before freeze" >&2
     exit 2
   fi
-  python3 - "$EVIDENCE_ROOT/freeze-metadata.json" "$RUN_ID" "$SLO_FREEZE_APPROVED_BY" <<'PY'
+  python3 "$REPOSITORY_ROOT/scripts/loadtest/aws/build-freeze-input-manifest.py" \
+    --run-id "$RUN_ID" --source-sha "$SOURCE_COMMIT_SHA" \
+    --slo-contract "$SLO_CONTRACT" --b01-profile "$PROFILE" \
+    --baseline-candidate "$EVIDENCE_ROOT/baseline-candidate.json" \
+    --d005-rate-file "$EVIDENCE_ROOT/d005-arrival-rate.json" \
+    --spike-run-dir "$EVIDENCE_ROOT/k6/spike" \
+    --output "$EVIDENCE_ROOT/freeze-input-manifest.json" >/dev/null
+  python3 - "$EVIDENCE_ROOT/freeze-metadata.json" "$EVIDENCE_ROOT/freeze-input-manifest.json" "$RUN_ID" "$SLO_FREEZE_APPROVED_BY" <<'PY'
 import json
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-output, run_id, approved_by = sys.argv[1:]
+output, manifest_path, run_id, approved_by = sys.argv[1:]
+manifest = json.loads(Path(manifest_path).read_text(encoding="utf-8"))
 Path(output).write_text(json.dumps({
     "runId": run_id,
     "sloVersion": "v1.0-frozen",
     "approvedBy": approved_by,
     "approvedAtUtc": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
+    "freezeInputManifest": "freeze-input-manifest.json",
+    "freezeInputDigest": manifest["inputDigest"],
+    "sloContractSha256": manifest["contract"]["sha256"],
     "note": "B-02/Recovery must not be invoked before this file exists (D-006, TEAM_MEMBER_B01_ACTION_REQUEST.md §4.2).",
 }, indent=2) + "\n", encoding="utf-8")
 PY

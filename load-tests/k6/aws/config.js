@@ -24,6 +24,26 @@ function loadProfile() {
   return profile;
 }
 
+function loadSloContract() {
+  const contractPath = '../../aws/contracts/slo-v1.0.json';
+  let raw;
+  try {
+    raw = open(contractPath);
+  } catch (error) {
+    fail(`SLO contract file not found: ${contractPath}`);
+  }
+  let contract;
+  try {
+    contract = JSON.parse(raw);
+  } catch (error) {
+    fail(`SLO contract file is not valid JSON: ${contractPath}`);
+  }
+  if (contract.contractVersion !== 'v1.0' || contract.sloVersion !== 'v1.0-frozen') {
+    fail('SLO contract must be contractVersion=v1.0 and sloVersion=v1.0-frozen');
+  }
+  return contract;
+}
+
 function resolveBaseUrl(profile) {
   // The reused flows import BASE_URL/API from ../lib/config.js, which only
   // ever reads __ENV.BASE_URL (it has no knowledge of this profile file).
@@ -78,14 +98,19 @@ function assertGoogleApiDisabled(profile) {
   }
 }
 
-// SLO candidates from aws-load-test-handoff/contracts/SLO_AND_METRIC_CONTRACT.md.
-// Not v1.0-frozen; see D-005/D-006 in decisions/OPEN_DECISIONS.md.
+const SLO_CONTRACT = loadSloContract();
+
+// Values are loaded from the versioned contract rather than repeated in the
+// k6 module. The B-01 profile remains v0.2-candidate until D-006 is approved;
+// this contract controls comparator values while the profile controls target,
+// workload, and run identity.
 export const SLO = {
-  P95_MS: 500,
-  UNEXPECTED_ERROR_RATE: 0.01,
-  CONTRACT_FAILURE_RATE: 0.01,
-  SUCCESS_DELIVERY_RATE: 0.99,
+  P95_MS: SLO_CONTRACT.baseline.p95Ms,
+  UNEXPECTED_ERROR_RATE: SLO_CONTRACT.baseline.unexpectedErrorRate,
+  CONTRACT_FAILURE_RATE: SLO_CONTRACT.baseline.contractFailureRate,
+  SUCCESS_DELIVERY_RATE: SLO_CONTRACT.baseline.successRate,
 };
+export const SLO_CONTRACT_VERSION = SLO_CONTRACT.sloVersion;
 
 const PROFILE = loadProfile();
 
