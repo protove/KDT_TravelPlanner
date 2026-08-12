@@ -70,6 +70,13 @@ class AwsOrchestrationContractTests(unittest.TestCase):
         self.assertIn(r'print("\n".join(', source)
         self.assertNotIn(r'print("\\n".join(', source)
 
+    def test_target_group_cloudwatch_dimension_keeps_required_prefix(self) -> None:
+        source = SCRIPT.read_text(encoding="utf-8")
+        self.assertIn(
+            '"targetGroupDimension": suffix(target_group_arn, "targetgroup/", include_marker=True)',
+            source,
+        )
+
     def test_runner_role_can_read_every_target_discovery_dependency_in_region(self) -> None:
         source = LOAD_RUNNER_TERRAFORM.read_text(encoding="utf-8")
         self.assertIn('sid = "LoadTestTargetDiscovery"', source)
