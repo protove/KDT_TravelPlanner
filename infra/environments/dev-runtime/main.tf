@@ -170,6 +170,15 @@ module "backend_service" {
   redis_auth_secret_arn              = module.backend_data.redis_auth_secret_arn
   redis_port                         = module.backend_data.redis_port
   redis_primary_endpoint             = module.backend_data.redis_primary_endpoint
+  rollout_mode                       = var.backend_rollout_mode
+  rollout_min_healthy_percentage     = var.backend_rollout_min_healthy_percentage
+  rollout_max_healthy_percentage     = var.backend_rollout_max_healthy_percentage
+  rollout_checkpoint_percentages     = var.backend_rollout_checkpoint_percentages
+  rollout_checkpoint_delay_seconds   = var.backend_rollout_checkpoint_delay_seconds
+  rollout_scaling_policy_enabled     = var.backend_rollout_scaling_policy_enabled
+  rollout_normal_backend_image_uri   = coalesce(var.backend_rollout_normal_image_uri, var.backend_image_uri)
+  rollout_fault_backend_image_uri    = var.backend_rollout_fault_image_uri
+  rollout_restore_backend_image_uri  = var.backend_rollout_restore_image_uri
   tags                               = local.common_tags
   target_cpu_utilization             = 60
   vpc_id                             = data.terraform_remote_state.persistent.outputs.vpc_id

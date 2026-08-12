@@ -55,6 +55,21 @@ plan 검토 시 다음을 모두 확인한다.
 - `backend_image_uri`가 persistent `dev` ECR의 `repository@sha256:<digest>`다.
 - Prometheus·Loki·Grafana·Alloy가 검토된 DockerHub 버전 태그를 사용하고 `latest`가 없다.
 - ASG는 min/desired/max `2/2/4`, Instance Refresh는 `100/200`, warm-up은 180초다.
+- 기본 `backend_rollout_mode = "NORMAL"`은 `100/200`, checkpoint 없음, CPU
+  target-tracking enabled를 유지한다. `backend_image_uri`는 반드시
+  `rollout_normal_image_uri`와 같은 정상 digest여야 한다.
+- R-01/R-03/R-07 실험용 plan은 `backend_rollout_mode = "EXPERIMENT"` 또는
+  `"FAULT"`, `backend_rollout_min_healthy_percentage = 100`,
+  `backend_rollout_max_healthy_percentage = 150`,
+  `backend_rollout_checkpoint_percentages = [50]` 또는 `[50, 100]`,
+  `backend_rollout_scaling_policy_enabled = false`를 함께 지정한다. FAULT는
+  `backend_rollout_fault_image_uri`와 실제 `backend_image_uri`가 정확히 같은
+  digest여야 하며 정상 digest와는 달라야 한다.
+- 실패 버전을 되돌릴 때는 새 Launch Template 번호를 만들 수 있도록
+  `backend_rollout_mode = "MANUAL_BASELINE"`으로 별도 plan을 만들고,
+  `backend_rollout_restore_image_uri`를 이전 정상 digest로 지정한다. 이 값은
+  `backend_rollout_normal_image_uri` 및 `backend_image_uri`와 모두 같아야 한다.
+  AWS native `auto_rollback`은 계속 `false`다.
 - Backend image digest가 바뀌면 Launch Template의 구체적인 새 버전과 ASG 변경이 plan에 나타나고, apply가 Rolling Instance Refresh를 시작한다. `$Latest` 문자열을 직접 사용하지 않는다.
 - ALB traffic은 8080, health check는 `9091/actuator/health/readiness`다.
 - Backend Alloy는 `0.0.0.0:12345`를 private host port로 publish하고, Monitoring SG에서만 접근 가능한 SG reference 규칙을 사용한다.
@@ -65,6 +80,17 @@ plan 검토 시 다음을 모두 확인한다.
 - Prometheus/Loki/Grafana/대시보드 파일 hash 변경 시 `monitoring_config_revision`과 Monitoring EC2 replacement가 함께 나타나며, S3 object가 먼저 준비되는 dependency가 유지된다.
 
 ## 모니터링 변경 apply·refresh·rollback
+
+### Rollout plan action allowlist
+
+저장된 plan은 apply 전에 반드시 `terraform show -json`으로 검토한다. 일반
+rollout/복구 plan에서 허용되는 변경은 Backend Launch Template의 새 번호,
+Backend ASG의 명시적인 `launch_template.version`/Instance Refresh 설정,
+그리고 선택한 CPU target-tracking policy뿐이다. ALB, Target Group, Listener,
+RDS, Redis, NAT, Monitoring EC2, security group, Route 및 persistent State의
+delete/replace가 하나라도 있으면 plan을 폐기하고 원인을 조사한다. `-target`,
+기존 plan 재사용, AWS console/CLI에서 ASG version을 직접 수정하는 방식은
+MANUAL_BASELINE 계약이 아니다.
 
 계획 파일은 작업별로 고유한 이름을 사용한다. 기존 `tfplan` 파일을 덮어쓰지 않고, 아래 예시처럼 AWS profile과 `-chdir`를 항상 함께 지정한다.
 

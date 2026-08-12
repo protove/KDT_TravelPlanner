@@ -1,5 +1,63 @@
 locals {
   name = "${var.project_name}-${var.environment}"
+
+  # Keep the rollout shape explicit in Terraform so an experiment cannot
+  # accidentally inherit the production capacity/scaling contract. The
+  # launch template always receives a digest-pinned image; the mode-specific
+  # checks below additionally bind that image to the approved normal/fault
+  # artifact.
+  rollout_is_experiment = contains(["EXPERIMENT", "FAULT"], var.rollout_mode)
+
+  rollout_profile_shape_valid = (
+    var.rollout_mode == "NORMAL" ? (
+      var.rollout_min_healthy_percentage == 100 &&
+      var.rollout_max_healthy_percentage == 200 &&
+      length(var.rollout_checkpoint_percentages) == 0 &&
+      var.rollout_scaling_policy_enabled
+      ) : var.rollout_mode == "MANUAL_BASELINE" ? (
+      var.rollout_min_healthy_percentage == 100 &&
+      var.rollout_max_healthy_percentage == 200 &&
+      length(var.rollout_checkpoint_percentages) == 0 &&
+      var.rollout_scaling_policy_enabled
+      ) : local.rollout_is_experiment ? (
+      var.rollout_min_healthy_percentage == 100 &&
+      var.rollout_max_healthy_percentage == 150 &&
+      (
+        tolist(var.rollout_checkpoint_percentages) == tolist([50]) ||
+        tolist(var.rollout_checkpoint_percentages) == tolist([50, 100])
+      ) &&
+      !var.rollout_scaling_policy_enabled &&
+      var.rollout_checkpoint_delay_seconds > 0
+    ) : false
+  )
+
+  rollout_digest_contract_valid = (
+    var.rollout_mode == "NORMAL" ? (
+      var.rollout_normal_backend_image_uri != null &&
+      var.backend_image_uri == var.rollout_normal_backend_image_uri
+      ) : var.rollout_mode == "EXPERIMENT" ? (
+      var.rollout_normal_backend_image_uri != null &&
+      var.backend_image_uri == var.rollout_normal_backend_image_uri
+      ) : var.rollout_mode == "FAULT" ? (
+      var.rollout_normal_backend_image_uri != null &&
+      var.rollout_fault_backend_image_uri != null &&
+      var.rollout_normal_backend_image_uri != var.rollout_fault_backend_image_uri &&
+      var.backend_image_uri == var.rollout_fault_backend_image_uri
+      ) : var.rollout_mode == "MANUAL_BASELINE" ? (
+      var.rollout_normal_backend_image_uri != null &&
+      var.rollout_restore_backend_image_uri != null &&
+      var.rollout_restore_backend_image_uri == var.rollout_normal_backend_image_uri &&
+      var.backend_image_uri == var.rollout_restore_backend_image_uri
+    ) : false
+  )
+
+  rollout_contract_valid = (
+    local.rollout_profile_shape_valid &&
+    local.rollout_digest_contract_valid &&
+    var.asg_min_size == 2 &&
+    var.asg_desired_capacity == 2 &&
+    var.asg_max_size == 4
+  )
 }
 
 data "aws_ssm_parameter" "al2023_ami" {
@@ -250,8 +308,10 @@ resource "aws_autoscaling_group" "backend" {
     preferences {
       auto_rollback          = false
       instance_warmup        = var.instance_warmup_seconds
-      max_healthy_percentage = 200
-      min_healthy_percentage = 100
+      max_healthy_percentage = var.rollout_max_healthy_percentage
+      min_healthy_percentage = var.rollout_min_healthy_percentage
+      checkpoint_delay       = var.rollout_checkpoint_delay_seconds
+      checkpoint_percentages = var.rollout_checkpoint_percentages
       skip_matching          = true
     }
   }
@@ -274,15 +334,21 @@ resource "aws_autoscaling_group" "backend" {
     precondition {
       condition = (
         var.asg_min_size == 2 &&
-        var.asg_desired_capacity >= var.asg_min_size &&
-        var.asg_max_size >= var.asg_desired_capacity
+        var.asg_desired_capacity == 2 &&
+        var.asg_max_size == 4
       )
-      error_message = "The EC2 comparison baseline requires min_size=2 and min <= desired <= max."
+      error_message = "The EC2 comparison baseline requires min_size=2, desired_capacity=2, and max_size=4."
+    }
+
+    precondition {
+      condition     = local.rollout_contract_valid
+      error_message = "rollout_mode, Instance Refresh percentages/checkpoints, scaling policy, and normal/fault digests do not match an approved rollout contract."
     }
   }
 }
 
 resource "aws_autoscaling_policy" "cpu" {
+  count                  = var.rollout_scaling_policy_enabled ? 1 : 0
   name                   = "${local.name}-backend-cpu"
   autoscaling_group_name = aws_autoscaling_group.backend.name
   policy_type            = "TargetTrackingScaling"
