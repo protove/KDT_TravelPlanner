@@ -92,3 +92,18 @@ output "target_group_arn" {
   description = "Backend ALB target group ARN."
   value       = module.backend_service.target_group_arn
 }
+
+output "backend_rollout_contract" {
+  description = "Terraform-emitted rollout contract consumed by validate-rollout-plan.py before an approved recovery apply."
+  value       = module.backend_service.rollout_contract
+}
+
+output "backend_restoration_state_contract" {
+  description = "Terraform-emitted restoration contract for the post-recovery drift check; the AWS read-back exporter promotes status to verified."
+  value       = module.backend_service.restoration_state_contract
+}
+
+output "backend_launch_template_latest_version" {
+  description = "Concrete numbered Launch Template version the ASG references, recorded in recovery evidence."
+  value       = module.backend_service.launch_template_latest_version
+}
