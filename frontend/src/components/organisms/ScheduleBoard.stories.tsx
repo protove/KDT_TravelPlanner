@@ -75,6 +75,34 @@ export const WithMap: Story = {
   render: () => <DemoWithMap />,
 };
 
+function DemoReorderable() {
+  const [activeDay, setActiveDay] = React.useState("d1");
+  const [itemsState, setItemsState] = React.useState(itemsByDay);
+
+  function handleReorderItems(orderedIds: string[]) {
+    setItemsState((prev) => {
+      const byId = new Map(prev[activeDay].map((item) => [item.id, item]));
+      return { ...prev, [activeDay]: orderedIds.map((id) => byId.get(id)!) };
+    });
+  }
+
+  return (
+    <ScheduleBoard
+      days={days}
+      activeDay={activeDay}
+      onDayChange={setActiveDay}
+      items={itemsState[activeDay]}
+      onReorderItems={handleReorderItems}
+    />
+  );
+}
+
+/** 드래그 손잡이(⠿)를 눌러 카드 순서를 바꿀 수 있다. readOnly가 아닐 때만 손잡이가 보인다. */
+export const Reorderable: Story = {
+  args: { days, activeDay: "d1", onDayChange: () => {}, items: itemsByDay.d1 },
+  render: () => <DemoReorderable />,
+};
+
 function DemoReadOnly() {
   const [activeDay, setActiveDay] = React.useState("d1");
   return (

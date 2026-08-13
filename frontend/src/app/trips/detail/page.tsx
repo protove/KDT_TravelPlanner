@@ -178,6 +178,20 @@ React.useEffect(() => {
     }));
   const mapMarkers = [...savedMarkers, ...draftMarkers];
 
+  // 드래그로 바뀐 카드 순서를 draft에 반영한다. dnd-kit이 알려주는 건 활성 날짜 카드들의 새 id 순서뿐이라,
+  // 그 날짜(dayNumber) 항목의 visitOrder만 1..n으로 다시 매기고 다른 날짜 항목은 그대로 둔다.
+  // "정보 수정" 모드에서만 호출되며(readOnly={!canEditSchedule}), 실제 서버 반영은 기존 "저장" 흐름(commitTimelineItemChanges)이 처리한다.
+  function handleReorderDay(orderedIds: string[]) {
+    const orderIndex = new Map(orderedIds.map((itemId, i) => [itemId, i + 1]));
+    setDraftTimelineItems(
+      timelineItems.map((item) =>
+        item.dayNumber === activeDayNumber && orderIndex.has(item.timelineItemId)
+          ? { ...item, visitOrder: orderIndex.get(item.timelineItemId)! }
+          : item
+      )
+    );
+  }
+
   const manageableParticipants: Participant[] = travelMembers
     .filter((m) => !m.isOwner)
     .map((m) => ({
@@ -373,6 +387,7 @@ React.useEffect(() => {
             onCancelItem={handleCancelItem}
             onDeleteItem={handleDeleteItem}
             onAssignPlace={openEditPlace}
+            onReorderItems={handleReorderDay}
           />
           {canEditSchedule && (
             <Button variant="outline" className="w-full border-dashed" onClick={openAddPlace}>
