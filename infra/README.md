@@ -2,6 +2,11 @@
 
 이 디렉터리는 Terraform State 기반 인프라와 애플리케이션 인프라를 분리하고, `dev`와 `prod`가 서로 다른 Root와 State를 사용하도록 구성한다.
 
+> 현재 상태(최종 제출 시점 사용자 확인 기준): `dev` State는 유지 중이다. `dev-runtime`은 부하·배포·복구 테스트를 완료한 뒤
+> 전체 리소스를 삭제했으며, 이 문서의 runtime 명령은 필요할 때 재생성하기 위한 runbook이다.
+> `terraform apply`와 `terraform destroy`는 비용·데이터·외부 상태를 바꾸므로 plan 변경 범위를
+> 사람이 확인하고 별도 승인한 뒤 실행한다.
+
 ## 디렉터리 구조
 
 ```text
@@ -9,7 +14,7 @@ infra/
 ├── bootstrap/                         # State S3 최초 생성 전용 Root
 ├── environments/
 │   ├── dev/                           # 개발 환경 Root
-│   ├── dev-runtime/                   # 실험 시에만 생성하는 유료 Runtime Root
+│   ├── dev-runtime/                   # 실험 시에만 재생성하는 유료 Runtime Root (현재 리소스 없음)
 │   └── prod/                          # 운영 환경 Root
 └── modules/
     ├── terraform_state_backend/       # State S3와 최소 State 접근 정책
@@ -174,6 +179,12 @@ AWS S3에서는 `PROFILE_IMAGE_STORAGE_PATH_STYLE_ACCESS_ENABLED=false`를 사�
 
 ## 로컬·CI 검증
 
+`terraform fmt`와 backend를 초기화하지 않는 module 검증은 원격 State를 읽지 않는다. 다만
+`init -backend=false`는 provider/plugin을 준비해야 하고, 이 저장소의 root `providers.tf`는
+`allowed_account_ids` 확인을 위해 AWS 계정 조회를 시도할 수 있다. 따라서 root `validate`까지
+항상 오프라인이라고 표현하지 않으며, AWS SSO·원격 State를 사용하는 `plan`은 아래 절차와
+별도의 운영 경계로 취급한다.
+
 ```bash
 terraform fmt -check -recursive infra
 terraform -chdir=infra/bootstrap init -backend=false
@@ -191,7 +202,8 @@ terraform -chdir=infra/modules/github_ecr_publisher test
 terraform -chdir=infra/modules/github_frontend_deployer test
 ```
 
-CI는 실제 AWS 자격증명을 전달받지 않으며 AWS plan/apply를 실행하지 않는다.
+CI는 원격 State를 사용하는 AWS plan/apply를 실행하지 않는다. provider 초기화가 필요한 검증과
+실제 계정·State를 읽는 plan을 같은 단계로 해석하지 않는다.
 
 Trivy의 WAF(`AVD-AWS-0011`)와 고객 관리 KMS key(`AVD-AWS-0132`) 권고는 현재 확정 범위와 충돌하므로 `infra/.trivyignore.yaml`에 대상 파일·근거·만료일을 기록한다. 만료 전 WAF 비용 통제와 KMS 운영 책임을 다시 검토하며, 그 밖의 HIGH/CRITICAL 결과는 CI를 실패시킨다.
 
