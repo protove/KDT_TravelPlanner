@@ -15,6 +15,7 @@ import java.math.BigDecimal
 
 private data class GooglePlaceSearchRequest(
 	val textQuery: String,
+	val languageCode: String = "ko",
 	val regionCode: String,
 )
 
@@ -31,6 +32,7 @@ private data class GooglePlace(
 
 private data class GoogleDisplayName(
 	val text: String? = null,
+	val languageCode: String? = null,
 )
 
 private data class GoogleLocation(
@@ -59,7 +61,12 @@ class GooglePlacesAdapter(
 				.contentType(MediaType.APPLICATION_JSON)
 				.header(GOOGLE_API_KEY_HEADER, properties.apiKey)
 				.header(GOOGLE_FIELD_MASK_HEADER, RESPONSE_FIELD_MASK)
-				.body(GooglePlaceSearchRequest(query, countryCode))
+				.body(
+					GooglePlaceSearchRequest(
+						textQuery = query,
+						regionCode = countryCode,
+					),
+				)
 				.retrieve()
 				.body(GooglePlaceSearchResponse::class.java)
 				?: throw GooglePlacesProviderException()
