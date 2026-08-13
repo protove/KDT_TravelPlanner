@@ -17,3 +17,18 @@ reference/
 /presentation/
 
 /tmp
+
+# Local Compose load-rehearsal credentials
+load-tests/k6/data/data.json
+load-tests/**/__pycache__/
+scripts/loadtest/**/__pycache__/
+monitoring/**/__pycache__/
+
+# Test evidence stays local. Compose rehearsals, AWS B-01 orchestration and the
+# AWS Recovery experiments all write here; the AWS bundles are also uploaded to
+# S3 by upload-aws-evidence.py. None of it is committed.
+evidence/
+
+# Run-control artifacts for the AWS load-test / recovery campaigns: approval
+# records, source-lineage contracts, protection checkpoints, audits, reports.
+recovery-control/
