@@ -388,7 +388,7 @@ export default function MypagePage() {
             open={showWithdraw}
             onOpenChange={setShowWithdraw}
             title="정말 탈퇴하시겠어요?"
-            description="계정과 생성한 여행일정이 모두 삭제되며 되돌릴 수 없습니다."
+            description="계정과 생성한 여행일정이 모두 삭제되며 되돌릴 수 없습니다. 탈퇴 후에는 같은 소셜 계정으로 다시 가입할 수 없어요."
             confirmLabel="탈퇴하기"
             destructive
             isConfirming={isWithdrawing}

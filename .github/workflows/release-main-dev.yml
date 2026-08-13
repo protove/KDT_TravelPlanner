@@ -1,55 +1,206 @@
 name: Main Release
+
 on:
   push:
     branches:
       - main
+
 permissions:
   contents: read
-  id-token: write
+
+concurrency:
+  group: main-release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
-  # ── 프론트 검증 ────────────────────────────────────────────
-  # 기존 frontend-test.yml을 workflow_call로 재사용
-  # (ESLint, Storybook 빌드, production 빌드 검증)
+  validate-change-classifier:
+    name: Validate Release Classifier
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v6
+
+      - name: Run classifier fixtures
+        run: .github/scripts/test-classify-main-release-changes.sh
+
+  detect-changes:
+    name: Detect Release Changes
+    needs: validate-change-classifier
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      run_frontend_verify: ${{ steps.classify.outputs.run_frontend_verify }}
+      run_backend_verify: ${{ steps.classify.outputs.run_backend_verify }}
+      run_compose_verify: ${{ steps.classify.outputs.run_compose_verify }}
+      deploy_frontend: ${{ steps.classify.outputs.deploy_frontend }}
+      publish_backend: ${{ steps.classify.outputs.publish_backend }}
+      classification_error: ${{ steps.classify.outputs.classification_error }}
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Classify changed paths
+        id: classify
+        env:
+          BASE_SHA: ${{ github.event.before }}
+          HEAD_SHA: ${{ github.sha }}
+        run: |
+          test -n "${BASE_SHA}"
+          test -n "${HEAD_SHA}"
+          test "${BASE_SHA}" != "0000000000000000000000000000000000000000"
+          classification_file="${RUNNER_TEMP}/release-change-classification.txt"
+          .github/scripts/classify-main-release-changes.sh "${BASE_SHA}" "${HEAD_SHA}" \
+            | tee "${classification_file}" >> "${GITHUB_OUTPUT}"
+
+          {
+            echo "### Release change classification"
+            echo "- Base: `${BASE_SHA}`"
+            echo "- Head: `${HEAD_SHA}`"
+            echo
+            echo '```text'
+            cat "${classification_file}"
+            echo '```'
+          } >> "${GITHUB_STEP_SUMMARY}"
+
   verify-frontend:
     name: Verify Frontend
+    needs: detect-changes
+    if: needs.detect-changes.outputs.run_frontend_verify == 'true'
     uses: ./.github/workflows/frontend-test.yml
 
-  # ── 백엔드 검증 ────────────────────────────────────────────
-  # 기존 backend-test.yml을 workflow_call로 재사용
-  # (Testcontainers 기반 단위/통합 테스트 + 이미지 빌드 검증)
   verify-backend:
     name: Verify Backend
+    needs: detect-changes
+    if: needs.detect-changes.outputs.run_backend_verify == 'true'
     uses: ./.github/workflows/backend-test.yml
 
-  # ── 통합(Compose) 검증 ────────────────────────────────────
-  # 기존 compose-build.yml을 workflow_call로 재사용
-  # (실제 컨테이너 기동, readiness/CORS/Flyway/Redis 연결 검증 — #195)
   verify-compose:
     name: Verify Compose Integration
+    needs: detect-changes
+    if: needs.detect-changes.outputs.run_compose_verify == 'true'
     uses: ./.github/workflows/compose-build.yml
 
-  # ── 프론트 배포 ────────────────────────────────────────────
-  # 검증 3개(프론트/백엔드/통합)가 모두 통과해야만 실행됨
-  deploy-frontend:
-    name: Deploy Frontend
+  release-gate:
+    name: Affected Release Gate
     needs:
+      - detect-changes
+      - validate-change-classifier
       - verify-frontend
       - verify-backend
       - verify-compose
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      CLASSIFICATION_ERROR: ${{ needs.detect-changes.outputs.classification_error }}
+      RUN_FRONTEND_VERIFY: ${{ needs.detect-changes.outputs.run_frontend_verify }}
+      RUN_BACKEND_VERIFY: ${{ needs.detect-changes.outputs.run_backend_verify }}
+      RUN_COMPOSE_VERIFY: ${{ needs.detect-changes.outputs.run_compose_verify }}
+      DETECT_RESULT: ${{ needs.detect-changes.result }}
+      FRONTEND_RESULT: ${{ needs.verify-frontend.result }}
+      BACKEND_RESULT: ${{ needs.verify-backend.result }}
+      COMPOSE_RESULT: ${{ needs.verify-compose.result }}
+      CLASSIFIER_RESULT: ${{ needs.validate-change-classifier.result }}
+    steps:
+      - name: Check affected verification results
+        run: |
+          set -euo pipefail
+
+          if [[ "${DETECT_RESULT}" != "success" ]]; then
+            echo "Change detection did not succeed: ${DETECT_RESULT}" >&2
+            exit 1
+          fi
+
+          if [[ "${CLASSIFIER_RESULT}" != "success" ]]; then
+            echo "Release classifier fixtures did not pass: ${CLASSIFIER_RESULT}" >&2
+            exit 1
+          fi
+
+          if [[ "${CLASSIFICATION_ERROR}" == "true" ]]; then
+            echo "An unclassified path requires an explicit release policy." >&2
+            exit 1
+          fi
+
+          check_result() {
+            local enabled="$1"
+            local result="$2"
+            local label="$3"
+
+            if [[ "${enabled}" == "true" && "${result}" != "success" ]]; then
+              echo "${label} was required but finished with: ${result}" >&2
+              exit 1
+            fi
+          }
+
+          check_result "${RUN_FRONTEND_VERIFY}" "${FRONTEND_RESULT}" "Frontend verification"
+          check_result "${RUN_BACKEND_VERIFY}" "${BACKEND_RESULT}" "Backend verification"
+          check_result "${RUN_COMPOSE_VERIFY}" "${COMPOSE_RESULT}" "Compose verification"
+          echo "Affected release gate passed."
+
+  deploy-frontend:
+    name: Deploy Frontend
+    needs:
+      - detect-changes
+      - release-gate
+    if: >-
+      needs.detect-changes.outputs.deploy_frontend == 'true' &&
+      needs.release-gate.result == 'success'
     uses: ./.github/workflows/frontend-deploy-dev.yml
     permissions:
       contents: read
       id-token: write
 
-  # ── 백엔드 배포 ────────────────────────────────────────────
-  # 검증 3개(프론트/백엔드/통합)가 모두 통과해야만 실행됨
   deploy-backend:
-    name: Deploy Backend
+    name: Publish Backend Image
     needs:
-      - verify-frontend
-      - verify-backend
-      - verify-compose
+      - detect-changes
+      - release-gate
+    if: >-
+      needs.detect-changes.outputs.publish_backend == 'true' &&
+      needs.release-gate.result == 'success'
     uses: ./.github/workflows/backend-deploy-dev.yml
     permissions:
       contents: read
       id-token: write
+
+  release-summary:
+    name: Release Summary
+    needs:
+      - detect-changes
+      - validate-change-classifier
+      - verify-frontend
+      - verify-backend
+      - verify-compose
+      - release-gate
+      - deploy-frontend
+      - deploy-backend
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      DETECT_RESULT: ${{ needs.detect-changes.result }}
+      FRONTEND_RESULT: ${{ needs.verify-frontend.result }}
+      BACKEND_RESULT: ${{ needs.verify-backend.result }}
+      COMPOSE_RESULT: ${{ needs.verify-compose.result }}
+      GATE_RESULT: ${{ needs.release-gate.result }}
+      FRONTEND_DEPLOY_RESULT: ${{ needs.deploy-frontend.result }}
+      BACKEND_DEPLOY_RESULT: ${{ needs.deploy-backend.result }}
+    steps:
+      - name: Write release summary
+        run: |
+          {
+            echo "### Release job results"
+            echo "| Job | Result |"
+            echo "|---|---|"
+            echo "| Detect changes | ${DETECT_RESULT} |"
+            echo "| Frontend verification | ${FRONTEND_RESULT} |"
+            echo "| Backend verification | ${BACKEND_RESULT} |"
+            echo "| Compose verification | ${COMPOSE_RESULT} |"
+            echo "| Affected release gate | ${GATE_RESULT} |"
+            echo "| Frontend deployment | ${FRONTEND_DEPLOY_RESULT} |"
+            echo "| Backend image publish | ${BACKEND_DEPLOY_RESULT} |"
+          } >> "${GITHUB_STEP_SUMMARY}"

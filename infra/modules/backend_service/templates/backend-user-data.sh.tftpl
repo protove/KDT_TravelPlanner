@@ -3,6 +3,7 @@ set -euo pipefail
 
 dnf install -y docker jq
 systemctl enable --now docker
+docker pull '${alloy_image_reference}'
 
 install -d -m 0755 /etc/travel-planner /var/log/travel-planner
 chown 10001:10001 /var/log/travel-planner
@@ -110,3 +111,108 @@ UNIT
 
 systemctl daemon-reload
 systemctl enable --now travel-planner-backend.service
+
+# ── Alloy 설정 템플릿을 EC2 안에 직접 만듦 (backend.env 만드는 방식과 동일 패턴) ──
+install -d -m 0755 /etc/travel-planner
+cat > /etc/travel-planner/config.ec2.alloy.tmpl <<'ALLOYCONFIG'
+logging {
+  level  = "info"
+  format = "logfmt"
+}
+
+local.file_match "backend_logs" {
+  path_targets = [{
+    __address__ = "localhost",
+    __path__    = "/var/log/travel-planner/travel-planner.log",
+    environment = "dev",
+    service     = "travel-planner-backend",
+  }]
+}
+
+loki.source.file "backend_logs" {
+  targets    = local.file_match.backend_logs.targets
+  forward_to = [loki.process.backend_logs.receiver]
+}
+
+loki.process "backend_logs" {
+  stage.json {
+    drop_malformed = true
+    expressions = {
+      level = "log.level",
+    }
+  }
+  stage.labels {
+    values = {
+      level = "",
+    }
+  }
+  stage.label_keep {
+    values = ["service", "environment", "level"]
+  }
+  forward_to = [loki.write.default.receiver]
+}
+
+loki.write "default" {
+  endpoint {
+    url = "http://$MONITORING_ENDPOINT:3100/loki/api/v1/push"
+  }
+}
+ALLOYCONFIG
+
+cat > /usr/local/bin/start-travel-planner-alloy <<'SCRIPT'
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Monitoring EC2 주소를 SSM Parameter Store에서 조회
+# (Monitoring EC2가 재생성되어 주소가 바뀌어도, 이 서비스가
+#  재시작될 때마다 항상 최신 값을 다시 조회함)
+monitoring_endpoint="$(aws ssm get-parameter \
+  --region '${aws_region}' \
+  --name '${monitoring_endpoint_parameter_name}' \
+  --query 'Parameter.Value' \
+  --output text)"
+
+mkdir -p /etc/alloy
+MONITORING_ENDPOINT="$monitoring_endpoint" envsubst '$MONITORING_ENDPOINT' \
+  < /etc/travel-planner/config.ec2.alloy.tmpl \
+  > /etc/alloy/config.alloy
+
+exec docker run \
+  --name travel-planner-alloy \
+  --rm \
+  --publish 12345:12345 \
+  --volume /etc/alloy/config.alloy:/etc/alloy/config.alloy:ro \
+  --volume /var/log/travel-planner:/var/log/travel-planner:ro \
+  --volume travel-planner-alloy-data:/var/lib/alloy/data \
+  '${alloy_image_reference}' \
+  run \
+  --server.http.listen-addr=0.0.0.0:12345 \
+  --storage.path=/var/lib/alloy/data \
+  /etc/alloy/config.alloy
+SCRIPT
+
+chmod 0750 /usr/local/bin/start-travel-planner-alloy
+
+cat > /etc/systemd/system/travel-planner-alloy.service <<'UNIT'
+[Unit]
+Description=KDT TravelPlanner Grafana Alloy (log shipper)
+After=docker.service network-online.target travel-planner-backend.service
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=simple
+ExecStartPre=-/usr/bin/docker rm -f travel-planner-alloy
+ExecStart=/usr/local/bin/start-travel-planner-alloy
+ExecStop=-/usr/bin/docker stop --time 30 travel-planner-alloy
+Restart=always
+RestartSec=10
+TimeoutStartSec=0
+TimeoutStopSec=45
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+
+systemctl daemon-reload
+systemctl enable --now travel-planner-alloy.service

@@ -1,10 +1,13 @@
 package com.ktcloud.travelplanner.auth.service
 
+import com.ktcloud.travelplanner.auth.client.OAuthAuthorizationGrant
 import com.ktcloud.travelplanner.auth.client.OAuthProviderClient
+import com.ktcloud.travelplanner.auth.client.OAuthUserProfile
 import com.ktcloud.travelplanner.auth.config.OAuthFlowProperties
 import com.ktcloud.travelplanner.user.model.OAuthProvider
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
+import org.mockito.ArgumentMatchers.any
 import org.mockito.Mockito.clearInvocations
 import org.mockito.Mockito.mock
 import org.mockito.Mockito.verify
@@ -104,6 +107,37 @@ class OAuthLoginServiceTest {
 		}
 
 		verifyNoInteractions(providerClient, stateService, userService, exchangeCodeService)
+	}
+
+	@Test
+	fun `nickname assignment failure redirects with signup_failed error`() {
+		val profile = OAuthUserProfile(
+			provider = OAuthProvider.GOOGLE,
+			providerUserId = "google-user",
+			email = "user@example.com",
+			name = "Google User",
+			profileImageUrl = null,
+		)
+		`when`(stateService.consume(STATE, STATE, OAuthProvider.GOOGLE))
+			.thenReturn(ConsumedOAuthState("$FRONTEND_REDIRECT_URL?from=login"))
+		`when`(providerClient.fetchUserProfile(any(OAuthAuthorizationGrant::class.java)))
+			.thenReturn(profile)
+		`when`(userService.upsert(profile))
+			.thenThrow(NicknameAssignmentFailedException(RuntimeException("nickname conflict")))
+
+		val redirectUri = service.completeAuthorization(
+			providerName = "google",
+			authorizationCode = "provider-code",
+			authorizationError = null,
+			state = STATE,
+			stateCookie = STATE,
+		)
+
+		assertEquals(
+			"$FRONTEND_REDIRECT_URL?from=login&error=signup_failed",
+			redirectUri.toASCIIString(),
+		)
+		verifyNoInteractions(exchangeCodeService)
 	}
 
 	companion object {

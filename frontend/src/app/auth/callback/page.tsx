@@ -10,8 +10,13 @@ function AuthCallbackContent() {
   const searchParams = useSearchParams();
   const setSession = useAuthStore((s) => s.setSession);
   const code = searchParams.get("code");
+  const oauthError = searchParams.get("error");
   const [error, setError] = useState<string | null>(
-    code ? null : "로그인 코드가 없어요. 다시 로그인해주세요.",
+    code
+      ? null
+      : oauthError === "withdrawn_account"
+        ? "이미 탈퇴한 계정이에요. 같은 소셜 계정으로는 다시 가입할 수 없어요."
+        : "로그인 코드가 없어요. 다시 로그인해주세요.",
   );
   const hasRun = useRef(false);
 
