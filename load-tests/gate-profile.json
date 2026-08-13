@@ -1,0 +1,32 @@
+{
+  "profileVersion": "compose-gate-v1",
+  "users": 20,
+  "rate": 8,
+  "warmup": "3m",
+  "baselineDuration": "10m",
+  "recoveryDuration": "16m",
+  "drillAtMin": 8,
+  "drillMode": "stop-start",
+  "minimumPostDrillObservationSeconds": 180,
+  "spikePeakRate": 24,
+  "spikeHold": "1m",
+  "seedVersion": "s1",
+  "k6Image": "grafana/k6:0.54.0@sha256:1f40432b1cbe7234e977f96c362c9bc550a2d2b583d014dd8669fe40d3e9e755",
+  "requestMix": {
+    "baseline": {
+      "refresh": 12,
+      "travelList": 22,
+      "travelDetail": 20,
+      "mapPoints": 18,
+      "timelineCreate": 18,
+      "orderChange": 10
+    },
+    "recovery": {
+      "refresh": 15,
+      "travelList": 40,
+      "travelDetail": 25,
+      "mapPoints": 20
+    }
+  },
+  "sloVersion": "v0.1-draft"
+}

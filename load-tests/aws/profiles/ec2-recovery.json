@@ -1,0 +1,90 @@
+{
+  "profileVersion": "aws-recovery-v1",
+  "scenarioId": "AWS-RECOVERY",
+  "platform": "ec2",
+  "environment": "dev-runtime",
+  "region": "ap-northeast-2",
+  "sloVersion": "v1.0-frozen",
+  "seedVersion": "s2",
+  "requestMixVersion": "aws-recovery-v1",
+
+  "target": {
+    "baseUrl": "https://REPLACE_WITH_APPROVED_ALB_HOSTNAME",
+    "expectedTags": {
+      "Environment": "dev"
+    },
+    "note": "The operator must provide the exact approved ALB ARN and custom HTTPS origin at run time."
+  },
+
+  "backend": {
+    "expectedTags": {
+      "Environment": "dev",
+      "Service": "travel-planner-backend"
+    }
+  },
+
+  "runner": {
+    "expectedTags": {
+      "Environment": "dev",
+      "Service": "travel-planner-load-runner"
+    },
+    "expectedInstanceFamily": "t3"
+  },
+
+  "googleApi": {
+    "enabled": false,
+    "note": "Recovery workload never calls Google Places or Routes."
+  },
+
+  "k6Image": "REPLACE_WITH_DIGEST_PINNED_K6_IMAGE",
+
+  "limits": {
+    "maxRate": 30,
+    "maxVUs": 80
+  },
+
+  "recovery": {
+    "executor": "constant-arrival-rate",
+    "rate": null,
+    "timeUnit": "1s",
+    "warmup": "3m",
+    "duration": "20m",
+    "preAllocatedVUs": 20,
+    "maxVUs": 60,
+    "bucketSeconds": 10,
+    "stableWindowSeconds": 120,
+    "budgetSeconds": 600,
+    "p95Ms": 500,
+    "capacityFloorRatio": 0.9,
+    "unexpectedErrorRate": 0.01,
+    "contractFailureRate": 0.0,
+    "note": "rate is intentionally unset; the evaluator/orchestrator requires the D-005 frozen rate."
+  },
+
+  "requestMix": {
+    "steady": {
+      "refresh": 12,
+      "travelList": 22,
+      "travelDetail": 20,
+      "mapPoints": 18,
+      "timelineCreate": 18,
+      "orderChange": 10
+    }
+  },
+
+  "observability": {
+    "required": [
+      "core_operations_total",
+      "core_completed_operations_total",
+      "core_successful_operations_total",
+      "core_unexpected_errors_total",
+      "core_contract_failures_total",
+      "core_operation_duration",
+      "runner_stats",
+      "aws_target_health",
+      "aws_asg_activities"
+    ],
+    "statusPath": "monitoring/required-metrics.json",
+    "note": "The status file must report collected datapoints for every required metric; missing or empty required evidence invalidates the run."
+  }
+}

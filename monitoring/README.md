@@ -27,6 +27,7 @@
 ## CI 합격 조건
 
 - dev·prod Compose와 Prometheus·Loki·Alloy·Grafana 설정이 유효하다.
+- EC2 배포 경로의 `prometheus.ec2.yml`도 `promtool check config`를 통과한다.
 - backend, Prometheus, Loki, Alloy, Grafana가 기동한다.
 - Prometheus의 backend·Prometheus·Loki·Alloy target이 모두 `UP`이다.
 - 합성 HTTP 요청의 metric과 구조화 로그가 각각 Prometheus와 Loki에서 조회된다.

@@ -1,27 +1,41 @@
-import { textSummary } from 'https://jslib.k6.io/k6-summary/0.1.0/index.js';
-import { RUN_ID, SCENARIO_TAG } from './lib/config.js';
-
-// K6_LOAD_TEST_TOOL_DECISION.md 9장 증거 구조를 그대로 따른다.
-// summary.json은 k6 원본 결과, metadata.json은 재현에 필요한 실행 조건이다.
-// 둘 다 credential·개인정보를 포함하지 않는다 — lib/auth.js가 애초에
-// 응답 body를 로그로 남기지 않으므로 여기서 별도 마스킹은 필요 없다.
-export function handleSummary(data, extra) {
-  const metadata = {
-    runId: RUN_ID,
-    scenarioTag: SCENARIO_TAG,
-    stage: extra && extra.stage,
-    generatedAtUtc: new Date().toISOString(),
-    // 아래 값들은 run-smoke.sh(또는 CI 스크립트)가 실행 시점에 env로 주입한다.
-    k6Version: __ENV.K6_VERSION || 'unset',
-    commitSha: __ENV.COMMIT_SHA || 'unset',
-    imageDigest: __ENV.IMAGE_DIGEST || 'unset',
-    baseUrl: __ENV.BASE_URL || 'unset',
-    note: 'SLO_VERSION 동결 전 draft 실행 — 발표 확정 근거로 사용하지 않음',
+export function makeSummaryHandler(scenarioName) {
+  return function handleSummary(data) {
+    const metrics = data.metrics || {};
+    const metricValues = (name, fallback = {}) => metrics[name]?.values || fallback;
+    const summary = {
+      scenario: scenarioName,
+      runId: __ENV.RUN_ID || null,
+      startedAtUtc: __ENV.RUN_STARTED_AT || null,
+      sloVersion: 'v0.1-draft',
+      metrics: {
+        http_reqs: metricValues('http_reqs'),
+        http_req_duration: metricValues('http_req_duration'),
+        unexpected_errors: metricValues('unexpected_errors'),
+        contract_fail: metricValues('contract_fail'),
+        successful_requests: metricValues('successful_requests'),
+        expected_4xx: metricValues('expected_4xx', { count: 0, rate: 0 }),
+        dropped_iterations: metricValues('dropped_iterations', { count: 0, rate: 0 }),
+        checks: metricValues('checks'),
+      },
+      thresholds: Object.fromEntries(Object.entries(metrics)
+        .filter(([, metric]) => metric.thresholds)
+        .map(([name, metric]) => [name, Object.fromEntries(
+          Object.entries(metric.thresholds).map(([threshold, value]) => [threshold, value.ok]),
+        )])),
+    };
+    const outputDirectory = __ENV.OUT_DIR || '.';
+    return {
+      [`${outputDirectory}/summary.json`]: JSON.stringify(summary, null, 2),
+      stdout: textSummary(summary),
+    };
   };
+}
 
-  return {
-    stdout: textSummary(data, { indent: ' ', enableColors: true }),
-    'summary.json': JSON.stringify(data, null, 2),
-    'metadata.json': JSON.stringify(metadata, null, 2),
-  };
+function textSummary(summary) {
+  const duration = summary.metrics.http_req_duration || {};
+  const errors = summary.metrics.unexpected_errors || {};
+  return `\n[${summary.scenario}] p95=${duration['p(95)'] ?? '-'}ms `
+    + `p99=${duration['p(99)'] ?? '-'}ms `
+    + `unexpected=${errors.rate !== undefined ? `${(errors.rate * 100).toFixed(2)}%` : '-'} `
+    + `requests=${summary.metrics.http_reqs?.count ?? '-'}\n`;
 }

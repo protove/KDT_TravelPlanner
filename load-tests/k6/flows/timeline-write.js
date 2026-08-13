@@ -1,56 +1,53 @@
 import http from 'k6/http';
-import { check, group } from 'k6';
-import { BASE_URL } from '../lib/config.js';
-import { authHeaders } from '../lib/auth.js';
+import { check } from 'k6';
+import exec from 'k6/execution';
+import { API } from '../lib/config.js';
+import { withAuthRetry } from '../lib/auth.js';
+import {
+  nextVisitOrder,
+  registerTimelineItem,
+  timelineItemIds,
+  travelId,
+  visitDate,
+} from '../lib/data.js';
+import { record } from '../lib/metrics.js';
 
-export function timelineWriteFlow(accessToken, travelId, vuId, iter) {
-  group('timeline_write', function () {
-    const today = new Date().toISOString().slice(0, 10);
-    const payload = JSON.stringify({
+export function timelineCreate() {
+  const response = withAuthRetry((headers) => http.post(
+    `${API}/travels/${travelId()}/timeline-items`,
+    JSON.stringify({
       dayNumber: 1,
-      visitDate: today,
-      cityId: 10,
+      visitDate: visitDate(),
       category: '관광지',
-      foodSubcategory: null,
-      name: `k6 load test item ${vuId}-${iter}`,
-      googlePlaceId: null,
-      visitOrder: 1,
-      memo: null,
-    });
+      name: `load-${exec.vu.idInTest}-${exec.scenario.iterationInTest}`,
+      visitOrder: nextVisitOrder(),
+    }),
+    { headers, tags: { name: 'POST /travels/{travelId}/timeline-items', flow: 'timeline-write' } },
+  ));
+  record(response, { expect: [200, 201] });
+  check(response, { 'timeline create 2xx': (result) => result.status === 200 || result.status === 201 });
+  if (response.status >= 200 && response.status < 300) {
+    const id = response.json('data.timelineItemId');
+    registerTimelineItem(id);
+    return id;
+  }
+  return null;
+}
 
-    const createRes = http.post(
-      `${BASE_URL}/api/v1/travels/${travelId}/timeline-items`,
-      payload,
-      {
-        headers: authHeaders(accessToken),
-        tags: { name: 'timeline_item_create' },
-      }
-    );
-    const created = check(createRes, {
-      'timeline create 200/201': (r) => r.status === 200 || r.status === 201,
-    });
-    if (!created) return;
-
-    const itemId = JSON.parse(createRes.body).data.timelineItemId;
-
-    const updateRes = http.patch(
-      `${BASE_URL}/api/v1/travels/${travelId}/timeline-items/${itemId}`,
-      JSON.stringify({ memo: 'k6 updated' }),
-      {
-        headers: authHeaders(accessToken),
-        tags: { name: 'timeline_item_update' },
-      }
-    );
-    check(updateRes, { 'timeline update 200': (r) => r.status === 200 });
-
-    const deleteRes = http.del(
-      `${BASE_URL}/api/v1/travels/${travelId}/timeline-items/${itemId}`,
-      null,
-      {
-        headers: authHeaders(accessToken),
-        tags: { name: 'timeline_item_delete' },
-      }
-    );
-    check(deleteRes, { 'timeline delete 200/204': (r) => r.status === 200 || r.status === 204 });
-  });
+export function orderChange() {
+  const itemIds = timelineItemIds();
+  if (itemIds.length < 2) return;
+  const response = withAuthRetry((headers) => http.patch(
+    `${API}/travels/${travelId()}/timeline-items/order`,
+    JSON.stringify({
+      dayNumber: 1,
+      items: itemIds.slice().reverse().map((itemId, index) => ({
+        itemId,
+        visitOrder: index + 1,
+      })),
+    }),
+    { headers, tags: { name: 'PATCH /travels/{travelId}/timeline-items/order', flow: 'timeline-write' } },
+  ));
+  record(response, { expect: [200, 204], allowDomain4xx: false });
+  check(response, { 'timeline order 2xx': (result) => result.status === 200 || result.status === 204 });
 }
