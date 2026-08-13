@@ -100,6 +100,17 @@ class User(
 		updateProfile(nickname, profileImageUrl, gender, birthYear)
 	}
 
+	// 최초 SSO 가입 시 시스템이 임시로 부여하는 닉네임을 세팅한다.
+	// updateProfile()과 달리 isProfileCompleted를 건드리지 않는다 — 사용자가 직접
+	// 프로필을 채운 게 아니라 시스템이 채워준 값이므로 "완료" 취급하지 않는다.
+	fun assignGeneratedNickname(nickname: String) {
+		require(nickname.isNotBlank()) { "nickname must not be blank." }
+		require(nickname.length <= NICKNAME_MAX_LENGTH) {
+			"nickname must not exceed $NICKNAME_MAX_LENGTH characters."
+		}
+		this.nickname = nickname
+	}
+
 	fun updateProfile(
 		nickname: String?,
 		profileImageUrl: String?,

@@ -30,6 +30,7 @@ import java.time.LocalDate
 import java.util.UUID
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
+import kotlin.test.assertTrue
 
 @ActiveProfiles("test")
 @SpringBootTest
@@ -68,11 +69,10 @@ class TravelInvitationResponseControllerIntegrationTest(
 		entityManager.flush()
 		entityManager.clear()
 		val accepted = travelMemberRepository.findById(acceptedInvitation.id).orElseThrow()
-		val rejected = travelMemberRepository.findById(rejectedInvitation.id).orElseThrow()
 		assertEquals(InvitationStatus.ACCEPTED, accepted.status)
 		assertNotNull(accepted.respondedAt)
-		assertEquals(InvitationStatus.REJECTED, rejected.status)
-		assertNotNull(rejected.respondedAt)
+		// 거절된 초대는 row가 삭제되어 재초대를 막지 않아야 한다.
+		assertTrue(travelMemberRepository.findById(rejectedInvitation.id).isEmpty)
 	}
 
 	@Test

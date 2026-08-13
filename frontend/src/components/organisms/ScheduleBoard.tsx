@@ -1,7 +1,17 @@
 "use client";
 
 import * as React from "react";
-import { Pencil, Trash2 } from "lucide-react";
+import { Pencil, Trash2, GripVertical } from "lucide-react";
+import {
+  DndContext,
+  closestCenter,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from "@dnd-kit/core";
+import { SortableContext, useSortable, verticalListSortingStrategy, arrayMove } from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
 import { Tabs, TabsList, TabsTrigger } from "@/components/atoms/Tabs";
 import { Icon } from "@/components/atoms/Icon";
 import { ScheduleItemCard } from "@/components/organisms/ScheduleItemCard";
@@ -39,7 +49,61 @@ export interface ScheduleBoardProps {
   onCancelItem?: (id: string) => void;
   onDeleteItem?: (id: string) => void;
   onAssignPlace?: (id: string) => void;
+  /** 드래그로 카드 순서를 바꿨을 때 새 순서(id 배열, 1번째가 방문 1순위)를 알려준다. readOnly면 드래그 자체가 막힌다. */
+  onReorderItems?: (orderedIds: string[]) => void;
   className?: string;
+}
+
+interface SortableScheduleItemProps {
+  id: string;
+  order: number;
+  placeName: string;
+  note?: string;
+  isLast: boolean;
+  readOnly: boolean;
+  onOpen?: () => void;
+  onEdit?: () => void;
+  onCancel?: () => void;
+  onDelete?: () => void;
+}
+
+/** dnd-kit의 useSortable을 여기서만 알게 하고, ScheduleItemCard 자체는 순서 변경 로직을 모르는 순수 표시 컴포넌트로 유지한다. */
+function SortableScheduleItem({ id, order, placeName, note, isLast, readOnly, onOpen, onEdit, onCancel, onDelete }: SortableScheduleItemProps) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id, disabled: readOnly });
+  const style: React.CSSProperties = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.5 : 1,
+  };
+
+  return (
+    <div ref={setNodeRef} style={style}>
+      <ScheduleItemCard
+        order={order}
+        placeName={placeName}
+        note={note}
+        isLast={isLast}
+        readOnly={readOnly}
+        dragHandle={
+          !readOnly ? (
+            <button
+              type="button"
+              title="순서 변경"
+              className="flex h-[26px] w-[26px] shrink-0 touch-none cursor-grab items-center justify-center text-muted-foreground active:cursor-grabbing"
+              {...attributes}
+              {...listeners}
+            >
+              <Icon icon={GripVertical} size="sm" aria-label="순서 변경" />
+            </button>
+          ) : undefined
+        }
+        onOpen={onOpen}
+        onEdit={onEdit}
+        onCancel={onCancel}
+        onDelete={onDelete}
+      />
+    </div>
+  );
 }
 
 function ScheduleBoard({
@@ -55,8 +119,22 @@ function ScheduleBoard({
   onCancelItem,
   onDeleteItem,
   onAssignPlace,
+  onReorderItems,
   className,
 }: ScheduleBoardProps) {
+  // 클릭(오픈/수정)과 드래그를 같은 카드에서 구분하려고 activationConstraint로 최소 이동 거리를 둔다 —
+  // 없으면 짧은 클릭도 드래그 시작으로 인식돼서 onOpen 등이 씹힐 수 있다.
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
+
+  function handleDragEnd(event: DragEndEvent) {
+    const { active, over } = event;
+    if (!over || active.id === over.id) return;
+    const oldIndex = items.findIndex((item) => item.id === active.id);
+    const newIndex = items.findIndex((item) => item.id === over.id);
+    if (oldIndex === -1 || newIndex === -1) return;
+    onReorderItems?.(arrayMove(items, oldIndex, newIndex).map((item) => item.id));
+  }
+
   return (
     <div className={cn("flex flex-col gap-5", className)}>
       <Tabs value={activeDay} onValueChange={onDayChange}>
@@ -72,20 +150,25 @@ function ScheduleBoard({
       {map}
 
       <div>
-        {items.map((item, i) => (
-          <ScheduleItemCard
-            key={item.id}
-            order={i + 1}
-            placeName={item.placeName}
-            note={item.note}
-            isLast={i === items.length - 1}
-            readOnly={readOnly}
-            onOpen={() => onOpenItem?.(item.id)}
-            onEdit={() => onEditItem?.(item.id)}
-            onCancel={() => onCancelItem?.(item.id)}
-            onDelete={() => onDeleteItem?.(item.id)}
-          />
-        ))}
+        <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+          <SortableContext items={items.map((item) => item.id)} strategy={verticalListSortingStrategy}>
+            {items.map((item, i) => (
+              <SortableScheduleItem
+                key={item.id}
+                id={item.id}
+                order={i + 1}
+                placeName={item.placeName}
+                note={item.note}
+                isLast={i === items.length - 1}
+                readOnly={readOnly}
+                onOpen={() => onOpenItem?.(item.id)}
+                onEdit={() => onEditItem?.(item.id)}
+                onCancel={() => onCancelItem?.(item.id)}
+                onDelete={() => onDeleteItem?.(item.id)}
+              />
+            ))}
+          </SortableContext>
+        </DndContext>
       </div>
 
       {unassigned.length > 0 && (

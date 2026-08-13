@@ -10,6 +10,7 @@ import { cn } from "@/lib/utils";
 export interface AppHeaderProps {
   loggedIn: boolean;
   userInitial?: string;
+  nickname?: string;
   avatarColor?: string;
   avatarSrc?: string;
   onLogoClick?: () => void;
@@ -22,6 +23,7 @@ export interface AppHeaderProps {
 function AppHeader({
   loggedIn,
   userInitial = "지",
+  nickname,
   avatarColor = "var(--brand-500)",
   avatarSrc,
   onLogoClick,
@@ -58,6 +60,15 @@ function AppHeader({
           >
             <Icon icon={Bell} size="sm" aria-label="알림" />
           </button>
+          {nickname && (
+            <span
+             className="max-w-[120px] truncate text-sm font-medium text-foreground"
+             title={nickname}
+            >
+              {nickname}
+            </span>
+          )}
+
           <button
             type="button"
             onClick={onProfileClick}

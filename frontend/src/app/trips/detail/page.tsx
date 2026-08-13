@@ -178,13 +178,27 @@ React.useEffect(() => {
     }));
   const mapMarkers = [...savedMarkers, ...draftMarkers];
 
+  // 드래그로 바뀐 카드 순서를 draft에 반영한다. dnd-kit이 알려주는 건 활성 날짜 카드들의 새 id 순서뿐이라,
+  // 그 날짜(dayNumber) 항목의 visitOrder만 1..n으로 다시 매기고 다른 날짜 항목은 그대로 둔다.
+  // "정보 수정" 모드에서만 호출되며(readOnly={!canEditSchedule}), 실제 서버 반영은 기존 "저장" 흐름(commitTimelineItemChanges)이 처리한다.
+  function handleReorderDay(orderedIds: string[]) {
+    const orderIndex = new Map(orderedIds.map((itemId, i) => [itemId, i + 1]));
+    setDraftTimelineItems(
+      timelineItems.map((item) =>
+        item.dayNumber === activeDayNumber && orderIndex.has(item.timelineItemId)
+          ? { ...item, visitOrder: orderIndex.get(item.timelineItemId)! }
+          : item
+      )
+    );
+  }
+
   const manageableParticipants: Participant[] = travelMembers
     .filter((m) => !m.isOwner)
     .map((m) => ({
       id: m.userId,
       name: m.nickname ?? "알 수 없음",
       permission: toPermission(m.role as TravelRole),
-      status: "accepted",
+      status: m.status === "PENDING" ? "pending" : "accepted",
     }));
 
   return (
@@ -241,7 +255,9 @@ React.useEffect(() => {
               </div>
               {infoSaveError && <p className="mt-1 text-xs text-destructive">{infoSaveError}</p>}
               <div className="mt-1.5 flex">
-                {travelMembers.map((m, i) => (
+                {travelMembers
+                  .filter((m) => m.status === "ACCEPTED")
+                  .map((m, i) => (
                   <Avatar
                     key={m.userId}
                     className="h-[22px] w-[22px]"
@@ -371,6 +387,7 @@ React.useEffect(() => {
             onCancelItem={handleCancelItem}
             onDeleteItem={handleDeleteItem}
             onAssignPlace={openEditPlace}
+            onReorderItems={handleReorderDay}
           />
           {canEditSchedule && (
             <Button variant="outline" className="w-full border-dashed" onClick={openAddPlace}>

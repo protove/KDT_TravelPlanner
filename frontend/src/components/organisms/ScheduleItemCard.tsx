@@ -10,6 +10,8 @@ export interface ScheduleItemCardProps {
   isLast?: boolean;
   /** READ_ONLY 권한 등 조회만 가능할 때 수정/취소/삭제 아이콘을 아예 숨긴다. */
   readOnly?: boolean;
+  /** 드래그앤드롭 순서 변경용 손잡이. dnd-kit의 attributes/listeners가 붙은 엘리먼트를 상위(ScheduleBoard)에서 만들어 넘긴다 — 카드 자체는 dnd-kit을 모른다. */
+  dragHandle?: React.ReactNode;
   onOpen?: () => void;
   onEdit?: () => void;
   onCancel?: () => void;
@@ -23,6 +25,7 @@ function ScheduleItemCard({
   note,
   isLast = false,
   readOnly = false,
+  dragHandle,
   onOpen,
   onEdit,
   onCancel,
@@ -39,6 +42,7 @@ function ScheduleItemCard({
       </div>
 
       <div className="mb-3.5 flex flex-1 items-start gap-2.5 rounded-xl bg-card p-3.5 shadow-card">
+        {dragHandle}
         <button type="button" onClick={onOpen} className="flex flex-1 cursor-pointer text-left">
           <div className="text-[15px] font-bold text-foreground">{placeName}</div>
           {note ? (

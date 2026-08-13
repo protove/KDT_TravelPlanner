@@ -9,6 +9,7 @@ import com.ktcloud.travelplanner.membership.dto.TravelInvitationCreateResponse
 import com.ktcloud.travelplanner.membership.dto.TravelInvitationRespondRequest
 import com.ktcloud.travelplanner.membership.dto.TravelInvitationStatusResponse
 import com.ktcloud.travelplanner.membership.model.InvitationStatus
+import com.ktcloud.travelplanner.membership.model.TravelInvitationAction
 import com.ktcloud.travelplanner.membership.model.TravelMember
 import com.ktcloud.travelplanner.membership.repository.TravelMemberRepository
 import com.ktcloud.travelplanner.travel.repository.TravelRepository
@@ -63,7 +64,14 @@ class TravelInvitationService(
 			throw InvitationAlreadyRespondedException()
 		}
 		invitation.respond(request.action, Instant.now(clock))
-		return TravelInvitationStatusResponse.from(travelMemberRepository.save(invitation))
+		val response = TravelInvitationStatusResponse.from(invitation)
+		if (request.action == TravelInvitationAction.REJECT) {
+			// 거절된 초대는 row를 삭제해 (planner_id, user_id) UNIQUE 제약을 해제하고 재초대를 허용한다.
+			travelMemberRepository.delete(invitation)
+		} else {
+			travelMemberRepository.save(invitation)
+		}
+		return response
 	}
 
 	@Transactional(readOnly = true)

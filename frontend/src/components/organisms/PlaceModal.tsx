@@ -4,11 +4,28 @@ import * as React from "react";
 import { Button } from "@/components/atoms/Button";
 import { Input } from "@/components/atoms/Input";
 import { Textarea } from "@/components/atoms/Textarea";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/atoms/Dialog";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/atoms/Select";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/atoms/Dialog";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/atoms/Select";
 import { cn } from "@/lib/utils";
 
-export const TIMELINE_CATEGORY_OPTIONS = ["관광지", "음식", "숙소", "교통", "기타"] as const;
+export const TIMELINE_CATEGORY_OPTIONS = [
+  "관광지",
+  "음식",
+  "숙소",
+  "교통",
+  "기타",
+] as const;
 export type TimelineCategoryOption = (typeof TIMELINE_CATEGORY_OPTIONS)[number];
 
 export interface PlaceDateChip {
@@ -107,6 +124,7 @@ function PlaceModal({
             value={name}
             onChange={(e) => onNameChange(e.target.value)}
             disabled={readOnly}
+            className="disabled:cursor-default disabled:opacity-100"
           />
         )}
 
@@ -115,7 +133,7 @@ function PlaceModal({
           onValueChange={(v) => onCategoryChange(v as TimelineCategoryOption)}
           disabled={readOnly}
         >
-          <SelectTrigger>
+          <SelectTrigger className="disabled:cursor-default disabled:opacity-100">
             <SelectValue placeholder="카테고리" />
           </SelectTrigger>
           <SelectContent>
@@ -133,6 +151,7 @@ function PlaceModal({
             value={foodSubcategory}
             onChange={(e) => onFoodSubcategoryChange(e.target.value)}
             disabled={readOnly}
+            className="disabled:cursor-default disabled:opacity-100"
           />
         )}
 
@@ -140,13 +159,15 @@ function PlaceModal({
           placeholder="이 장소에서 뭘 할지 적어보세요"
           value={note}
           onChange={(e) => onNoteChange(e.target.value)}
-          className="h-[70px] resize-none"
+          className="h-[70px] resize-none disabled:cursor-default disabled:opacity-100"
           disabled={readOnly}
         />
 
         {mode === "edit" && dateChips && dateChips.length > 0 && (
           <div>
-            <div className="mb-1.5 text-xs text-muted-foreground">날짜 배정</div>
+            <div className="mb-1.5 text-xs text-muted-foreground">
+              날짜 배정
+            </div>
             <div className="flex flex-wrap gap-1.5">
               {dateChips.map((chip, i) => (
                 <button
@@ -155,8 +176,10 @@ function PlaceModal({
                   disabled={readOnly}
                   onClick={() => onSelectDateChip?.(i)}
                   className={cn(
-                    "cursor-pointer rounded-md px-2.5 py-1 text-xs font-semibold disabled:cursor-not-allowed disabled:opacity-50",
-                    chip.selected ? "bg-primary text-primary-foreground" : "bg-muted text-secondary-foreground"
+                    "cursor-pointer rounded-md px-2.5 py-1 text-xs font-semibold disabled:cursor-default",
+                    chip.selected
+                      ? "bg-primary text-primary-foreground"
+                      : "bg-muted text-secondary-foreground",
                   )}
                 >
                   {chip.label}
