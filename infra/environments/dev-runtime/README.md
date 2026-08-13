@@ -2,13 +2,19 @@
 
 `dev-runtime`은 부하·배포·복구 실험을 수행할 때만 생성하는 비용 발생 State다. VPC, subnet, ECR, API 인증서, 애플리케이션 secret 컨테이너와 기존 profile image 리소스는 `dev` State에 남고, 아래 리소스만 별도로 생성·제거한다.
 
+> 현재 상태(최종 제출 시점 사용자 확인 기준): `dev-runtime`의 NAT Gateway, ALB, Backend ASG, RDS,
+> Redis, Monitoring EC2 등은 테스트 완료 후 모두 삭제되었다. 아래 내용은 실행 중인 runtime의
+> 운영 현황이 아니라, 동일한 실험을 다시 수행할 때 사용하는 재생성 runbook이다.
+
 - NAT Gateway 1개와 app private subnet 기본 경로
 - Internet-facing ALB와 Target Group
 - private EC2 ASG `2/2/4`, Launch Template, CPU 60% Target Tracking
 - PostgreSQL 17 Single-AZ RDS와 Redis OSS 7.1 단일 노드
 - Monitoring EC2의 Prometheus·Loki·Grafana와 Backend EC2의 Grafana Alloy
 
-이 Issue의 첫 인계 범위는 `plan`까지다. `apply`, smoke test, 부하 실험, `destroy`는 각각 별도 승인 후 실행한다.
+재생성 시 `plan`을 먼저 검토한다. `apply`, smoke test, 부하 실험, `destroy` 중 실제 AWS
+리소스를 변경하는 단계는 변경 범위와 비용을 확인한 뒤 별도 승인 후 실행한다. 현재 상태에서는
+이 문서의 명령을 읽거나 정적 검증하는 것만으로 AWS 리소스가 다시 생성되지는 않는다.
 
 ## 사전 조건
 
@@ -37,16 +43,37 @@ RDS master password와 Redis auth token은 Terraform/AWS가 생성한다. Launch
 
 `backend.hcl.example`과 `terraform.tfvars.example`을 복사한 로컬 파일은 커밋하지 않는다. 서울 리전에서 제공되는 PostgreSQL 17 patch 목록을 plan 직전에 조회하고, 선택한 정확한 버전을 `postgres_engine_version`에 기록한다.
 
+### AWS 계정과 원격 State 확인
+
+`plan`은 리소스를 변경하지 않지만 실제 AWS와 원격 S3 State를 조회한다. 먼저 SSO 세션,
+Account, backend bucket/key를 확인하고, 예상 계정이 아니면 진행하지 않는다.
+
+```bash
+export AWS_PROFILE=kdt-travel-terraform
+aws sso login --profile "$AWS_PROFILE"
+aws sts get-caller-identity --profile "$AWS_PROFILE"
+
+# backend.hcl의 bucket/key가 dev-runtime State를 가리키는지 확인한 뒤 초기화
+terraform -chdir=infra/environments/dev-runtime init \
+  -backend-config=backend.hcl
+```
+
+`terraform.tfvars`의 `aws_account_id`와 `get-caller-identity`의 `Account`가 다르면
+plan을 만들지 않는다. `allowed_account_ids`는 다른 계정으로의 실행을 차단하는 마지막
+보호선이지, 계정 확인을 대신하지 않는다.
+
 ```bash
 aws rds describe-db-engine-versions \
+  --profile "$AWS_PROFILE" \
   --region ap-northeast-2 \
   --engine postgres \
   --query 'DBEngineVersions[?starts_with(EngineVersion, `17.`)].EngineVersion' \
   --output text
 
-terraform init -backend-config=backend.hcl
-terraform plan -var-file=terraform.tfvars -out=dev-runtime.tfplan
-terraform show dev-runtime.tfplan
+terraform -chdir=infra/environments/dev-runtime plan \
+  -var-file=terraform.tfvars \
+  -out=dev-runtime.tfplan
+terraform -chdir=infra/environments/dev-runtime show dev-runtime.tfplan
 ```
 
 plan 검토 시 다음을 모두 확인한다.
@@ -95,16 +122,16 @@ MANUAL_BASELINE 계약이 아니다.
 계획 파일은 작업별로 고유한 이름을 사용한다. 기존 `tfplan` 파일을 덮어쓰지 않고, 아래 예시처럼 AWS profile과 `-chdir`를 항상 함께 지정한다.
 
 ```bash
-AWS_PROFILE=kdt-travel-terraform \
+AWS_PROFILE="$AWS_PROFILE" \
 terraform -chdir=infra/environments/dev-runtime \
   plan -var-file=terraform.tfvars \
   -out=dev-runtime-alloy-20260810.tfplan
 
-AWS_PROFILE=kdt-travel-terraform \
+AWS_PROFILE="$AWS_PROFILE" \
 terraform -chdir=infra/environments/dev-runtime \
   show dev-runtime-alloy-20260810.tfplan
 
-AWS_PROFILE=kdt-travel-terraform \
+AWS_PROFILE="$AWS_PROFILE" \
 terraform -chdir=infra/environments/dev-runtime \
   apply dev-runtime-alloy-20260810.tfplan
 ```
@@ -112,7 +139,7 @@ terraform -chdir=infra/environments/dev-runtime \
 설정 revision만 확인하거나 drift를 조사할 때는 refresh-only plan을 사용한다. 이 명령은 상태를 바꾸지 않는다.
 
 ```bash
-AWS_PROFILE=kdt-travel-terraform \
+AWS_PROFILE="$AWS_PROFILE" \
 terraform -chdir=infra/environments/dev-runtime \
   plan -refresh-only -var-file=terraform.tfvars \
   -out=dev-runtime-alloy-refresh-20260810.tfplan
@@ -127,6 +154,28 @@ apply 후 `alb_dns_name`을 `api.kdt-travelplanner.protove.net`의 Cloudflare DN
 ## 실험 종료와 비용 차단
 
 `destroy`는 RDS 데이터와 Redis cache를 제거하며 final snapshot을 만들지 않는다. 합성 seed로 재생성할 수 있는지 확인하고 별도 승인을 받은 뒤 `dev-runtime` 디렉터리에서만 수행한다. 이후 NAT Gateway, ALB, ASG, RDS, Redis가 제거됐는지와 `dev` State의 VPC, ECR, profile image 리소스가 남아 있는지를 함께 확인한다.
+
+실제 종료 순서는 먼저 destroy plan을 저장하고 변경 범위를 검토한 뒤, 별도 승인 후 저장된
+plan만 적용한다. `terraform destroy`를 직접 실행하거나 `-target`으로 일부만 지우지 않는다.
+
+```bash
+AWS_PROFILE="$AWS_PROFILE" \
+terraform -chdir=infra/environments/dev-runtime plan -destroy \
+  -var-file=terraform.tfvars \
+  -out=dev-runtime-destroy-20260813.tfplan
+
+terraform -chdir=infra/environments/dev-runtime show \
+  dev-runtime-destroy-20260813.tfplan
+
+# 별도 승인 후에만 실행
+AWS_PROFILE="$AWS_PROFILE" \
+terraform -chdir=infra/environments/dev-runtime apply \
+  dev-runtime-destroy-20260813.tfplan
+
+# 적용 후 State가 비었는지와 dev State가 유지되는지 확인
+terraform -chdir=infra/environments/dev-runtime state list
+terraform -chdir=infra/environments/dev state list
+```
 
 ## 장애 확인
 
