@@ -46,6 +46,7 @@ class NaverOAuthClient(
 			.queryParam("redirect_uri", properties.redirectUri)
 			.queryParam("response_type", "code")
 			.queryParam("state", state)
+			.queryParam("auth_type", "reprompt")
 			.build()
 			.encode()
 			.toUri()

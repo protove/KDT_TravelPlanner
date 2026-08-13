@@ -49,6 +49,7 @@ class NaverOAuthClientTest {
 		assertEquals(CALLBACK_URL, parameters.getFirst("redirect_uri"))
 		assertEquals("code", parameters.getFirst("response_type"))
 		assertEquals("opaque-state", parameters.getFirst("state"))
+		assertEquals("reprompt", parameters.getFirst("auth_type"))
 	}
 
 	@Test

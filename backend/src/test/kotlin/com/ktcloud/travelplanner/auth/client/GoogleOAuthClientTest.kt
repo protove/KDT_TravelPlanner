@@ -49,6 +49,7 @@ class GoogleOAuthClientTest {
 		assertEquals("code", parameters.getFirst("response_type"))
 		assertEquals("openid%20email%20profile", parameters.getFirst("scope"))
 		assertEquals("opaque-state", parameters.getFirst("state"))
+		assertEquals("select_account", parameters.getFirst("prompt"))
 	}
 
 	@Test

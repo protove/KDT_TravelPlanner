@@ -42,6 +42,7 @@ class GoogleOAuthClient(
 			.queryParam("response_type", "code")
 			.queryParam("scope", SCOPES.joinToString(" "))
 			.queryParam("state", state)
+			.queryParam("prompt", "select_account")
 			.build()
 			.encode()
 			.toUri()
