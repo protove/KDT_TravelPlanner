@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+dnf install -y docker git python3-pip
+systemctl enable --now docker
+
+# The Runner must execute the exact reviewed source commit. The repository is
+# public, so no GitHub credential is placed on the instance. The SHA is an
+# immutable provenance input supplied by the operator at apply time.
+install -d -m 0755 /opt
+if [[ ! -d /opt/travel-planner/.git ]]; then
+  git clone --filter=blob:none --no-checkout '${source_repository_url}' /opt/travel-planner
+fi
+git -C /opt/travel-planner fetch --depth 1 origin '${source_commit_sha}'
+git -C /opt/travel-planner checkout --detach '${source_commit_sha}'
+actual_source_sha="$(git -C /opt/travel-planner rev-parse HEAD)"
+if [[ "$actual_source_sha" != '${source_commit_sha}' ]]; then
+  echo "source commit verification failed" >&2
+  exit 1
+fi
+
+# botocore-only (no full boto3) install: the seed/cleanup scripts sign their
+# own ElastiCache Redis IAM auth tokens. Pin the version so the signer API does
+# not drift between ephemeral Runner instances.
+pip3 install --no-cache-dir 'botocore==${botocore_version}'
+
+# Pull the pinned k6 image once during bootstrap so a B-01 run is not
+# blocked on a registry pull. A version change is delivered through a new
+# EC2 (user_data_replace_on_change = true), matching the monitoring EC2
+# bootstrap pattern.
+docker pull '${k6_image_reference}'
+
+# ── Evidence 작업 디렉터리 ───────────────────────────────────────
+# scripts/loadtest/aws/(Plan 03에서 추가될 오케스트레이션)가 이 경로 아래에
+# raw k6 결과, metadata, operations.jsonl을 쓰고 S3로 업로드한다. 이 모듈은
+# 디렉터리만 준비하고, 실행/업로드 로직은 만들지 않는다.
+install -d -m 0755 /var/lib/travel-planner/load-test-evidence
+
+# ── Region 설정 ─────────────────────────────────────────────────
+# Plan 03 오케스트레이션 스크립트(SSM Run Command로 실행)가 aws-cli 호출 시
+# 참조할 고정 region. monitoring_ec2의 user-data가 aws_region을 넘기는 것과
+# 같은 패턴이며, 이 모듈 자체는 이 값을 다른 용도로 사용하지 않는다.
+install -d -m 0755 /etc/travel-planner
+printf 'AWS_DEFAULT_REGION=%s\nLOAD_TEST_SOURCE_REPOSITORY=%s\nLOAD_TEST_SOURCE_REF=%s\n' \
+  '${aws_region}' '${source_repository_url}' '${source_commit_sha}' > /etc/travel-planner/load-runner.env

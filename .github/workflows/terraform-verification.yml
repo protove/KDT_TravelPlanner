@@ -58,6 +58,8 @@ jobs:
           - infra/modules/runtime_security
           - infra/modules/backend_data
           - infra/modules/backend_service
+          - infra/modules/monitoring_ec2
+          - infra/modules/load_test_runner
     steps:
       - name: Check out repository
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -93,6 +95,8 @@ jobs:
           - infra/modules/runtime_security
           - infra/modules/backend_data
           - infra/modules/backend_service
+          - infra/modules/monitoring_ec2
+          - infra/modules/load_test_runner
     steps:
       - name: Check out repository
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -144,7 +148,9 @@ jobs:
             infra/modules/github_frontend_deployer \
             infra/modules/runtime_security \
             infra/modules/backend_data \
-            infra/modules/backend_service
+            infra/modules/backend_service \
+            infra/modules/monitoring_ec2 \
+            infra/modules/load_test_runner
           do
             tflint \
               --config="${GITHUB_WORKSPACE}/infra/.tflint.hcl" \
