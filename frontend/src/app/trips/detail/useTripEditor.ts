@@ -11,7 +11,7 @@ import { fetchCountries, fetchCitiesByCountry, type Country, type City } from "@
 import { fetchTravelMembers, updateMemberRole, removeMember, leaveTravel, type TravelMember } from "@/lib/api/members";
 import { createInvitation, cancelInvitation } from "@/lib/api/invitations";
 import { toTravelRole } from "@/lib/api/permission";
-import { createTimelineItem, updateTimelineItem, deleteTimelineItem } from "@/lib/api/timelineItems";
+import { createTimelineItem, updateTimelineItem, deleteTimelineItem, updateTimelineItemOrder } from "@/lib/api/timelineItems";
 import { ApiError } from "@/lib/api/client";
 import type { Permission } from "@/components/molecules/PermissionSelect";
 import {
@@ -258,6 +258,50 @@ export function useTripEditor(id: string | undefined, accessToken: string | null
       }
     }
 
+    // 1.5) 같은 날짜 안에서 카드 순서만 바뀐 경우(드래그앤드롭) 전용 처리.
+    // 아래 3)의 개별 PATCH를 순서 바뀐 항목마다 하나씩 순차 호출하면, 예를 들어 A를 2번으로 옮기는
+    // 순간 원래 2번이던 B와 잠깐 겹쳐서 409(같은 일차에 방문 순서 중복)가 난다 — 실제로 드래그로
+    // 순서를 바꾸고 저장했을 때 이 에러가 재현됐다. 백엔드에 임시 순번을 거쳐 안전하게 스왑해주는
+    // 전용 엔드포인트(PATCH .../timeline-items/order)가 있어서, 그 날짜의 항목 구성 자체는 안 바뀌고
+    // (추가/삭제/다른 날짜로 이동 없음) 순서만 바뀐 경우엔 그걸로 한 번에 반영한다.
+    // orderSyncedIds에 담아두면 아래 3)에서 이 항목들의 visitOrder는 "이미 반영됨"으로 보고 다시 PATCH하지 않는다.
+    // startChanged(여행 시작일 자체가 바뀌는 경우)엔 2)에서 dayNumber를 통째로 비웠다 3)에서 다시 채우므로
+    // "같은 날짜 안에서의 순서 변경"이라는 전제가 깨져서 여기서 처리하지 않는다(기존 순차 PATCH 경로로 감).
+    const orderSyncedIds = new Set<string>();
+    if (!startChanged) {
+      const groupByDay = (items: TimelineItem[]) => {
+        const map = new Map<number, TimelineItem[]>();
+        for (const item of items) {
+          if (item.dayNumber == null) continue;
+          const group = map.get(item.dayNumber) ?? [];
+          group.push(item);
+          map.set(item.dayNumber, group);
+        }
+        return map;
+      };
+      const originalByDay = groupByDay(original);
+      const draftByDay = groupByDay(draft);
+      for (const [dayNumber, draftDayItems] of draftByDay) {
+        const originalDayItems = originalByDay.get(dayNumber);
+        if (!originalDayItems || originalDayItems.length !== draftDayItems.length) continue;
+        const originalDayIds = new Set(originalDayItems.map((item) => item.timelineItemId));
+        const sameMembership = draftDayItems.every((item) => originalDayIds.has(item.timelineItemId));
+        if (!sameMembership) continue;
+        const originalById_ = new Map(originalDayItems.map((item) => [item.timelineItemId, item]));
+        const orderChanged = draftDayItems.some(
+          (item) => originalById_.get(item.timelineItemId)!.visitOrder !== item.visitOrder
+        );
+        if (!orderChanged) continue;
+        await updateTimelineItemOrder(
+          accessToken,
+          id,
+          dayNumber,
+          draftDayItems.map((item) => ({ itemId: item.timelineItemId, visitOrder: item.visitOrder }))
+        );
+        draftDayItems.forEach((item) => orderSyncedIds.add(item.timelineItemId));
+      }
+    }
+
     // 2) 시작일이 바뀌면, 살아남는 기존 배정 항목을 일단 전부 미배정으로 비워서 여행 PATCH의
     //    "모든 기존 항목이 새 시작일과 이미 맞아야 한다" 검사를 통과시킨다. 최종 배정은 3)에서 다시 채운다.
     if (startChanged) {
@@ -281,6 +325,8 @@ export function useTripEditor(id: string | undefined, accessToken: string | null
       }
       const original_ = originalById.get(item.timelineItemId);
       if (!original_) continue;
+      // visitOrder는 1.5)에서 이미 안전하게 반영한 항목이면 여기서 또 비교 대상으로 안 삼는다 —
+      // 그대로 두면 값 자체는 이미 맞는데도 "바뀜"으로 잡혀서 불필요한 PATCH가 한 번 더 나간다.
       const changed =
         original_.dayNumber !== item.dayNumber ||
         original_.visitDate !== item.visitDate ||
@@ -288,7 +334,7 @@ export function useTripEditor(id: string | undefined, accessToken: string | null
         original_.foodSubcategory !== item.foodSubcategory ||
         original_.name !== item.name ||
         original_.memo !== item.memo ||
-        original_.visitOrder !== item.visitOrder ||
+        (!orderSyncedIds.has(item.timelineItemId) && original_.visitOrder !== item.visitOrder) ||
         original_.cityId !== item.cityId ||
         original_.googlePlaceId !== item.googlePlaceId;
       if (changed) {
