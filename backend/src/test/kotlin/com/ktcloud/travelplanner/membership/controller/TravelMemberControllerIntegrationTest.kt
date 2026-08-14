@@ -42,7 +42,7 @@ class TravelMemberControllerIntegrationTest(
 	@Autowired private val objectMapper: ObjectMapper,
 ) {
 	@Test
-	fun `owner and accepted members are returned with owner first while other statuses are excluded`() {
+	fun `owner accepted members and pending invitations are returned while rejected invitations are excluded`() {
 		val owner = saveUser("members-owner")
 		val readOnlyUser = saveUser("members-reader")
 		val readWriteUser = saveUser("members-writer")
@@ -57,7 +57,7 @@ class TravelMemberControllerIntegrationTest(
 		val result = getMembers(travel, owner)
 			.andExpect {
 				status { isOk() }
-				jsonPath("$.data.length()", equalTo(3))
+				jsonPath("$.data.length()", equalTo(4))
 				jsonPath("$.data[0].userId", equalTo(owner.id.toString()))
 				jsonPath("$.data[0].role", equalTo("OWNER"))
 				jsonPath("$.data[0].isOwner", equalTo(true))
@@ -66,9 +66,14 @@ class TravelMemberControllerIntegrationTest(
 
 		val members = objectMapper.readTree(result.response.contentAsString).path("data")
 		val actualMemberIds = members.drop(1).map { it.path("userId").asText() }
-		val expectedMemberIds = listOf(readOnlyUser.id.toString(), readWriteUser.id.toString()).sorted()
+		val expectedMemberIds =
+			listOf(readOnlyUser.id.toString(), readWriteUser.id.toString(), pendingUser.id.toString()).sorted()
 		assertEquals(expectedMemberIds, actualMemberIds)
 		assertEquals(setOf("READ_ONLY", "READ_WRITE"), members.drop(1).map { it.path("role").asText() }.toSet())
+		assertEquals(
+			listOf("ACCEPTED", "ACCEPTED", "PENDING"),
+			members.drop(1).map { it.path("status").asText() }.sorted(),
+		)
 	}
 
 	@Test

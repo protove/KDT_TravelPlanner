@@ -4,6 +4,17 @@ on:
   push:
     branches:
       - main
+  workflow_dispatch:
+    inputs:
+      release_target:
+        description: Component to verify and release from the selected main commit
+        required: true
+        default: all
+        type: choice
+        options:
+          - frontend
+          - backend
+          - all
 
 permissions:
   contents: read
@@ -48,18 +59,32 @@ jobs:
         env:
           BASE_SHA: ${{ github.event.before }}
           HEAD_SHA: ${{ github.sha }}
+          RELEASE_EVENT: ${{ github.event_name }}
+          RELEASE_TARGET: ${{ inputs.release_target }}
         run: |
-          test -n "${BASE_SHA}"
           test -n "${HEAD_SHA}"
-          test "${BASE_SHA}" != "0000000000000000000000000000000000000000"
           classification_file="${RUNNER_TEMP}/release-change-classification.txt"
-          .github/scripts/classify-main-release-changes.sh "${BASE_SHA}" "${HEAD_SHA}" \
-            | tee "${classification_file}" >> "${GITHUB_OUTPUT}"
+
+          if [[ "${RELEASE_EVENT}" == "workflow_dispatch" ]]; then
+            test -n "${RELEASE_TARGET}"
+            .github/scripts/classify-main-release-changes.sh \
+              --release-target "${RELEASE_TARGET}" \
+              | tee "${classification_file}" >> "${GITHUB_OUTPUT}"
+          else
+            test -n "${BASE_SHA}"
+            test "${BASE_SHA}" != "0000000000000000000000000000000000000000"
+            .github/scripts/classify-main-release-changes.sh "${BASE_SHA}" "${HEAD_SHA}" \
+              | tee "${classification_file}" >> "${GITHUB_OUTPUT}"
+          fi
 
           {
             echo "### Release change classification"
-            echo "- Base: `${BASE_SHA}`"
             echo "- Head: `${HEAD_SHA}`"
+            if [[ "${RELEASE_EVENT}" == "workflow_dispatch" ]]; then
+              echo "- Manual target: `${RELEASE_TARGET}`"
+            else
+              echo "- Base: `${BASE_SHA}`"
+            fi
             echo
             echo '```text'
             cat "${classification_file}"
