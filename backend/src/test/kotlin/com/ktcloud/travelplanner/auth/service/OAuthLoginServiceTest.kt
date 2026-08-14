@@ -7,7 +7,6 @@ import com.ktcloud.travelplanner.auth.config.OAuthFlowProperties
 import com.ktcloud.travelplanner.user.model.OAuthProvider
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
-import org.mockito.ArgumentMatchers.any
 import org.mockito.Mockito.clearInvocations
 import org.mockito.Mockito.mock
 import org.mockito.Mockito.verify
@@ -120,7 +119,14 @@ class OAuthLoginServiceTest {
 		)
 		`when`(stateService.consume(STATE, STATE, OAuthProvider.GOOGLE))
 			.thenReturn(ConsumedOAuthState("$FRONTEND_REDIRECT_URL?from=login"))
-		`when`(providerClient.fetchUserProfile(any(OAuthAuthorizationGrant::class.java)))
+		`when`(
+			providerClient.fetchUserProfile(
+				OAuthAuthorizationGrant(
+					authorizationCode = "provider-code",
+					state = STATE,
+				),
+			),
+		)
 			.thenReturn(profile)
 		`when`(userService.upsert(profile))
 			.thenThrow(NicknameAssignmentFailedException(RuntimeException("nickname conflict")))
