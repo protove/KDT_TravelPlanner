@@ -109,6 +109,10 @@ assert_flags "document" "$(new_path_case "document" reference/strategy/ci-cd/exa
   'run_frontend_verify=false' 'run_backend_verify=false' 'run_compose_verify=false' \
   'deploy_frontend=false' 'publish_backend=false' 'classification_error=false'
 
+assert_flags "readme-asset" "$(new_path_case "readme-asset" docs/readme-assets/readme-cover.svg)" \
+  'run_frontend_verify=false' 'run_backend_verify=false' 'run_compose_verify=false' \
+  'deploy_frontend=false' 'publish_backend=false' 'classification_error=false'
+
 assert_flags "ignored-document" "$(new_path_case "ignored-document" .gitignore)" \
   'run_frontend_verify=false' 'run_backend_verify=false' 'run_compose_verify=false' \
   'deploy_frontend=false' 'publish_backend=false' 'classification_error=false'
@@ -130,6 +134,23 @@ git -C "${test_repo}" commit -qm "rename frontend file to backend"
 assert_flags "rename" "$(cd "${test_repo}" && "${classifier}" "${base_commit}" "$(git rev-parse HEAD)")" \
   'run_frontend_verify=true' 'run_backend_verify=true' 'run_compose_verify=true' \
   'deploy_frontend=true' 'publish_backend=true' 'classification_error=false'
+
+assert_flags "manual-frontend" "$("${classifier}" --release-target frontend)" \
+  'run_frontend_verify=true' 'run_backend_verify=false' 'run_compose_verify=false' \
+  'deploy_frontend=true' 'publish_backend=false' 'classification_error=false'
+
+assert_flags "manual-backend" "$("${classifier}" --release-target backend)" \
+  'run_frontend_verify=false' 'run_backend_verify=true' 'run_compose_verify=true' \
+  'deploy_frontend=false' 'publish_backend=true' 'classification_error=false'
+
+assert_flags "manual-all" "$("${classifier}" --release-target all)" \
+  'run_frontend_verify=true' 'run_backend_verify=true' 'run_compose_verify=true' \
+  'deploy_frontend=true' 'publish_backend=true' 'classification_error=false'
+
+if "${classifier}" --release-target unsupported >/dev/null 2>&1; then
+  echo "unsupported manual release target should fail" >&2
+  exit 1
+fi
 
 if "${classifier}" "missing-base" "${base_commit}" >/dev/null 2>&1; then
   echo "invalid SHA should fail" >&2
