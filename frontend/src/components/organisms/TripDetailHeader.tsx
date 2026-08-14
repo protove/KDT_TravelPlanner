@@ -16,13 +16,19 @@ export interface TripDetailHeaderProps {
 function TripDetailHeader({ title, start, end, onEditTitle, onEditDates, className }: TripDetailHeaderProps) {
   return (
     <div className={cn("flex flex-wrap items-center justify-between gap-3", className)}>
-      <button type="button" onClick={onEditTitle} className="group flex cursor-pointer items-center gap-2">
-        <h1 className="text-2xl font-bold text-foreground">{title}</h1>
+      <button
+        type="button"
+        onClick={onEditTitle}
+        className="group flex min-w-0 cursor-pointer items-center gap-2"
+      >
+        <h1 className="truncate text-2xl font-bold text-foreground" title={title}>
+          {title}
+        </h1>
         <Icon
           icon={Pencil}
           size="sm"
           aria-label="제목 수정"
-          className="text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100"
+          className="shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100"
         />
       </button>
 

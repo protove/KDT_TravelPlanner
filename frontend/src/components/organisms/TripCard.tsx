@@ -113,8 +113,10 @@ function TripCard({
       />
       <div className="p-4">
         <div className="flex items-start justify-between gap-2.5">
-          <div>
-            <div className="text-base font-bold text-foreground">{title}</div>
+          <div className="min-w-0">
+            <div className="truncate text-base font-bold text-foreground" title={title}>
+              {title}
+            </div>
             <div className="mt-0.5 text-sm text-muted-foreground">{dates}</div>
           </div>
           {role ? (

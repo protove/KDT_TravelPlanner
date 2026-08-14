@@ -18,6 +18,7 @@ import {
   SelectValue,
 } from "@/components/atoms/Select";
 import { cn } from "@/lib/utils";
+import { PLACE_NAME_MAX_LENGTH, FOOD_SUBCATEGORY_MAX_LENGTH, PLACE_NOTE_MAX_LENGTH } from "@/lib/validation/text";
 
 export const TIMELINE_CATEGORY_OPTIONS = [
   "관광지",
@@ -47,6 +48,7 @@ export interface PlaceModalProps {
   title: string;
   name: string;
   onNameChange: (value: string) => void;
+  nameError?: string | null;
   note: string;
   onNoteChange: (value: string) => void;
   category: TimelineCategoryOption;
@@ -72,6 +74,7 @@ function PlaceModal({
   title,
   name,
   onNameChange,
+  nameError,
   note,
   onNoteChange,
   category,
@@ -108,7 +111,8 @@ function PlaceModal({
                     key={result.placeId}
                     type="button"
                     onClick={() => onSelectPlaceResult?.(result)}
-                    className="cursor-pointer rounded-md px-2.5 py-1.5 text-left text-sm text-foreground hover:bg-muted"
+                    title={result.name}
+                    className="block w-full cursor-pointer truncate rounded-md px-2.5 py-1.5 text-left text-sm text-foreground hover:bg-muted"
                   >
                     {result.name}
                   </button>
@@ -119,13 +123,20 @@ function PlaceModal({
         )}
 
         {mode === "add" && (
-          <Input
-            placeholder="장소 이름"
-            value={name}
-            onChange={(e) => onNameChange(e.target.value)}
-            disabled={readOnly}
-            className="disabled:cursor-default disabled:opacity-100"
-          />
+          <div>
+            <Input
+              placeholder="장소 이름"
+              value={name}
+              maxLength={PLACE_NAME_MAX_LENGTH}
+              onChange={(e) => onNameChange(e.target.value)}
+              disabled={readOnly}
+              className="disabled:cursor-default disabled:opacity-100"
+            />
+            <p className="mt-1 text-xs text-muted-foreground">
+              {name.length}/{PLACE_NAME_MAX_LENGTH}
+            </p>
+            {nameError && <p className="mt-1 text-sm text-destructive">{nameError}</p>}
+          </div>
         )}
 
         <Select
@@ -146,22 +157,34 @@ function PlaceModal({
         </Select>
 
         {category === "음식" && onFoodSubcategoryChange && (
-          <Input
-            placeholder="음식 종류 (예: 라멘, 스시)"
-            value={foodSubcategory}
-            onChange={(e) => onFoodSubcategoryChange(e.target.value)}
-            disabled={readOnly}
-            className="disabled:cursor-default disabled:opacity-100"
-          />
+          <div>
+            <Input
+              placeholder="음식 종류 (예: 라멘, 스시)"
+              value={foodSubcategory}
+              maxLength={FOOD_SUBCATEGORY_MAX_LENGTH}
+              onChange={(e) => onFoodSubcategoryChange(e.target.value)}
+              disabled={readOnly}
+              className="disabled:cursor-default disabled:opacity-100"
+            />
+            <p className="mt-1 text-xs text-muted-foreground">
+              {foodSubcategory.length}/{FOOD_SUBCATEGORY_MAX_LENGTH}
+            </p>
+          </div>
         )}
 
-        <Textarea
-          placeholder="이 장소에서 뭘 할지 적어보세요"
-          value={note}
-          onChange={(e) => onNoteChange(e.target.value)}
-          className="h-[70px] resize-none disabled:cursor-default disabled:opacity-100"
-          disabled={readOnly}
-        />
+        <div>
+          <Textarea
+            placeholder="이 장소에서 뭘 할지 적어보세요"
+            value={note}
+            maxLength={PLACE_NOTE_MAX_LENGTH}
+            onChange={(e) => onNoteChange(e.target.value)}
+            className="h-[70px] resize-none disabled:cursor-default disabled:opacity-100"
+            disabled={readOnly}
+          />
+          <p className="mt-1 text-xs text-muted-foreground">
+            {note.length}/{PLACE_NOTE_MAX_LENGTH}
+          </p>
+        </div>
 
         {mode === "edit" && dateChips && dateChips.length > 0 && (
           <div>

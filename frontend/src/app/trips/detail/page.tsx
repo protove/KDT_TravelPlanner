@@ -21,6 +21,7 @@ import { DetailLayout } from "@/components/templates/DetailLayout";
 import { TripDetailPageSkeleton } from "@/components/templates/TripDetailPageSkeleton";
 import { useAuthStore } from "@/lib/stores/useAuthStore";
 import { toPermission, type TravelRole } from "@/lib/api/permission";
+import { TITLE_MAX_LENGTH, DESCRIPTION_MAX_LENGTH } from "@/lib/validation/text";
 
 import { COMPANION_OPTIONS, UUID_PATTERN, getDateTabs } from "./utils";
 import { useTripEditor } from "./useTripEditor";
@@ -101,6 +102,8 @@ function TripDetailContent() {
     setAddingPlace,
     placeDraftName,
     setPlaceDraftName,
+    placeNameError,
+    setPlaceNameError,
     placeDraftNote,
     setPlaceDraftNote,
     placeDraftCategory,
@@ -221,6 +224,7 @@ React.useEffect(() => {
                   <Input
                     autoFocus
                     value={titleDraft}
+                    maxLength={TITLE_MAX_LENGTH}
                     onChange={(e) => setTitleDraft(e.target.value)}
                     className="h-auto w-auto text-2xl font-bold"
                   />
@@ -253,6 +257,11 @@ React.useEffect(() => {
                   </>
                 )}
               </div>
+              {isEditingInfo && (
+                <p className="mt-1 text-xs text-muted-foreground">
+                  {titleDraft.length}/{TITLE_MAX_LENGTH}
+                </p>
+              )}
               {infoSaveError && <p className="mt-1 text-xs text-destructive">{infoSaveError}</p>}
               <div className="mt-1.5 flex">
                 {travelMembers
@@ -398,12 +407,18 @@ React.useEffect(() => {
           <div>
             <div className="mb-2 text-sm font-bold text-foreground">여행 설명</div>
             {isEditingInfo ? (
-              <Textarea
-                placeholder="이번 여행에 대해 간단히 소개해보세요"
-                value={description}
-                onChange={(e) => setDescription(e.target.value)}
-                className="h-[90px]"
-              />
+              <div>
+                <Textarea
+                  placeholder="이번 여행에 대해 간단히 소개해보세요"
+                  value={description}
+                  maxLength={DESCRIPTION_MAX_LENGTH}
+                  onChange={(e) => setDescription(e.target.value)}
+                  className="h-[90px]"
+                />
+                <p className="mt-1 text-xs text-muted-foreground">
+                  {description.length}/{DESCRIPTION_MAX_LENGTH}
+                </p>
+              </div>
             ) : (
               <p className="text-sm text-muted-foreground">{description || "이번 여행에 대해 간단히 소개해보세요"}</p>
             )}
@@ -425,7 +440,11 @@ React.useEffect(() => {
         mode={editingPlace ? "edit" : "add"}
         title={editingPlace ? editingPlace.name : "목적지 추가"}
         name={placeDraftName}
-        onNameChange={setPlaceDraftName}
+        onNameChange={(value) => {
+          setPlaceDraftName(value);
+          setPlaceNameError(null);
+        }}
+        nameError={placeNameError}
         note={placeDraftNote}
         onNoteChange={setPlaceDraftNote}
         category={placeDraftCategory}
@@ -444,6 +463,7 @@ React.useEffect(() => {
         )}
         onSelectPlaceResult={(result) => {
           setPlaceDraftName(result.name);
+          setPlaceNameError(null);
           setSelectedGooglePlaceId(result.placeId);
           setSelectedPlaceCoords({ lat: result.latitude, lng: result.longitude });
           setPlaceQuery("");
