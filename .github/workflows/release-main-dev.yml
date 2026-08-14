@@ -172,6 +172,7 @@ jobs:
       - detect-changes
       - release-gate
     if: >-
+      always() &&
       needs.release-gate.result == 'success' &&
       (
         (
@@ -194,6 +195,7 @@ jobs:
       - detect-changes
       - release-gate
     if: >-
+      always() &&
       needs.release-gate.result == 'success' &&
       (
         (
