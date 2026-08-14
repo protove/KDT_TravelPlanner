@@ -22,9 +22,10 @@ class NicknameGeneratorTest {
 
 		val nickname = generator.generate()
 
-		assertTrue(nicknamePattern.matches(nickname)) {
-			"unexpected nickname format: $nickname"
-		}
+		assertTrue(
+			nicknamePattern.matches(nickname),
+			"unexpected nickname format: $nickname",
+		)
 	}
 
 	@Test
@@ -34,9 +35,10 @@ class NicknameGeneratorTest {
 
 		val nickname = generator.generate()
 
-		assertTrue(nicknamePattern.matches(nickname)) {
-			"unexpected nickname format: $nickname"
-		}
+		assertTrue(
+			nicknamePattern.matches(nickname),
+			"unexpected nickname format: $nickname",
+		)
 		verify(userRepository, times(3)).existsByNickname(anyString())
 	}
 
