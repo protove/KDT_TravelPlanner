@@ -79,11 +79,11 @@ jobs:
 
           {
             echo "### Release change classification"
-            echo "- Head: `${HEAD_SHA}`"
+            printf -- '- Head: `%s`\n' "${HEAD_SHA}"
             if [[ "${RELEASE_EVENT}" == "workflow_dispatch" ]]; then
-              echo "- Manual target: `${RELEASE_TARGET}`"
+              printf -- '- Manual target: `%s`\n' "${RELEASE_TARGET}"
             else
-              echo "- Base: `${BASE_SHA}`"
+              printf -- '- Base: `%s`\n' "${BASE_SHA}"
             fi
             echo
             echo '```text'
@@ -172,8 +172,17 @@ jobs:
       - detect-changes
       - release-gate
     if: >-
-      needs.detect-changes.outputs.deploy_frontend == 'true' &&
-      needs.release-gate.result == 'success'
+      needs.release-gate.result == 'success' &&
+      (
+        (
+          github.event_name == 'workflow_dispatch' &&
+          (inputs.release_target == 'frontend' || inputs.release_target == 'all')
+        ) ||
+        (
+          github.event_name != 'workflow_dispatch' &&
+          needs.detect-changes.outputs.deploy_frontend == 'true'
+        )
+      )
     uses: ./.github/workflows/frontend-deploy-dev.yml
     permissions:
       contents: read
@@ -185,8 +194,17 @@ jobs:
       - detect-changes
       - release-gate
     if: >-
-      needs.detect-changes.outputs.publish_backend == 'true' &&
-      needs.release-gate.result == 'success'
+      needs.release-gate.result == 'success' &&
+      (
+        (
+          github.event_name == 'workflow_dispatch' &&
+          (inputs.release_target == 'backend' || inputs.release_target == 'all')
+        ) ||
+        (
+          github.event_name != 'workflow_dispatch' &&
+          needs.detect-changes.outputs.publish_backend == 'true'
+        )
+      )
     uses: ./.github/workflows/backend-deploy-dev.yml
     permissions:
       contents: read
