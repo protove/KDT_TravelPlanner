@@ -89,6 +89,10 @@ assert_flags "terraform" "$(new_path_case "terraform" infra/modules/backend_serv
   'run_frontend_verify=false' 'run_backend_verify=false' 'run_compose_verify=false' \
   'deploy_frontend=false' 'publish_backend=false' 'classification_error=false'
 
+assert_flags "k8s" "$(new_path_case "k8s" k8s/new-manifest.yaml)" \
+  'run_frontend_verify=false' 'run_backend_verify=false' 'run_compose_verify=false' \
+  'deploy_frontend=false' 'publish_backend=false' 'classification_error=false'
+
 assert_flags "release-workflow" "$(new_path_case "release-workflow" .github/workflows/release-main-dev.yml)" \
   'run_frontend_verify=true' 'run_backend_verify=true' 'run_compose_verify=true' \
   'deploy_frontend=false' 'publish_backend=false' 'classification_error=false'
