@@ -13,9 +13,9 @@ mock_provider "aws" {
 variables {
   bucket_name = "kdt-travelplanner-tfstate-123456789012-ap-northeast-2"
   state_keys = [
-    "bootstrap/terraform.tfstate",
     "dev/terraform.tfstate",
-    "prod/terraform.tfstate",
+    "dev-load-test/terraform.tfstate",
+    "dev-runtime/terraform.tfstate",
   ]
 }
 
@@ -69,5 +69,14 @@ run "state_access_policy_is_least_privilege" {
   assert {
     condition     = alltrue([for resource in data.aws_iam_policy_document.state_access.statement[2].resources : endswith(resource, ".tflock")])
     error_message = "DeleteObject permissions must be scoped to .tflock objects."
+  }
+
+  assert {
+    condition = toset(data.aws_iam_policy_document.state_access.statement[1].resources) == toset([
+      "arn:aws:s3:::kdt-travelplanner-tfstate-123456789012-ap-northeast-2/dev/terraform.tfstate",
+      "arn:aws:s3:::kdt-travelplanner-tfstate-123456789012-ap-northeast-2/dev-load-test/terraform.tfstate",
+      "arn:aws:s3:::kdt-travelplanner-tfstate-123456789012-ap-northeast-2/dev-runtime/terraform.tfstate",
+    ])
+    error_message = "Day-to-day State access must include only dev, dev-runtime and dev-load-test State objects."
   }
 }

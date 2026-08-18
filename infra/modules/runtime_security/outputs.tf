@@ -22,8 +22,3 @@ output "monitoring_security_group_id" {
   description = "Monitoring EC2 (Prometheus/Loki/Grafana) security group ID."
   value       = aws_security_group.monitoring.id
 }
-
-output "load_runner_security_group_id" {
-  description = "SSM-only k6 load runner security group ID."
-  value       = aws_security_group.load_runner.id
-}

@@ -7,9 +7,8 @@ module "terraform_state_backend" {
 
   bucket_name = local.state_bucket_name
   state_keys = [
-    "bootstrap/terraform.tfstate",
     "dev/terraform.tfstate",
+    "dev-load-test/terraform.tfstate",
     "dev-runtime/terraform.tfstate",
-    "prod/terraform.tfstate",
   ]
 }

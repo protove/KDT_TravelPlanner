@@ -25,14 +25,3 @@ backend_rollout_revision = "baseline"
 # backend_rollout_normal_image_uri  = "...@sha256:<previous-normal-digest>"
 # backend_rollout_fault_image_uri   = "...@sha256:<fault-digest>"
 # backend_rollout_restore_image_uri = "...@sha256:<previous-normal-digest>"
-
-# D-001-R1 후속 "Seed/Cleanup 최소권한": ARN of a dedicated, least-privilege
-# test-only DB Secret (JSON {"username":..,"password":..}), created by the
-# Infra owner separately (console or approved IaC) — never the RDS master
-# secret. See aws-load-test-handoff/decisions/DECISION_LOG.md.
-test_db_secret_arn = "arn:aws:secretsmanager:ap-northeast-2:123456789012:secret:kdt-travelplanner-dev/loadtest/db-XXXXXX"
-
-# Exact commit from the merged B-01 implementation PR. Replace before apply.
-load_runner_source_commit_sha = "0123456789abcdef0123456789abcdef01234567"
-load_runner_instance_type     = "t3.small"
-load_runner_botocore_version  = "1.43.68"

@@ -28,31 +28,6 @@ output "launch_template_id" {
   value       = module.backend_service.launch_template_id
 }
 
-output "load_runner_instance_id" {
-  description = "Load Runner EC2 instance ID, the SSM target for AWS load-test orchestration."
-  value       = module.load_test_runner.instance_id
-}
-
-output "load_runner_instance_type" {
-  description = "Applied Load Runner EC2 instance type."
-  value       = module.load_test_runner.instance_type
-}
-
-output "load_runner_source_commit_sha" {
-  description = "Exact source commit bootstrapped on the Load Runner."
-  value       = module.load_test_runner.source_commit_sha
-}
-
-output "load_test_evidence_bucket_name" {
-  description = "S3 bucket name for raw AWS load-test evidence."
-  value       = module.load_test_runner.evidence_bucket_name
-}
-
-output "load_test_evidence_operator_read_policy_arn" {
-  description = "ARN of the unattached operator read-only policy for the load-test evidence prefix."
-  value       = module.load_test_runner.evidence_operator_read_policy_arn
-}
-
 output "redis_primary_endpoint" {
   description = "Private Redis primary endpoint."
   value       = module.backend_data.redis_primary_endpoint
@@ -61,6 +36,16 @@ output "redis_primary_endpoint" {
 output "redis_load_test_user_name" {
   description = "Non-secret ElastiCache IAM RBAC username used by seed/cleanup."
   value       = module.backend_data.redis_load_test_user_name
+}
+
+output "redis_load_test_user_arn" {
+  description = "ElastiCache IAM RBAC user ARN consumed by the separately applied dev-load-test State."
+  value       = module.backend_data.redis_load_test_user_arn
+}
+
+output "redis_replication_group_arn" {
+  description = "ElastiCache replication group ARN consumed by the separately applied dev-load-test State."
+  value       = module.backend_data.redis_replication_group_arn
 }
 
 output "redis_replication_group_id" {
@@ -86,6 +71,16 @@ output "database_port" {
 output "database_identifier" {
   description = "RDS DB instance identifier used by CloudWatch dimensions."
   value       = module.backend_data.database_identifier
+}
+
+output "database_security_group_id" {
+  description = "PostgreSQL security group ID used by the separately applied dev-load-test State."
+  value       = module.runtime_security.database_security_group_id
+}
+
+output "cache_security_group_id" {
+  description = "Redis security group ID used by the separately applied dev-load-test State."
+  value       = module.runtime_security.cache_security_group_id
 }
 
 output "target_group_arn" {

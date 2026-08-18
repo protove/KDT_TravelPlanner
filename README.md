@@ -7,7 +7,7 @@ Full-stack 서비스입니다. Next.js 프런트엔드와 Spring Boot Kotlin 백
 ![KDT Travel Diary의 제품 흐름과 현재 AWS 상태](docs/readme-assets/readme-cover.png)
 
 > 이 문서는 최종 제출 시점의 사용자 확인 기준으로 작성했습니다. `dev`는 유지 중인 환경이고,
-> 테스트용 `dev-runtime`은 실험이 끝난 뒤 전체 삭제되었습니다. 아래 runbook은 필요할 때
+> EC2 `dev-runtime`은 실험이 끝난 뒤 전체 삭제되었습니다. 아래 runbook은 필요할 때
 > 같은 실험 환경을 재생성하기 위한 절차입니다.
 
 ## 목차
@@ -87,19 +87,22 @@ Browser
 
 ### AWS State 경계
 
-![유지 중인 dev와 테스트 후 삭제된 dev-runtime의 독립 Terraform State](docs/readme-assets/aws-dev-architecture.png)
+![dev, EC2 dev-runtime, 종속 dev-load-test의 독립 Terraform State](docs/readme-assets/aws-dev-architecture.png)
 
 | Root/State | 현재 의미 | 주요 범위 |
 | --- | --- | --- |
 | `infra/bootstrap` | State S3 최초 생성용 | S3 backend와 최소 접근 정책 |
 | `infra/environments/dev` | **유지 중인 환경** | 정적 Frontend S3/CloudFront, profile image, VPC 기반, ECR, GitHub OIDC 역할, Secrets Manager |
-| `infra/environments/dev-runtime` | **테스트 후 전체 삭제** | NAT, ALB, Backend EC2 ASG, RDS, Redis, Monitoring EC2 등 비용 발생 runtime |
+| `infra/environments/dev-runtime` | **EC2 Runtime, 현재 리소스 없음** | NAT, ALB, Backend EC2 ASG, RDS, Redis, Monitoring EC2 |
+| `infra/environments/dev-load-test` | **테스트 시에만 추가** | private k6 Load Runner EC2, Runner IAM/SG, evidence S3 |
 | `infra/environments/prod` | 별도 운영 범위 | 현재는 정적 검증 위주이며 운영 적용을 주장하지 않음 |
 
-`dev-runtime`은 `dev` State와 분리된 일회성 실험 환경입니다. 지금은 실행 중인 리소스가
-없으므로 AWS runtime endpoint나 현재 비용이 발생한다고 해석하면 안 됩니다. 재생성이 필요할
-때는 [`infra/environments/dev-runtime/README.md`](infra/environments/dev-runtime/README.md)의
-사전 조건과 변경 allowlist를 먼저 읽습니다.
+`dev-runtime`은 기존 S3 State key를 유지하는 EC2 Runtime이며, 지금은 실행 중인 리소스가
+없으므로 AWS runtime endpoint나 현재 비용이 발생한다고 해석하면 안 됩니다. 일반 Backend
+실행에는 `dev-runtime`까지만 생성하고, 부하 테스트 때만 종속 `dev-load-test`를 추가한다.
+생성은 `dev → dev-runtime → dev-load-test`, 삭제는 역순이다. 재생성 전에는
+[`dev-runtime` runbook](infra/environments/dev-runtime/README.md)과
+[`dev-load-test` runbook](infra/environments/dev-load-test/README.md)을 읽습니다.
 
 ## 로컬 실행
 
@@ -246,6 +249,9 @@ terraform -chdir=infra/bootstrap init -backend=false
 terraform -chdir=infra/bootstrap validate
 terraform -chdir=infra/environments/dev init -backend=false
 terraform -chdir=infra/environments/dev validate
+terraform -chdir=infra/environments/dev-load-test init -backend=false
+terraform -chdir=infra/environments/dev-load-test validate
+terraform -chdir=infra/environments/dev-load-test test
 terraform -chdir=infra/environments/dev-runtime init -backend=false
 terraform -chdir=infra/environments/dev-runtime validate
 terraform -chdir=infra/environments/prod init -backend=false
@@ -255,6 +261,9 @@ terraform -chdir=infra/modules/profile_image test
 terraform -chdir=infra/modules/static_frontend test
 terraform -chdir=infra/modules/github_ecr_publisher test
 terraform -chdir=infra/modules/github_frontend_deployer test
+terraform -chdir=infra/modules/runtime_security test
+terraform -chdir=infra/modules/load_test_security test
+terraform -chdir=infra/modules/load_test_runner test
 ```
 
 CI도 `init -backend=false`, `validate`, `terraform test`, TFLint/Trivy 중심으로 실행하며,
@@ -290,13 +299,15 @@ terraform -chdir=infra/environments/dev show dev.tfplan
 `terraform apply`는 실제 리소스를 만들거나 교체하고, `terraform destroy`는 RDS·Redis·NAT·ALB
 등을 삭제해 비용과 데이터를 바꿀 수 있습니다. 이 두 명령은 저장된 plan의 변경 범위를 사람이
 확인한 뒤 별도 승인하고 실행합니다. 특히 `dev-runtime` 재생성·종료는 전용 runbook의
-allowlist와 정리 확인을 모두 통과해야 합니다.
+allowlist와 정리 확인을 모두 통과해야 하며, `dev-load-test`가 먼저 제거되어야 합니다.
 
 ### 재생성 runbook
 
 [`infra/README.md`](infra/README.md)는 bootstrap → 원격 State → dev plan의 전체 흐름을,
 [`infra/environments/dev-runtime/README.md`](infra/environments/dev-runtime/README.md)는
-일회성 runtime의 사전 조건·plan 검토·관측 확인·destroy 후 잔존 리소스 확인을 설명합니다.
+EC2 Runtime의 사전 조건·plan 검토·관측 확인·destroy 후 잔존 리소스 확인을,
+[`infra/environments/dev-load-test/README.md`](infra/environments/dev-load-test/README.md)는
+Load Runner와 evidence 수명주기를 설명합니다.
 현재 runtime은 삭제된 상태이므로, 문서의 apply/destroy 예시는 실행 기록이 아니라 재현 절차입니다.
 
 ## CI/CD와 검증
