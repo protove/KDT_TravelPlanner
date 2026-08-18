@@ -46,7 +46,41 @@ export const Default: Story = {
     <DetailLayout
       header={<AppHeader loggedIn userInitial="지" />}
       detailHeader={
-        <TripDetailHeader title="도쿄 벚꽃 여행" start={new Date(2027, 3, 2)} end={new Date(2027, 3, 5)} />
+        <TripDetailHeader
+          onBack={() => {}}
+          title="도쿄 벚꽃 여행"
+          isEditing={false}
+          titleDraft="도쿄 벚꽃 여행"
+          onTitleDraftChange={() => {}}
+          canEdit
+          onStartEdit={() => {}}
+          onSaveEdit={() => {}}
+          onCancelEdit={() => {}}
+          isOwner
+          onDeleteClick={() => {}}
+          members={[
+            { userId: "u1", nickname: "규진", profileImageUrl: null, role: "OWNER", isOwner: true, status: "ACCEPTED", invitationId: null },
+          ]}
+          onInviteClick={() => {}}
+          onManageClick={() => {}}
+          onLeaveClick={() => {}}
+          countries={[{ countryId: 1, code: "JP", nameKo: "일본", nameEn: "Japan" }]}
+          selectedCountryId={1}
+          onCountryChange={() => {}}
+          cities={[{ cityId: 1, countryId: 1, nameKo: "도쿄", nameEn: "Tokyo", googlePlaceId: null, latitude: null, longitude: null }]}
+          selectedCityId={1}
+          onCityChange={() => {}}
+          selectedCountryName="일본"
+          selectedCityName="도쿄"
+          dateRange={{ start: new Date(2027, 3, 2), end: new Date(2027, 3, 5) }}
+          onDateRangeChange={() => {}}
+          showCalendar={false}
+          onToggleCalendar={() => {}}
+          onApplyCalendar={() => {}}
+          companion="친구와"
+          onCompanionChange={() => {}}
+          companionOptions={["혼자", "친구와", "가족과", "연인과"]}
+        />
       }
       schedule={<ScheduleSlot />}
     />

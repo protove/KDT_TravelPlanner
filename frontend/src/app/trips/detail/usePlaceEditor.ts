@@ -4,6 +4,7 @@ import { type TimelineItem } from "@/lib/api/travel";
 import { searchPlaces, type PlaceSearchResult } from "@/lib/api/places";
 import { type PlaceDateChip, type TimelineCategoryOption } from "@/components/organisms/PlaceModal";
 import { NEW_ITEM_PREFIX, formatIsoDate, computeNextVisitOrder, type getDateTabs } from "./utils";
+import { hasIncompleteHangul, hasRepeatedCharSpam } from "@/lib/validation/text";
 
 type DateTab = ReturnType<typeof getDateTabs>[number];
 
@@ -37,6 +38,7 @@ export function usePlaceEditor({
   const [editingPlace, setEditingPlace] = React.useState<TimelineItem | null>(null);
   const [addingPlace, setAddingPlace] = React.useState(false);
   const [placeDraftName, setPlaceDraftName] = React.useState("");
+  const [placeNameError, setPlaceNameError] = React.useState<string | null>(null);
   const [placeDraftNote, setPlaceDraftNote] = React.useState("");
   const [placeDraftCategory, setPlaceDraftCategory] = React.useState<TimelineCategoryOption>("관광지");
   const [placeDraftFoodSubcategory, setPlaceDraftFoodSubcategory] = React.useState("");
@@ -72,6 +74,7 @@ export function usePlaceEditor({
   function openAddPlace() {
     setAddingPlace(true);
     setPlaceDraftName("");
+    setPlaceNameError(null);
     setPlaceDraftNote("");
     setPlaceDraftCategory("관광지");
     setPlaceDraftFoodSubcategory("");
@@ -125,6 +128,15 @@ export function usePlaceEditor({
     } else if (addingPlace) {
       const name = placeDraftName.trim();
       if (!name) return;
+      if (hasIncompleteHangul(name)) {
+        setPlaceNameError("완성되지 않은 한글(자음/모음)은 사용할 수 없어요.");
+        return;
+      }
+      if (hasRepeatedCharSpam(name)) {
+        setPlaceNameError("같은 문자를 5번 이상 반복할 수 없어요.");
+        return;
+      }
+      setPlaceNameError(null);
       const newItemId = `${NEW_ITEM_PREFIX}${crypto.randomUUID()}`;
       setDraftTimelineItems((prev) => {
         const base = prev ?? [];
@@ -190,6 +202,8 @@ export function usePlaceEditor({
     setAddingPlace,
     placeDraftName,
     setPlaceDraftName,
+    placeNameError,
+    setPlaceNameError,
     placeDraftNote,
     setPlaceDraftNote,
     placeDraftCategory,
