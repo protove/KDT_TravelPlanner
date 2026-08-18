@@ -102,7 +102,7 @@ function TripCard({
         if (event.key === "Enter" || event.key === " ") onClick?.();
       }}
       className={cn(
-        "cursor-pointer overflow-hidden rounded-xl bg-card shadow-card transition-shadow hover:shadow-dialog",
+        "min-w-0 cursor-pointer overflow-hidden rounded-xl bg-card shadow-card transition-shadow hover:shadow-dialog",
         className,
       )}
     >
@@ -112,24 +112,24 @@ function TripCard({
         alt={`${title} 대표 이미지`}
       />
       <div className="p-4">
-        <div className="flex items-start justify-between gap-2.5">
-          <div>
-            <div className="text-base font-bold text-foreground">{title}</div>
-            <div className="mt-0.5 text-sm text-muted-foreground">{dates}</div>
+        <div className="flex min-w-0 items-start justify-between gap-2.5">
+          <div className="min-w-0 flex-1">
+            <div className="break-words text-base font-bold text-foreground">{title}</div>
+            <div className="mt-0.5 break-words text-sm text-muted-foreground">{dates}</div>
           </div>
           {role ? (
-            <Badge variant="secondary" className="whitespace-nowrap">
+            <Badge variant="secondary" className="shrink-0 whitespace-nowrap">
               {role}
             </Badge>
           ) : (
             showDday && (
-              <Badge variant="accent" className="whitespace-nowrap">
+              <Badge variant="accent" className="shrink-0 whitespace-nowrap">
                 D-{dday}
               </Badge>
             )
           )}
         </div>
-        <div className="mt-3.5 flex items-center justify-between">
+        <div className="mt-3.5 flex min-w-0 items-center justify-between gap-2">
           <div className="flex">
             {members.map((member, index) => (
               <Avatar
