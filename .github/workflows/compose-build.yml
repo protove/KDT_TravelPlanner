@@ -1,21 +1,6 @@
 name: Backend Compose Integration
 
 on:
-  pull_request:
-    branches:
-      - develop-backend
-      - develop
-      - main
-    paths:
-      - "backend/**"
-      - "compose.yml"
-      - "compose.dev.yml"
-      - "compose.test.yml"
-      - "compose.monitoring.yml"
-      - "compose.monitoring.dev.yml"
-      - ".env.dev.example"
-      - ".env.prod.example"
-      - ".github/workflows/compose-build.yml"
   workflow_call:
 
 permissions:

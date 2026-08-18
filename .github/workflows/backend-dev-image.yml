@@ -1,17 +1,7 @@
 name: Backend Development Image
 
 on:
-  pull_request:
-    branches:
-      - develop-backend
-    paths:
-      - "backend/Dockerfile"
-      - "backend/docker/**"
-      - "compose.yml"
-      - "compose.dev.yml"
-      - "compose.test.yml"
-      - ".env.dev.example"
-      - ".github/workflows/backend-dev-image.yml"
+  workflow_call:
 
 permissions:
   contents: read

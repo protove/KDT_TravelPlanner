@@ -1,0 +1,184 @@
+name: PR Verification
+
+on:
+  pull_request:
+    branches:
+      - develop
+      - develop-front
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-verification-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  validate-classifier:
+    name: Validate Change Classifier
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v6
+
+      - name: Run classifier fixtures
+        run: .github/scripts/test-classify-pr-changes.sh
+
+  detect-changes:
+    name: Detect Changed Areas
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      run_frontend: ${{ steps.classify.outputs.run_frontend }}
+      run_backend: ${{ steps.classify.outputs.run_backend }}
+      run_monitoring: ${{ steps.classify.outputs.run_monitoring }}
+      run_terraform: ${{ steps.classify.outputs.run_terraform }}
+      run_k8s: ${{ steps.classify.outputs.run_k8s }}
+      run_compose: ${{ steps.classify.outputs.run_compose }}
+      run_backend_dev_image: ${{ steps.classify.outputs.run_backend_dev_image }}
+      classification_error: ${{ steps.classify.outputs.classification_error }}
+      changed_count: ${{ steps.classify.outputs.changed_count }}
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Classify changed paths
+        id: classify
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          test -n "${BASE_SHA}"
+          test -n "${HEAD_SHA}"
+          classification_file="${RUNNER_TEMP}/pr-change-classification.txt"
+          .github/scripts/classify-pr-changes.sh "${BASE_SHA}" "${HEAD_SHA}" \
+            | tee "${classification_file}" >> "${GITHUB_OUTPUT}"
+
+          {
+            echo "### PR change classification"
+            printf -- '- Base: `%s`\n' "${BASE_SHA}"
+            printf -- '- Head: `%s`\n' "${HEAD_SHA}"
+            echo
+            echo '```text'
+            cat "${classification_file}"
+            echo '```'
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+  verify-frontend:
+    name: Verify Frontend
+    needs: detect-changes
+    if: needs.detect-changes.outputs.run_frontend == 'true'
+    uses: ./.github/workflows/frontend-test.yml
+
+  verify-backend:
+    name: Verify Backend
+    needs: detect-changes
+    if: needs.detect-changes.outputs.run_backend == 'true'
+    uses: ./.github/workflows/backend-test.yml
+
+  verify-monitoring:
+    name: Verify Monitoring
+    needs: detect-changes
+    if: needs.detect-changes.outputs.run_monitoring == 'true'
+    uses: ./.github/workflows/monitoring-verification.yml
+
+  verify-terraform:
+    name: Verify Terraform
+    needs: detect-changes
+    if: needs.detect-changes.outputs.run_terraform == 'true'
+    uses: ./.github/workflows/terraform-verification.yml
+
+  verify-k8s:
+    name: Verify Kubernetes
+    needs: detect-changes
+    if: needs.detect-changes.outputs.run_k8s == 'true'
+    uses: ./.github/workflows/k8s-verify.yml
+
+  verify-compose:
+    name: Verify Compose
+    needs: detect-changes
+    if: needs.detect-changes.outputs.run_compose == 'true'
+    uses: ./.github/workflows/compose-build.yml
+
+  verify-backend-dev-image:
+    name: Verify Backend Development Image
+    needs: detect-changes
+    if: needs.detect-changes.outputs.run_backend_dev_image == 'true'
+    uses: ./.github/workflows/backend-dev-image.yml
+
+  affected-pr-gate:
+    name: Affected PR Gate
+    needs:
+      - validate-classifier
+      - detect-changes
+      - verify-frontend
+      - verify-backend
+      - verify-monitoring
+      - verify-terraform
+      - verify-k8s
+      - verify-compose
+      - verify-backend-dev-image
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      CLASSIFIER_RESULT: ${{ needs.validate-classifier.result }}
+      DETECT_RESULT: ${{ needs.detect-changes.result }}
+      CLASSIFICATION_ERROR: ${{ needs.detect-changes.outputs.classification_error }}
+      RUN_FRONTEND: ${{ needs.detect-changes.outputs.run_frontend }}
+      RUN_BACKEND: ${{ needs.detect-changes.outputs.run_backend }}
+      RUN_MONITORING: ${{ needs.detect-changes.outputs.run_monitoring }}
+      RUN_TERRAFORM: ${{ needs.detect-changes.outputs.run_terraform }}
+      RUN_K8S: ${{ needs.detect-changes.outputs.run_k8s }}
+      RUN_COMPOSE: ${{ needs.detect-changes.outputs.run_compose }}
+      RUN_BACKEND_DEV_IMAGE: ${{ needs.detect-changes.outputs.run_backend_dev_image }}
+      FRONTEND_RESULT: ${{ needs.verify-frontend.result }}
+      BACKEND_RESULT: ${{ needs.verify-backend.result }}
+      MONITORING_RESULT: ${{ needs.verify-monitoring.result }}
+      TERRAFORM_RESULT: ${{ needs.verify-terraform.result }}
+      K8S_RESULT: ${{ needs.verify-k8s.result }}
+      COMPOSE_RESULT: ${{ needs.verify-compose.result }}
+      BACKEND_DEV_IMAGE_RESULT: ${{ needs.verify-backend-dev-image.result }}
+    steps:
+      - name: Check affected verification results
+        run: |
+          set -euo pipefail
+
+          if [[ "${CLASSIFIER_RESULT}" != "success" ]]; then
+            echo "Classifier fixtures did not pass: ${CLASSIFIER_RESULT}" >&2
+            exit 1
+          fi
+
+          if [[ "${DETECT_RESULT}" != "success" ]]; then
+            echo "Change detection did not succeed: ${DETECT_RESULT}" >&2
+            exit 1
+          fi
+
+          if [[ "${CLASSIFICATION_ERROR}" == "true" ]]; then
+            echo "An unclassified path requires an explicit PR verification policy." >&2
+            exit 1
+          fi
+
+          check_result() {
+            local enabled="$1"
+            local result="$2"
+            local label="$3"
+
+            if [[ "${enabled}" == "true" && "${result}" != "success" ]]; then
+              echo "${label} was required but finished with: ${result}" >&2
+              exit 1
+            fi
+          }
+
+          check_result "${RUN_FRONTEND}" "${FRONTEND_RESULT}" "Frontend verification"
+          check_result "${RUN_BACKEND}" "${BACKEND_RESULT}" "Backend verification"
+          check_result "${RUN_MONITORING}" "${MONITORING_RESULT}" "Monitoring verification"
+          check_result "${RUN_TERRAFORM}" "${TERRAFORM_RESULT}" "Terraform verification"
+          check_result "${RUN_K8S}" "${K8S_RESULT}" "Kubernetes verification"
+          check_result "${RUN_COMPOSE}" "${COMPOSE_RESULT}" "Compose verification"
+          check_result "${RUN_BACKEND_DEV_IMAGE}" "${BACKEND_DEV_IMAGE_RESULT}" "Backend development image verification"
+          echo "Affected PR gate passed."
