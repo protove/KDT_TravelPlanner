@@ -9,7 +9,10 @@ run_k8s=false
 run_compose=false
 run_backend_dev_image=false
 classification_error=false
+source_policy_error=false
+verification_mode=invalid
 changed_count=0
+skip_specialists=false
 
 mark_all() {
   run_frontend=true
@@ -19,6 +22,50 @@ mark_all() {
   run_k8s=true
   run_compose=true
   run_backend_dev_image=true
+}
+
+apply_pr_policy() {
+  local base_branch="$1"
+  local head_branch="$2"
+
+  case "${base_branch}" in
+    develop)
+      verification_mode=development
+      ;;
+    main)
+      case "${head_branch}" in
+        develop)
+          verification_mode=release-promotion
+          skip_specialists=true
+          ;;
+        hotfix/*)
+          verification_mode=hotfix
+          ;;
+        *)
+          verification_mode=invalid
+          source_policy_error=true
+          skip_specialists=true
+          printf 'unsupported main PR source: %s\n' "${head_branch}" >&2
+          ;;
+      esac
+      ;;
+    *)
+      verification_mode=invalid
+      source_policy_error=true
+      skip_specialists=true
+      printf 'unsupported PR base: %s\n' "${base_branch}" >&2
+      ;;
+  esac
+}
+
+suppress_specialists() {
+  run_frontend=false
+  run_backend=false
+  run_monitoring=false
+  run_terraform=false
+  run_k8s=false
+  run_compose=false
+  run_backend_dev_image=false
 }
 
 classify_path() {
@@ -120,6 +167,8 @@ classify_path() {
 }
 
 print_classification() {
+  printf 'verification_mode=%s\n' "${verification_mode}"
+  printf 'source_policy_error=%s\n' "${source_policy_error}"
   printf 'run_frontend=%s\n' "${run_frontend}"
   printf 'run_backend=%s\n' "${run_backend}"
   printf 'run_monitoring=%s\n' "${run_monitoring}"
@@ -131,13 +180,17 @@ print_classification() {
   printf 'changed_count=%s\n' "${changed_count}"
 }
 
-if [[ $# -eq 1 && "$1" == "--stdin" ]]; then
+if [[ $# -eq 3 && "$1" == "--stdin" ]]; then
+  apply_pr_policy "$2" "$3"
   while IFS= read -r changed_path; do
     [[ -z "${changed_path}" ]] || classify_path "${changed_path}"
   done
-elif [[ $# -eq 2 ]]; then
-  base_sha="$1"
-  head_sha="$2"
+elif [[ $# -eq 4 ]]; then
+  base_branch="$1"
+  head_branch="$2"
+  base_sha="$3"
+  head_sha="$4"
+  apply_pr_policy "${base_branch}" "${head_branch}"
   git rev-parse --verify "${base_sha}^{commit}" >/dev/null
   git rev-parse --verify "${head_sha}^{commit}" >/dev/null
 
@@ -145,8 +198,12 @@ elif [[ $# -eq 2 ]]; then
     [[ -z "${changed_path}" ]] || classify_path "${changed_path}"
   done < <(git diff --name-only --no-renames --diff-filter=ACMRD "${base_sha}" "${head_sha}")
 else
-  echo "usage: $0 <base-sha> <head-sha> | --stdin" >&2
+  echo "usage: $0 <base-branch> <head-branch> <base-sha> <head-sha> | --stdin <base-branch> <head-branch>" >&2
   exit 64
+fi
+
+if [[ "${skip_specialists}" == "true" ]]; then
+  suppress_specialists
 fi
 
 print_classification
