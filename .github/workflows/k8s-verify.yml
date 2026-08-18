@@ -1,16 +1,6 @@
 name: Backend Kind Integration
 
 on:
-  pull_request:
-    branches:
-      - develop-backend
-      - develop
-      - main
-    paths:
-      - "backend/**"
-      - "k8s/**"
-      - ".env.dev.example"
-      - ".github/workflows/k8s-verify.yml"
   workflow_call:
 
 permissions:

@@ -1,30 +1,7 @@
 name: Monitoring Verification
 
 on:
-  pull_request:
-    branches:
-      - develop-backend
-      - main
-    paths:
-      - ".env.dev.example"
-      - ".env.prod.example"
-      - "backend/Dockerfile"
-      - "backend/build.gradle.kts"
-      - "backend/settings.gradle.kts"
-      - "backend/docker/**"
-      - "backend/src/main/kotlin/**/logging/**"
-      - "backend/src/main/kotlin/**/monitoring/**"
-      - "backend/src/main/kotlin/**/SecurityConfig.kt"
-      - "backend/src/main/resources/application.yml"
-      - "backend/src/main/resources/application-dev.yml"
-      - "backend/src/main/resources/application-prod.yml"
-      - "backend/src/main/resources/logback-spring.xml"
-      - "compose.yml"
-      - "compose.dev.yml"
-      - "compose.monitoring.yml"
-      - "compose.monitoring.dev.yml"
-      - "monitoring/**"
-      - ".github/workflows/monitoring-verification.yml"
+  workflow_call:
 
 permissions:
   contents: read
