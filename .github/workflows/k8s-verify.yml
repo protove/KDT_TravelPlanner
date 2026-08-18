@@ -1,0 +1,102 @@
+name: Backend Kind Integration
+
+on:
+  pull_request:
+    branches:
+      - develop-backend
+      - develop
+      - main
+    paths:
+      - "backend/**"
+      - "k8s/**"
+      - ".env.dev.example"
+      - ".github/workflows/k8s-verify.yml"
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: backend-kind-integration-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  KIND_VERSION: "v0.32.0"
+  NAMESPACE: "travel-planner"
+
+jobs:
+  verify:
+    name: kind Cluster Deployment and Connections
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v6
+
+      - name: Install kind
+        run: |
+          curl -Lo ./kind "https://kind.sigs.k8s.io/dl/${KIND_VERSION}/kind-linux-amd64"
+          chmod +x ./kind
+          sudo mv ./kind /usr/local/bin/kind
+          kind version
+
+      - name: Prepare CI env file
+        run: cp .env.dev.example .env.dev
+
+      - name: Set up cluster and deploy backend
+        run: ./k8s/scripts/setup.sh
+
+      - name: Verify pod status and restart counts
+        run: |
+          kubectl get pods -n "${NAMESPACE}" -o wide
+
+          for deployment in postgres redis backend; do
+            restart_count="$(kubectl get pods -n "${NAMESPACE}" \
+              -l "app=${deployment}" \
+              -o jsonpath='{.items[0].status.containerStatuses[0].restartCount}')"
+            test "${restart_count}" = "0"
+          done
+
+      - name: Verify backend readiness
+        run: |
+          kubectl exec deploy/backend -n "${NAMESPACE}" -- \
+            wget -q -O - http://127.0.0.1:9091/actuator/health/readiness \
+            | jq --exit-status '.status == "UP"' >/dev/null
+
+      - name: Verify Flyway and Redis connections
+        run: |
+          migration_count="$(kubectl exec deploy/postgres -n "${NAMESPACE}" -- \
+            sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc \
+              "SELECT count(*) FROM flyway_schema_history WHERE success = true;"')"
+          test "${migration_count}" -gt 0
+
+          redis_response="$(kubectl exec deploy/redis -n "${NAMESPACE}" -- \
+            sh -c 'redis-cli --no-auth-warning -a "$REDIS_PASSWORD" ping')"
+          test "${redis_response}" = "PONG"
+
+      - name: Collect kind diagnostics
+        if: always()
+        run: |
+          mkdir -p "${RUNNER_TEMP}/kind-diagnostics"
+          kubectl get pods -n "${NAMESPACE}" -o wide \
+            > "${RUNNER_TEMP}/kind-diagnostics/pods.txt" 2>&1 || true
+          kubectl describe pods -n "${NAMESPACE}" \
+            > "${RUNNER_TEMP}/kind-diagnostics/pods-describe.txt" 2>&1 || true
+          for deployment in postgres redis backend; do
+            kubectl logs "deploy/${deployment}" -n "${NAMESPACE}" \
+              > "${RUNNER_TEMP}/kind-diagnostics/${deployment}.log" 2>&1 || true
+          done
+
+      - name: Upload kind diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-kind-diagnostics
+          path: ${{ runner.temp }}/kind-diagnostics
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Tear down cluster
+        if: always()
+        run: ./k8s/scripts/teardown.sh
