@@ -9,11 +9,17 @@ export interface UserChipProps {
   className?: string;
 }
 
-function UserChip({ name, avatarSrc, avatarColor, className }: UserChipProps) {
+function UserChip({
+  name,
+  avatarSrc,
+  avatarColor,
+  className,
+}: UserChipProps) {
   return (
     <div className={cn("flex min-w-0 items-center gap-2", className)}>
       <Avatar className="h-8 w-8 shrink-0">
         {avatarSrc && <AvatarImage src={avatarSrc} alt={name} />}
+
         <AvatarFallback
           className={avatarColor ? "text-white" : undefined}
           style={avatarColor ? { background: avatarColor } : undefined}
@@ -21,7 +27,11 @@ function UserChip({ name, avatarSrc, avatarColor, className }: UserChipProps) {
           {name.slice(0, 1)}
         </AvatarFallback>
       </Avatar>
-      <span className="truncate text-sm font-medium text-foreground" title={name}>
+
+      <span
+        className="min-w-0 truncate text-sm font-medium text-foreground"
+        title={name}
+      >
         {name}
       </span>
     </div>

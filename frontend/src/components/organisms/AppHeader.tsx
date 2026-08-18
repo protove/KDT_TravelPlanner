@@ -35,34 +35,34 @@ function AppHeader({
   return (
     <header
       className={cn(
-        "flex w-full items-center justify-between border-b border-border bg-background px-7 py-3",
+        "flex w-full min-w-0 items-center justify-between border-b border-border bg-background px-3 py-3 min-[320px]:px-4 sm:px-7",
         className
       )}
     >
       <button
         type="button"
         onClick={onLogoClick}
-        className="flex cursor-pointer items-center gap-2.5 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        className="flex min-w-0 shrink-0 cursor-pointer items-center gap-2.5 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       >
-        <span className="flex h-[30px] w-[30px] items-center justify-center rounded-md bg-primary text-sm font-bold text-primary-foreground">
+        <span className="flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-md bg-primary text-sm font-bold text-primary-foreground">
           T
         </span>
-        <span className="text-base font-bold text-foreground">TripPlanner</span>
+        <span className="hidden text-base font-bold text-foreground min-[340px]:inline">TripPlanner</span>
       </button>
 
       {loggedIn ? (
-        <div className="flex items-center gap-4">
+        <div className="flex min-w-0 items-center gap-1.5 min-[320px]:gap-2 sm:gap-4">
           <button
             type="button"
             onClick={onNotificationClick}
             title="알림"
-            className="flex h-[34px] w-[34px] cursor-pointer items-center justify-center rounded-md text-fg-secondary hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            className="flex h-[34px] w-[34px] shrink-0 cursor-pointer items-center justify-center rounded-md text-fg-secondary hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
             <Icon icon={Bell} size="sm" aria-label="알림" />
           </button>
           {nickname && (
             <span
-             className="max-w-[120px] truncate text-sm font-medium text-foreground"
+             className="hidden max-w-[120px] truncate text-sm font-medium text-foreground min-[420px]:inline"
              title={nickname}
             >
               {nickname}
@@ -72,7 +72,7 @@ function AppHeader({
           <button
             type="button"
             onClick={onProfileClick}
-            className="cursor-pointer rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            className="shrink-0 cursor-pointer rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
             <Avatar className="h-8 w-8">
               {avatarSrc && <AvatarImage src={avatarSrc} alt={`${userInitial} 프로필`} />}
