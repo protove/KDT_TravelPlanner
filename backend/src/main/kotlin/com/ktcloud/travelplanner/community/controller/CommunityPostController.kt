@@ -3,8 +3,10 @@ package com.ktcloud.travelplanner.community.controller
 import com.ktcloud.travelplanner.community.dto.CommunityPostCreateRequest
 import com.ktcloud.travelplanner.community.dto.CommunityPostCreateResponse
 import com.ktcloud.travelplanner.community.dto.CommunityPostDetailResponse
+import com.ktcloud.travelplanner.community.dto.CommunityPostSummaryResponse
 import com.ktcloud.travelplanner.community.service.CommunityPostService
 import com.ktcloud.travelplanner.global.response.ApiResponse
+import com.ktcloud.travelplanner.global.response.PageResponse
 import com.ktcloud.travelplanner.global.security.AuthenticatedUserPrincipal
 import jakarta.validation.Valid
 import org.springframework.security.core.annotation.AuthenticationPrincipal
@@ -13,11 +15,12 @@ import org.springframework.web.bind.annotation.PathVariable
 import org.springframework.web.bind.annotation.PostMapping
 import org.springframework.web.bind.annotation.RequestBody
 import org.springframework.web.bind.annotation.RequestMapping
+import org.springframework.web.bind.annotation.RequestParam
 import org.springframework.web.bind.annotation.RestController
 import java.util.UUID
 
 // community-api-contract.md 2절 엔드포인트 표의 /api/v1/community/posts 그룹.
-// 이후 목록/수정/삭제 메서드가 여기에 추가될 예정.
+// 이후 수정/삭제 메서드가 여기에 추가될 예정.
 @RestController
 @RequestMapping("/api/v1/community/posts")
 class CommunityPostController(
@@ -29,6 +32,18 @@ class CommunityPostController(
 		@Valid @RequestBody request: CommunityPostCreateRequest,
 	): ApiResponse<CommunityPostCreateResponse> =
 		ApiResponse.success(communityPostService.createPost(principal.userId, request))
+
+	// community-api-contract.md 2절/3절 — 인증 불필요. size 기본 10/최대 50은 서비스에서 clamp한다.
+	@GetMapping
+	fun getPosts(
+		@RequestParam(required = false) category: String?,
+		@RequestParam(required = false) tag: String?,
+		@RequestParam(required = false) keyword: String?,
+		@RequestParam(required = false) sort: String?,
+		@RequestParam(defaultValue = "0") page: Int,
+		@RequestParam(defaultValue = "10") size: Int,
+	): ApiResponse<PageResponse<CommunityPostSummaryResponse>> =
+		ApiResponse.success(communityPostService.getPosts(category, tag, keyword, sort, page, size))
 
 	// community-api-contract.md 2절 — 인증 불필요. 로그인 상태면 isMine 계산을 위해 principal을 사용한다.
 	@GetMapping("/{postId}")

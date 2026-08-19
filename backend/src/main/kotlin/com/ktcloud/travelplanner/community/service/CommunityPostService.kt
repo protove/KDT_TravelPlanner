@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper
 import com.ktcloud.travelplanner.community.dto.CommunityPostCreateRequest
 import com.ktcloud.travelplanner.community.dto.CommunityPostCreateResponse
 import com.ktcloud.travelplanner.community.dto.CommunityPostDetailResponse
+import com.ktcloud.travelplanner.community.dto.CommunityPostSummaryResponse
 import com.ktcloud.travelplanner.community.model.CommunityPost
 import com.ktcloud.travelplanner.community.model.CommunityTag
 import com.ktcloud.travelplanner.community.repository.CommunityCategoryRepository
@@ -13,9 +14,11 @@ import com.ktcloud.travelplanner.community.repository.CommunityTagRepository
 import com.ktcloud.travelplanner.community.validation.TiptapBodyJsonValidator
 import com.ktcloud.travelplanner.global.exception.DomainException
 import com.ktcloud.travelplanner.global.exception.ErrorCode
+import com.ktcloud.travelplanner.global.response.PageResponse
 import com.ktcloud.travelplanner.membership.repository.TravelMemberRepository
 import com.ktcloud.travelplanner.travel.repository.TravelRepository
 import com.ktcloud.travelplanner.user.repository.UserRepository
+import org.springframework.data.domain.PageRequest
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
 import java.util.UUID
@@ -87,6 +90,39 @@ class CommunityPostService(
 		)
 	}
 
+	// community-api-contract.md 2절/3절 — 목록 조회. 인증 불필요.
+	@Transactional(readOnly = true)
+	fun getPosts(
+		categoryCode: String?,
+		tagName: String?,
+		keyword: String?,
+		sort: String?,
+		page: Int,
+		size: Int,
+	): PageResponse<CommunityPostSummaryResponse> {
+		val normalizedCategoryCode = categoryCode?.trim()?.takeIf { it.isNotEmpty() }
+		val normalizedTagName = tagName?.trim()?.takeIf { it.isNotEmpty() }
+		val normalizedKeyword = keyword?.trim()?.takeIf { it.isNotEmpty() }
+		val pageable = PageRequest.of(page.coerceAtLeast(0), size.coerceIn(MIN_PAGE_SIZE, MAX_PAGE_SIZE))
+
+		val result = if (sort == SORT_POPULAR) {
+			communityPostRepository.findPostsOrderByPopularity(normalizedCategoryCode, normalizedTagName, normalizedKeyword, pageable)
+		} else {
+			communityPostRepository.findPostsOrderByCreatedAt(normalizedCategoryCode, normalizedTagName, normalizedKeyword, pageable)
+		}
+
+		val postIds = result.content.map { it.postId }
+		val tagsByPostId = if (postIds.isEmpty()) {
+			emptyMap()
+		} else {
+			communityPostRepository.findTagNamesByPostIds(postIds).groupBy({ it.postId }, { it.tagName })
+		}
+
+		return PageResponse.from(
+			result.map { row -> CommunityPostSummaryResponse.from(row, tagsByPostId[row.postId].orEmpty()) },
+		)
+	}
+
 	// community-api-contract.md 0절 — 일정 기반 작성 진입은 해당 travel에 대한 조회 권한 보유자
 	// (OWNER/READ_ONLY/READ_WRITE, ACCEPTED)만 가능. TravelMemberQueryService.getTravelMembers와
 	// 동일한 권한 체크(오너 본인이거나 ACCEPTED 멤버여야 함)를 재검증한다.
@@ -155,6 +191,9 @@ class CommunityPostService(
 		private const val TAG_NAME_MIN_LENGTH = 1
 		private const val TAG_NAME_MAX_LENGTH = 20
 		private const val BODY_PREVIEW_MAX_LENGTH = 120
+		private const val SORT_POPULAR = "popular"
+		private const val MIN_PAGE_SIZE = 1
+		private const val MAX_PAGE_SIZE = 50
 	}
 }
 
