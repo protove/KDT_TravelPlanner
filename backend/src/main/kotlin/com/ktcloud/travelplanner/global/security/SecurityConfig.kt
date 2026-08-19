@@ -51,6 +51,7 @@ class SecurityConfig(
 					"/api/v1/auth/oauth2/**",
 					"/api/v1/auth/token/exchange",
 					"/api/v1/auth/token/refresh",
+					"/api/v1/community/tags",
 					"/actuator/health/**",
 					"/v3/api-docs",
 					"/v3/api-docs.yaml",
