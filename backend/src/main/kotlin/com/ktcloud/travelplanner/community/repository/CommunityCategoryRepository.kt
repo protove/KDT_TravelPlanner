@@ -5,4 +5,5 @@ import org.springframework.data.jpa.repository.JpaRepository
 
 interface CommunityCategoryRepository : JpaRepository<CommunityCategory, Short> {
 	fun findAllByIsActiveTrueOrderBySortOrderAscIdAsc(): List<CommunityCategory>
+	fun findByCodeAndIsActiveTrue(code: String): CommunityCategory?
 }
