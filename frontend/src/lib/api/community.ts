@@ -17,7 +17,7 @@ export interface PageResponse<T> {
 }
 
 /** 카테고리 목록(탭용)을 조회한다. */
-export async function getCategories(accessToken?: string): Promise<CommunityCategory[]> {
+export async function getCategories(accessToken?: string | null): Promise<CommunityCategory[]> {
   return apiFetch<CommunityCategory[]>("/api/v1/community/categories", accessToken);
 }
 
@@ -38,7 +38,7 @@ export async function createPost(
 }
 
 /** 게시글 상세를 조회한다(조회수 증가). 없는 id면 404. */
-export async function getPost(accessToken: string | undefined, postId: string): Promise<CommunityPostDetail> {
+export async function getPost(accessToken: string | null | undefined, postId: string): Promise<CommunityPostDetail> {
   return apiFetch<CommunityPostDetail>(`/api/v1/community/posts/${postId}`, accessToken);
 }
 
