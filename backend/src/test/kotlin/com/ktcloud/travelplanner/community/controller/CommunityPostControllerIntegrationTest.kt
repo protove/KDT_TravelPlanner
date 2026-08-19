@@ -1,6 +1,10 @@
 package com.ktcloud.travelplanner.community.controller
 
+import com.fasterxml.jackson.databind.ObjectMapper
+import com.ktcloud.travelplanner.community.model.CommunityCategory
+import com.ktcloud.travelplanner.community.model.CommunityPost
 import com.ktcloud.travelplanner.community.model.CommunityTag
+import com.ktcloud.travelplanner.community.repository.CommunityCategoryRepository
 import com.ktcloud.travelplanner.community.repository.CommunityPostRepository
 import com.ktcloud.travelplanner.community.repository.CommunityTagRepository
 import com.ktcloud.travelplanner.global.security.JwtTokenService
@@ -14,6 +18,7 @@ import com.ktcloud.travelplanner.travel.repository.TravelRepository
 import com.ktcloud.travelplanner.user.model.OAuthProvider
 import com.ktcloud.travelplanner.user.model.User
 import com.ktcloud.travelplanner.user.repository.UserRepository
+import jakarta.persistence.EntityManager
 import org.hamcrest.Matchers.equalTo
 import org.hamcrest.Matchers.notNullValue
 import org.junit.jupiter.api.Test
@@ -23,8 +28,10 @@ import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.context.annotation.Import
 import org.springframework.http.HttpHeaders
 import org.springframework.http.MediaType
+import org.springframework.jdbc.core.JdbcTemplate
 import org.springframework.test.context.ActiveProfiles
 import org.springframework.test.web.servlet.MockMvc
+import org.springframework.test.web.servlet.get
 import org.springframework.test.web.servlet.post
 import org.springframework.transaction.annotation.Transactional
 import java.time.Instant
@@ -44,9 +51,15 @@ class CommunityPostControllerIntegrationTest(
 	@Autowired private val travelRepository: TravelRepository,
 	@Autowired private val travelMemberRepository: TravelMemberRepository,
 	@Autowired private val communityPostRepository: CommunityPostRepository,
+	@Autowired private val communityCategoryRepository: CommunityCategoryRepository,
 	@Autowired private val communityTagRepository: CommunityTagRepository,
 	@Autowired private val jwtTokenService: JwtTokenService,
+	@Autowired private val jdbcTemplate: JdbcTemplate,
+	@Autowired private val entityManager: EntityManager,
 ) {
+	private val objectMapper = ObjectMapper()
+
+
 	@Test
 	fun `authenticated user creates a travel review post and links find-or-create tags`() {
 		val author = saveUser("author")
@@ -185,6 +198,93 @@ class CommunityPostControllerIntegrationTest(
 			.andExpect { status { isOk() } }
 
 		assertTrue(communityPostRepository.findAll().any { it.sourceTravelId == travel.id })
+	}
+
+	@Test
+	fun `anonymous request returns post detail with isMine false and increments view count`() {
+		val author = saveUser("detail-author")
+		val post = savePost(author, tags = setOf("부산"))
+
+		mockMvc.get("/api/v1/community/posts/${post.id}")
+			.andExpect {
+				status { isOk() }
+				jsonPath("$.data.postId", equalTo(post.id.toString()))
+				jsonPath("$.data.categoryCode", equalTo("TRAVEL_REVIEW"))
+				jsonPath("$.data.title", equalTo("상세 조회 테스트"))
+				jsonPath("$.data.tags[0]", equalTo("부산"))
+				jsonPath("$.data.authorNickname", equalTo(author.nickname))
+				jsonPath("$.data.viewCount", equalTo(1))
+				jsonPath("$.data.commentCount", equalTo(0))
+				jsonPath("$.data.reactionCount", equalTo(0))
+				jsonPath("$.data.bodyJson.type", equalTo("doc"))
+				jsonPath("$.data.isMine", equalTo(false))
+			}
+
+		mockMvc.get("/api/v1/community/posts/${post.id}")
+			.andExpect { jsonPath("$.data.viewCount", equalTo(2)) }
+	}
+
+	@Test
+	fun `authenticated author sees isMine true, other users see isMine false`() {
+		val author = saveUser("detail-owner")
+		val other = saveUser("detail-other")
+		val post = savePost(author)
+
+		mockMvc.get("/api/v1/community/posts/${post.id}") {
+			header(HttpHeaders.AUTHORIZATION, bearer(author))
+		}.andExpect { jsonPath("$.data.isMine", equalTo(true)) }
+
+		mockMvc.get("/api/v1/community/posts/${post.id}") {
+			header(HttpHeaders.AUTHORIZATION, bearer(other))
+		}.andExpect { jsonPath("$.data.isMine", equalTo(false)) }
+	}
+
+	@Test
+	fun `returns 404 for a nonexistent post and for a soft deleted post`() {
+		mockMvc.get("/api/v1/community/posts/${UUID.randomUUID()}")
+			.andExpect {
+				status { isNotFound() }
+				jsonPath("$.code", equalTo("RESOURCE_NOT_FOUND"))
+			}
+
+		val author = saveUser("detail-deleted-author")
+		val post = savePost(author)
+		jdbcTemplate.update("UPDATE community_post SET deleted_at = NOW() WHERE id = ?", post.id)
+		entityManager.clear()
+
+		mockMvc.get("/api/v1/community/posts/${post.id}")
+			.andExpect {
+				status { isNotFound() }
+				jsonPath("$.code", equalTo("RESOURCE_NOT_FOUND"))
+			}
+	}
+
+	private fun bearer(user: User): String =
+		"Bearer ${jwtTokenService.issueAccessToken(requireNotNull(user.id)).value}"
+
+	private fun savePost(
+		author: User,
+		tags: Set<String> = emptySet(),
+	): CommunityPost {
+		val category = communityCategoryRepository.findByCodeAndIsActiveTrue("TRAVEL_REVIEW")!!
+		val bodyJson = objectMapper.readTree(
+			"""{"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"본문"}]}]}""",
+		)
+		val post = CommunityPost(
+			author = author,
+			category = category,
+			title = "상세 조회 테스트",
+			bodyJson = bodyJson.toString(),
+			bodyPreview = "본문",
+			sourceTravelId = null,
+		)
+		post.assignTags(tags.map { name -> communityTagRepository.findByName(name) ?: saveTag(name) }.toSet())
+		return communityPostRepository.saveAndFlush(post)
+	}
+
+	private fun saveTag(name: String): CommunityTag {
+		communityTagRepository.insertIgnoringConflict(name)
+		return communityTagRepository.findByName(name)!!
 	}
 
 	private fun saveUser(suffix: String): User = userRepository.saveAndFlush(

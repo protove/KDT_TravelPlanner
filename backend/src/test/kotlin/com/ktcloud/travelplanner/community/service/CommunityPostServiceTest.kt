@@ -27,9 +27,11 @@ import org.mockito.Mockito.times
 import org.mockito.Mockito.verify
 import org.mockito.Mockito.verifyNoInteractions
 import org.mockito.Mockito.`when`
+import java.time.Instant
 import java.util.Optional
 import java.util.UUID
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -40,6 +42,7 @@ class CommunityPostServiceTest {
 	private val userRepository = mock(UserRepository::class.java)
 	private val travelRepository = mock(TravelRepository::class.java)
 	private val travelMemberRepository = mock(TravelMemberRepository::class.java)
+	private val objectMapper = ObjectMapper()
 	private val service = CommunityPostService(
 		communityCategoryRepository,
 		communityTagRepository,
@@ -47,8 +50,8 @@ class CommunityPostServiceTest {
 		userRepository,
 		travelRepository,
 		travelMemberRepository,
+		objectMapper,
 	)
-	private val objectMapper = ObjectMapper()
 
 	private val authorId = UUID.randomUUID()
 	private val author = User(OAuthProvider.GOOGLE, "community-author")
@@ -222,6 +225,68 @@ class CommunityPostServiceTest {
 		}
 
 		verifyNoInteractions(communityPostRepository)
+	}
+
+	@Test
+	fun `getPostDetail increments the view count and returns comment and reaction counts`() {
+		val postId = UUID.randomUUID()
+		val post = mockPost(postId, postAuthorId = authorId, viewCount = 5)
+		`when`(communityPostRepository.findById(postId)).thenReturn(Optional.of(post))
+		`when`(communityPostRepository.countActiveComments(postId)).thenReturn(2L)
+		`when`(communityPostRepository.countReactions(postId)).thenReturn(3L)
+
+		val response = service.getPostDetail(postId, authorId)
+
+		verify(communityPostRepository).incrementViewCount(postId)
+		assertEquals(6, response.viewCount)
+		assertEquals(2L, response.commentCount)
+		assertEquals(3L, response.reactionCount)
+		assertTrue(response.isMine)
+	}
+
+	@Test
+	fun `getPostDetail marks isMine false for a different or anonymous requester`() {
+		val postId = UUID.randomUUID()
+		val post = mockPost(postId, postAuthorId = authorId)
+		`when`(communityPostRepository.findById(postId)).thenReturn(Optional.of(post))
+
+		assertFalse(service.getPostDetail(postId, UUID.randomUUID()).isMine)
+		assertFalse(service.getPostDetail(postId, null).isMine)
+	}
+
+	@Test
+	fun `getPostDetail throws when the post does not exist or is soft deleted`() {
+		val postId = UUID.randomUUID()
+		`when`(communityPostRepository.findById(postId)).thenReturn(Optional.empty())
+
+		assertThrows<CommunityPostNotFoundException> {
+			service.getPostDetail(postId, null)
+		}
+		verify(communityPostRepository, never()).incrementViewCount(postId)
+	}
+
+	private fun mockPost(
+		postId: UUID,
+		postAuthorId: UUID,
+		viewCount: Int = 5,
+	): CommunityPost {
+		val postAuthor = mock(User::class.java)
+		`when`(postAuthor.id).thenReturn(postAuthorId)
+		`when`(postAuthor.nickname).thenReturn("작성자")
+		`when`(postAuthor.profileImageUrl).thenReturn(null)
+
+		val post = mock(CommunityPost::class.java)
+		`when`(post.id).thenReturn(postId)
+		`when`(post.author).thenReturn(postAuthor)
+		`when`(post.category).thenReturn(category)
+		`when`(post.title).thenReturn("상세 테스트")
+		`when`(post.bodyPreview).thenReturn("미리보기")
+		`when`(post.bodyJson).thenReturn("""{"type":"doc"}""")
+		`when`(post.tags).thenReturn(mutableSetOf())
+		`when`(post.sourceTravelId).thenReturn(null)
+		`when`(post.viewCount).thenReturn(viewCount)
+		`when`(post.createdAt).thenReturn(Instant.parse("2026-08-01T00:00:00Z"))
+		return post
 	}
 
 	private fun stubAuthorAndCategory() {
