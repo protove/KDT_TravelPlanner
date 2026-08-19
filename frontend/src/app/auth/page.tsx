@@ -5,7 +5,7 @@ import { SocialLoginButton } from "@/components/molecules/SocialLoginButton";
 import type { AuthProvider } from "@/lib/types/auth";
 
 const API_BASE_URL =
-  process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:3000";
+  process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8080";
 
 export default function AuthPage() {
   function handleLogin(provider: AuthProvider) {
