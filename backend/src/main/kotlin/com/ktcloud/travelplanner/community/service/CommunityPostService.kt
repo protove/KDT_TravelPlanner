@@ -1,8 +1,10 @@
 package com.ktcloud.travelplanner.community.service
 
 import com.fasterxml.jackson.databind.JsonNode
+import com.fasterxml.jackson.databind.ObjectMapper
 import com.ktcloud.travelplanner.community.dto.CommunityPostCreateRequest
 import com.ktcloud.travelplanner.community.dto.CommunityPostCreateResponse
+import com.ktcloud.travelplanner.community.dto.CommunityPostDetailResponse
 import com.ktcloud.travelplanner.community.model.CommunityPost
 import com.ktcloud.travelplanner.community.model.CommunityTag
 import com.ktcloud.travelplanner.community.repository.CommunityCategoryRepository
@@ -26,6 +28,7 @@ class CommunityPostService(
 	private val userRepository: UserRepository,
 	private val travelRepository: TravelRepository,
 	private val travelMemberRepository: TravelMemberRepository,
+	private val objectMapper: ObjectMapper,
 ) {
 	@Transactional
 	fun createPost(
@@ -59,6 +62,29 @@ class CommunityPostService(
 		post.assignTags(tags)
 
 		return CommunityPostCreateResponse.from(communityPostRepository.save(post))
+	}
+
+	// community-api-contract.md 2절 — 존재하지 않거나 soft delete된 게시글은 404.
+	// CommunityPost의 @SQLRestriction("deleted_at IS NULL")로 findById가 이미 soft delete를 걸러준다.
+	@Transactional
+	fun getPostDetail(
+		postId: UUID,
+		requesterId: UUID?,
+	): CommunityPostDetailResponse {
+		val post = communityPostRepository.findById(postId).orElseThrow(::CommunityPostNotFoundException)
+
+		communityPostRepository.incrementViewCount(postId)
+		val commentCount = communityPostRepository.countActiveComments(postId)
+		val reactionCount = communityPostRepository.countReactions(postId)
+
+		return CommunityPostDetailResponse.from(
+			post = post,
+			bodyJson = objectMapper.readTree(post.bodyJson),
+			viewCount = post.viewCount + 1,
+			commentCount = commentCount,
+			reactionCount = reactionCount,
+			isMine = requesterId != null && requesterId == post.author.id,
+		)
 	}
 
 	// community-api-contract.md 0절 — 일정 기반 작성 진입은 해당 travel에 대한 조회 권한 보유자
@@ -138,6 +164,8 @@ class UnsupportedCommunityCategoryException :
 class CommunityCategoryNotFoundException : DomainException(ErrorCode.RESOURCE_NOT_FOUND)
 
 class CommunityPostAuthorNotFoundException : DomainException(ErrorCode.RESOURCE_NOT_FOUND)
+
+class CommunityPostNotFoundException : DomainException(ErrorCode.RESOURCE_NOT_FOUND)
 
 class CommunityPostSourceTravelNotFoundException : DomainException(ErrorCode.RESOURCE_NOT_FOUND)
 

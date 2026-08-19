@@ -6,6 +6,7 @@ import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Configuration
 import org.springframework.core.Ordered
 import org.springframework.core.annotation.Order
+import org.springframework.http.HttpMethod
 import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity
 import org.springframework.security.config.annotation.web.builders.HttpSecurity
 import org.springframework.security.config.http.SessionCreationPolicy
@@ -60,6 +61,7 @@ class SecurityConfig(
 					"/swagger-ui.html",
 					"/swagger-ui/**",
 				).permitAll()
+					.requestMatchers(HttpMethod.GET, "/api/v1/community/posts/*").permitAll()
 					.requestMatchers("/api/**").authenticated()
 					.anyRequest().permitAll()
 			}
