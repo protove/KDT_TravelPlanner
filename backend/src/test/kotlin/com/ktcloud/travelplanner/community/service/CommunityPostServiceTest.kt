@@ -7,7 +7,9 @@ import com.ktcloud.travelplanner.community.model.CommunityCategory
 import com.ktcloud.travelplanner.community.model.CommunityPost
 import com.ktcloud.travelplanner.community.model.CommunityTag
 import com.ktcloud.travelplanner.community.repository.CommunityCategoryRepository
+import com.ktcloud.travelplanner.community.repository.CommunityPostListRow
 import com.ktcloud.travelplanner.community.repository.CommunityPostRepository
+import com.ktcloud.travelplanner.community.repository.CommunityPostTagNameRow
 import com.ktcloud.travelplanner.community.repository.CommunityTagRepository
 import com.ktcloud.travelplanner.community.validation.InvalidBodyJsonException
 import com.ktcloud.travelplanner.membership.model.TravelRole
@@ -27,6 +29,8 @@ import org.mockito.Mockito.times
 import org.mockito.Mockito.verify
 import org.mockito.Mockito.verifyNoInteractions
 import org.mockito.Mockito.`when`
+import org.springframework.data.domain.PageImpl
+import org.springframework.data.domain.PageRequest
 import java.time.Instant
 import java.util.Optional
 import java.util.UUID
@@ -253,6 +257,95 @@ class CommunityPostServiceTest {
 		assertFalse(service.getPostDetail(postId, UUID.randomUUID()).isMine)
 		assertFalse(service.getPostDetail(postId, null).isMine)
 	}
+
+	@Test
+	fun `getPosts returns createdAt-sorted results by default and attaches tags per post`() {
+		val postId1 = UUID.randomUUID()
+		val postId2 = UUID.randomUUID()
+		val pageable = PageRequest.of(0, 10)
+		`when`(communityPostRepository.findPostsOrderByCreatedAt(null, null, null, pageable))
+			.thenReturn(PageImpl(listOf(listRow(postId1), listRow(postId2)), pageable, 2))
+		`when`(communityPostRepository.findTagNamesByPostIds(listOf(postId1, postId2)))
+			.thenReturn(
+				listOf(
+					CommunityPostTagNameRow(postId1, "부산"),
+					CommunityPostTagNameRow(postId1, "맛집"),
+				),
+			)
+
+		val response = service.getPosts(null, null, null, null, 0, 10)
+
+		assertEquals(listOf("부산", "맛집"), response.content[0].tags)
+		assertEquals(emptyList(), response.content[1].tags)
+		assertEquals(0L, response.content[0].reactionCount)
+		assertEquals(0L, response.content[0].commentCount)
+		verify(communityPostRepository, never()).findPostsOrderByPopularity(null, null, null, pageable)
+	}
+
+	@Test
+	fun `getPosts orders by popularity when sort is popular`() {
+		val pageable = PageRequest.of(0, 10)
+		`when`(communityPostRepository.findPostsOrderByPopularity(null, null, null, pageable))
+			.thenReturn(PageImpl(emptyList(), pageable, 0))
+
+		service.getPosts(null, null, null, "popular", 0, 10)
+
+		verify(communityPostRepository).findPostsOrderByPopularity(null, null, null, pageable)
+		verify(communityPostRepository, never()).findPostsOrderByCreatedAt(null, null, null, pageable)
+	}
+
+	@Test
+	fun `getPosts clamps size to the 1 to 50 range`() {
+		val minPageable = PageRequest.of(0, 1)
+		val maxPageable = PageRequest.of(0, 50)
+		`when`(communityPostRepository.findPostsOrderByCreatedAt(null, null, null, minPageable))
+			.thenReturn(PageImpl(emptyList(), minPageable, 0))
+		`when`(communityPostRepository.findPostsOrderByCreatedAt(null, null, null, maxPageable))
+			.thenReturn(PageImpl(emptyList(), maxPageable, 0))
+
+		service.getPosts(null, null, null, null, 0, 0)
+		service.getPosts(null, null, null, null, 0, 999)
+
+		verify(communityPostRepository).findPostsOrderByCreatedAt(null, null, null, minPageable)
+		verify(communityPostRepository).findPostsOrderByCreatedAt(null, null, null, maxPageable)
+	}
+
+	@Test
+	fun `getPosts trims blank filters down to null before querying`() {
+		val pageable = PageRequest.of(0, 10)
+		`when`(communityPostRepository.findPostsOrderByCreatedAt(null, null, null, pageable))
+			.thenReturn(PageImpl(emptyList(), pageable, 0))
+
+		service.getPosts("  ", "", "   ", null, 0, 10)
+
+		verify(communityPostRepository).findPostsOrderByCreatedAt(null, null, null, pageable)
+	}
+
+	@Test
+	fun `getPosts skips the tag lookup when there are no results`() {
+		val pageable = PageRequest.of(0, 10)
+		`when`(communityPostRepository.findPostsOrderByCreatedAt(null, null, null, pageable))
+			.thenReturn(PageImpl(emptyList(), pageable, 0))
+
+		service.getPosts(null, null, null, null, 0, 10)
+
+		verify(communityPostRepository, never()).findTagNamesByPostIds(emptyList())
+	}
+
+	private fun listRow(
+		postId: UUID,
+		createdAt: Instant = Instant.parse("2026-08-01T00:00:00Z"),
+	): CommunityPostListRow = CommunityPostListRow(
+		postId = postId,
+		categoryCode = "TRAVEL_REVIEW",
+		title = "목록 테스트",
+		bodyPreview = "미리보기",
+		authorNickname = "작성자",
+		authorProfileImageUrl = null,
+		viewCount = 0,
+		sourceTravelId = null,
+		createdAt = createdAt,
+	)
 
 	@Test
 	fun `getPostDetail throws when the post does not exist or is soft deleted`() {

@@ -34,6 +34,7 @@ import org.springframework.test.web.servlet.MockMvc
 import org.springframework.test.web.servlet.get
 import org.springframework.test.web.servlet.post
 import org.springframework.transaction.annotation.Transactional
+import java.sql.Timestamp
 import java.time.Instant
 import java.time.LocalDate
 import java.util.UUID
@@ -259,27 +260,103 @@ class CommunityPostControllerIntegrationTest(
 			}
 	}
 
+	@Test
+	fun `list endpoint filters by category, tag, and keyword and defaults to createdAt desc order`() {
+		val author = saveUser("list-author")
+		val busan = savePost(author, tags = setOf("부산"), title = "부산 여행 후기")
+		val jeju = savePost(author, tags = setOf("제주"), title = "제주 여행 후기")
+		val free = savePost(author, title = "자유 게시글", categoryCode = "FREE")
+		setCreatedAt(busan.id, Instant.parse("2026-08-01T00:00:00Z"))
+		setCreatedAt(jeju.id, Instant.parse("2026-08-02T00:00:00Z"))
+		setCreatedAt(free.id, Instant.parse("2026-08-03T00:00:00Z"))
+
+		mockMvc.get("/api/v1/community/posts") {
+			param("category", "TRAVEL_REVIEW")
+		}.andExpect {
+			status { isOk() }
+			jsonPath("$.data.content.length()", equalTo(2))
+			jsonPath("$.data.content[0].title", equalTo("제주 여행 후기"))
+			jsonPath("$.data.content[1].title", equalTo("부산 여행 후기"))
+			jsonPath("$.data.content[0].reactionCount", equalTo(0))
+			jsonPath("$.data.content[0].commentCount", equalTo(0))
+			jsonPath("$.data.totalElements", equalTo(2))
+			jsonPath("$.data.page", equalTo(0))
+			jsonPath("$.data.size", equalTo(10))
+			jsonPath("$.data.isFirst", equalTo(true))
+			jsonPath("$.data.isLast", equalTo(true))
+		}
+
+		mockMvc.get("/api/v1/community/posts") {
+			param("tag", "부산")
+		}.andExpect {
+			jsonPath("$.data.content.length()", equalTo(1))
+			jsonPath("$.data.content[0].title", equalTo("부산 여행 후기"))
+			jsonPath("$.data.content[0].tags[0]", equalTo("부산"))
+		}
+
+		mockMvc.get("/api/v1/community/posts") {
+			param("keyword", "자유")
+		}.andExpect {
+			jsonPath("$.data.content.length()", equalTo(1))
+			jsonPath("$.data.content[0].title", equalTo("자유 게시글"))
+		}
+	}
+
+	@Test
+	fun `list endpoint accepts sort=popular without authentication and clamps size above 50`() {
+		val author = saveUser("popular-author")
+		val older = savePost(author, title = "오래된 글")
+		val newer = savePost(author, title = "최신 글")
+		setCreatedAt(older.id, Instant.parse("2026-08-01T00:00:00Z"))
+		setCreatedAt(newer.id, Instant.parse("2026-08-05T00:00:00Z"))
+
+		mockMvc.get("/api/v1/community/posts") {
+			param("sort", "popular")
+		}.andExpect {
+			status { isOk() }
+			jsonPath("$.data.content[0].title", equalTo("최신 글"))
+			jsonPath("$.data.content[1].title", equalTo("오래된 글"))
+		}
+
+		mockMvc.get("/api/v1/community/posts") {
+			param("size", "999")
+		}.andExpect {
+			status { isOk() }
+			jsonPath("$.data.size", equalTo(50))
+		}
+	}
+
 	private fun bearer(user: User): String =
 		"Bearer ${jwtTokenService.issueAccessToken(requireNotNull(user.id)).value}"
 
 	private fun savePost(
 		author: User,
 		tags: Set<String> = emptySet(),
+		title: String = "상세 조회 테스트",
+		categoryCode: String = "TRAVEL_REVIEW",
 	): CommunityPost {
-		val category = communityCategoryRepository.findByCodeAndIsActiveTrue("TRAVEL_REVIEW")!!
+		val category = communityCategoryRepository.findByCodeAndIsActiveTrue(categoryCode)!!
 		val bodyJson = objectMapper.readTree(
 			"""{"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"본문"}]}]}""",
 		)
 		val post = CommunityPost(
 			author = author,
 			category = category,
-			title = "상세 조회 테스트",
+			title = title,
 			bodyJson = bodyJson.toString(),
 			bodyPreview = "본문",
 			sourceTravelId = null,
 		)
 		post.assignTags(tags.map { name -> communityTagRepository.findByName(name) ?: saveTag(name) }.toSet())
 		return communityPostRepository.saveAndFlush(post)
+	}
+
+	private fun setCreatedAt(
+		postId: UUID,
+		createdAt: Instant,
+	) {
+		jdbcTemplate.update("UPDATE community_post SET created_at = ? WHERE id = ?", Timestamp.from(createdAt), postId)
+		entityManager.clear()
 	}
 
 	private fun saveTag(name: String): CommunityTag {
