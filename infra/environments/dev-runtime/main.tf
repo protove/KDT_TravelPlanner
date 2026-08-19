@@ -84,40 +84,6 @@ module "monitoring_ec2" {
   ]
 }
 
-module "load_test_runner" {
-  source = "../../modules/load_test_runner"
-
-  app_subnet_id            = data.terraform_remote_state.persistent.outputs.app_subnet_ids[0]
-  aws_region               = var.aws_region
-  environment              = local.environment
-  evidence_bucket_name     = "${var.project_name}-${local.environment}-load-test-evidence-${data.aws_caller_identity.current.account_id}"
-  instance_type            = var.load_runner_instance_type
-  botocore_version         = var.load_runner_botocore_version
-  k6_image_reference       = var.k6_image_reference
-  source_commit_sha        = var.load_runner_source_commit_sha
-  project_name             = var.project_name
-  runner_security_group_id = module.runtime_security.load_runner_security_group_id
-  # D-001-R1 후속 "Seed/Cleanup 최소권한" (aws-load-test-handoff/decisions/
-  # DECISION_LOG.md): the Runner no longer reads the RDS master secret or
-  # the backend's shared Redis AUTH secret (#247's original wiring). DB
-  # access is a dedicated test-only Secret supplied by the Infra owner
-  # (var.test_db_secret_arn); Redis access is ElastiCache RBAC + IAM auth
-  # (no Secret at all — see module.backend_data's redis_load_test_user_arn/
-  # redis_replication_group_arn outputs).
-  secrets_arns = [
-    var.test_db_secret_arn,
-  ]
-  redis_iam_auth_arns = [
-    module.backend_data.redis_load_test_user_arn,
-    module.backend_data.redis_replication_group_arn,
-  ]
-  tags = local.common_tags
-
-  depends_on = [
-    aws_route.app_default,
-  ]
-}
-
 module "backend_data" {
   source = "../../modules/backend_data"
 

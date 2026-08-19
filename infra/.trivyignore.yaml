@@ -24,6 +24,7 @@ misconfigurations:
 
   - id: AVD-AWS-0104
     paths:
+      - "modules/load_test_security/main.tf"
       - "modules/runtime_security/main.tf"
-    statement: "Backend egress is restricted to TCP 443 but must reach Google/OAuth APIs and AWS public service endpoints through the single NAT; VPC endpoints or an egress proxy are a later cost/operations decision."
+    statement: "Backend and Load Runner egress is restricted to TCP 443 but must reach external APIs, registries, and AWS public service endpoints through the single NAT; VPC endpoints or an egress proxy are a later cost/operations decision."
     expired_at: 2027-01-31

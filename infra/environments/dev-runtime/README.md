@@ -1,6 +1,9 @@
-# dev-runtime 운영 인계
+# dev-runtime EC2 운영 인계
 
-`dev-runtime`은 부하·배포·복구 실험을 수행할 때만 생성하는 비용 발생 State다. VPC, subnet, ECR, API 인증서, 애플리케이션 secret 컨테이너와 기존 profile image 리소스는 `dev` State에 남고, 아래 리소스만 별도로 생성·제거한다.
+`dev-runtime`은 EC2 Backend를 실행하거나 배포·복구 실험을 수행할 때 생성하는 비용 발생
+State다. VPC, subnet, ECR, API 인증서, 애플리케이션 secret 컨테이너와 기존 profile image
+리소스는 `dev` State에 남고, 아래 리소스만 별도로 생성·제거한다. k6 Load Runner와
+evidence S3는 `dev-load-test/terraform.tfstate`로 분리되어 이 State에 포함되지 않는다.
 
 > 현재 상태(최종 제출 시점 사용자 확인 기준): `dev-runtime`의 NAT Gateway, ALB, Backend ASG, RDS,
 > Redis, Monitoring EC2 등은 테스트 완료 후 모두 삭제되었다. 아래 내용은 실행 중인 runtime의
@@ -12,13 +15,18 @@
 - PostgreSQL 17 Single-AZ RDS와 Redis OSS 7.1 단일 노드
 - Monitoring EC2의 Prometheus·Loki·Grafana와 Backend EC2의 Grafana Alloy
 
+`dev-runtime`만 apply해도 Backend 서비스와 관측 구성은 정상 동작해야 한다. 부하 테스트가
+필요할 때만 [`../dev-load-test/README.md`](../dev-load-test/README.md)에 따라
+`dev-load-test`를 추가 apply한다. 생성 순서는 `dev → dev-runtime → dev-load-test`, 삭제
+순서는 `dev-load-test → dev-runtime`이다.
+
 재생성 시 `plan`을 먼저 검토한다. `apply`, smoke test, 부하 실험, `destroy` 중 실제 AWS
 리소스를 변경하는 단계는 변경 범위와 비용을 확인한 뒤 별도 승인 후 실행한다. 현재 상태에서는
 이 문서의 명령을 읽거나 정적 검증하는 것만으로 AWS 리소스가 다시 생성되지는 않는다.
 
 ## 사전 조건
 
-1. `bootstrap` State를 먼저 plan해서 `dev-runtime/terraform.tfstate` 접근 key 추가만 발생하는지 확인한다.
+1. `bootstrap` State가 기존 `dev-runtime/terraform.tfstate` 접근 key를 유지하는지 확인한다.
 2. `dev` State를 plan해서 기존 profile image 리소스의 delete, replace가 없는지 확인한다.
 3. `dev`의 API ACM validation CNAME을 Cloudflare에 DNS only로 등록하고 인증서가 `ISSUED`인지 확인한다.
 4. backend 이미지를 `dev` ECR에 push하고 실제 manifest digest를 구한다. `:tag`는 입력 검증에서 거부된다.
@@ -102,7 +110,8 @@ plan 검토 시 다음을 모두 확인한다.
 - Backend Alloy는 `0.0.0.0:12345`를 private host port로 publish하고, Monitoring SG에서만 접근 가능한 SG reference 규칙을 사용한다.
 - Alloy job은 `Service=travel-planner-backend`, `Environment=dev`, `running` EC2를 Prometheus EC2 Service Discovery로 찾는다. `alloy:12345` 정적 target은 EC2 경로에 남아 있지 않아야 한다.
 - RDS/Redis는 data private subnet과 전용 security group만 사용한다.
-- 유료 리소스 수량이 NAT 1, ALB 1, EC2 2~4, RDS 1, Redis 1과 일치한다.
+- 유료 리소스 수량이 NAT 1, ALB 1, Backend EC2 2~4, Monitoring EC2 1, RDS 1,
+  Redis 1과 일치한다. Load Runner EC2와 evidence S3는 이 plan에 나타나지 않아야 한다.
 - Monitoring 이미지 변경 시 Monitoring EC2 replacement가 의도된 것인지 확인하고, apply 전에 필요한 Dashboard·Prometheus·Loki 증거를 외부에 보존한다.
 - Prometheus/Loki/Grafana/대시보드 파일 hash 변경 시 `monitoring_config_revision`과 Monitoring EC2 replacement가 함께 나타나며, S3 object가 먼저 준비되는 dependency가 유지된다.
 
@@ -153,7 +162,11 @@ apply 후 `alb_dns_name`을 `api.kdt-travelplanner.protove.net`의 Cloudflare DN
 
 ## 실험 종료와 비용 차단
 
-`destroy`는 RDS 데이터와 Redis cache를 제거하며 final snapshot을 만들지 않는다. 합성 seed로 재생성할 수 있는지 확인하고 별도 승인을 받은 뒤 `dev-runtime` 디렉터리에서만 수행한다. 이후 NAT Gateway, ALB, ASG, RDS, Redis가 제거됐는지와 `dev` State의 VPC, ECR, profile image 리소스가 남아 있는지를 함께 확인한다.
+`destroy`는 RDS 데이터와 Redis cache를 제거하며 final snapshot을 만들지 않는다. 먼저
+`dev-load-test` State가 비어 있고 Runner EC2·Runner SG·evidence S3가 제거됐는지 확인한다.
+합성 seed로 재생성할 수 있는지 확인하고 별도 승인을 받은 뒤 `dev-runtime` 디렉터리에서만
+수행한다. 이후 NAT Gateway, ALB, ASG, RDS, Redis가 제거됐는지와 `dev` State의 VPC, ECR,
+profile image 리소스가 남아 있는지를 함께 확인한다.
 
 실제 종료 순서는 먼저 destroy plan을 저장하고 변경 범위를 검토한 뒤, 별도 승인 후 저장된
 plan만 적용한다. `terraform destroy`를 직접 실행하거나 `-target`으로 일부만 지우지 않는다.
@@ -174,6 +187,7 @@ terraform -chdir=infra/environments/dev-runtime apply \
 
 # 적용 후 State가 비었는지와 dev State가 유지되는지 확인
 terraform -chdir=infra/environments/dev-runtime state list
+terraform -chdir=infra/environments/dev-load-test state list
 terraform -chdir=infra/environments/dev state list
 ```
 

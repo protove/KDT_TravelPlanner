@@ -4,6 +4,8 @@
 
 > 현재 상태(최종 제출 시점 사용자 확인 기준): `dev` State는 유지 중이다. `dev-runtime`은 부하·배포·복구 테스트를 완료한 뒤
 > 전체 리소스를 삭제했으며, 이 문서의 runtime 명령은 필요할 때 재생성하기 위한 runbook이다.
+> `dev-runtime`은 기존 State key를 유지하는 EC2 Runtime이고, k6 Runner와 evidence S3는
+> 별도 `dev-load-test` State로 분리되어 테스트할 때만 추가 생성한다.
 > `terraform apply`와 `terraform destroy`는 비용·데이터·외부 상태를 바꾸므로 plan 변경 범위를
 > 사람이 확인하고 별도 승인한 뒤 실행한다.
 
@@ -14,7 +16,8 @@ infra/
 ├── bootstrap/                         # State S3 최초 생성 전용 Root
 ├── environments/
 │   ├── dev/                           # 개발 환경 Root
-│   ├── dev-runtime/                   # 실험 시에만 재생성하는 유료 Runtime Root (현재 리소스 없음)
+│   ├── dev-runtime/                   # EC2 Runtime Root (현재 리소스 없음)
+│   ├── dev-load-test/                 # EC2 Runtime 대상 Load Runner Root (현재 미적용)
 │   └── prod/                          # 운영 환경 Root
 └── modules/
     ├── terraform_state_backend/       # State S3와 최소 State 접근 정책
@@ -25,6 +28,7 @@ infra/
     ├── github_ecr_publisher/          # GitHub OIDC와 ECR Push 전용 Role
     ├── github_frontend_deployer/      # GitHub OIDC와 Frontend S3 배포 전용 Role
     ├── runtime_security/              # ALB/backend/data Security Group
+    ├── load_test_security/            # Load Runner와 data 간 Security Group 경계
     ├── backend_data/                  # RDS PostgreSQL과 Redis
     └── backend_service/               # ALB, Launch Template와 EC2 ASG
 ```
@@ -164,7 +168,10 @@ AWS S3에서는 `PROFILE_IMAGE_STORAGE_PATH_STYLE_ACCESS_ENABLED=false`를 사�
 
 `profile_image_runtime_policy_arn`은 생성만 되고 자동 연결되지 않는다. 개발용 `KDT-Dev-Runtime-Test` Permission Set에는 동일한 최소권한 인라인 정책을 유지하거나, 생성된 고객 관리형 정책을 이름과 `/` 경로로 연결한다. 두 방식을 중복 적용하지 않는다.
 
-`load_test_evidence_operator_read_policy_arn`도 같은 방식이다: `evidence/aws-load-tests/*` prefix에 대한 읽기 전용(`s3:GetObject`, `s3:ListBucket`) 고객 관리형 정책만 생성되고 자동 연결되지 않는다. B-01 운영자가 evidence를 조회해야 하면 이 정책을 자신의 SSO Permission Set이나 Role에 수동으로 연결한다.
+`dev-load-test`의 `load_test_evidence_operator_read_policy_arn`도 같은 방식이다:
+`evidence/aws-load-tests/*` prefix에 대한 읽기 전용(`s3:GetObject`, `s3:ListBucket`) 고객 관리형
+정책만 생성되고 자동 연결되지 않는다. B-01 운영자가 evidence를 조회해야 하면 이 정책을 자신의
+SSO Permission Set이나 Role에 수동으로 연결하고, destroy 전에 detach한다.
 
 ## 금지 사항
 
@@ -191,6 +198,9 @@ terraform -chdir=infra/bootstrap init -backend=false
 terraform -chdir=infra/bootstrap validate
 terraform -chdir=infra/environments/dev init -backend=false
 terraform -chdir=infra/environments/dev validate
+terraform -chdir=infra/environments/dev-load-test init -backend=false
+terraform -chdir=infra/environments/dev-load-test validate
+terraform -chdir=infra/environments/dev-load-test test
 terraform -chdir=infra/environments/dev-runtime init -backend=false
 terraform -chdir=infra/environments/dev-runtime validate
 terraform -chdir=infra/environments/prod init -backend=false
@@ -200,6 +210,9 @@ terraform -chdir=infra/modules/profile_image test
 terraform -chdir=infra/modules/static_frontend test
 terraform -chdir=infra/modules/github_ecr_publisher test
 terraform -chdir=infra/modules/github_frontend_deployer test
+terraform -chdir=infra/modules/runtime_security test
+terraform -chdir=infra/modules/load_test_security test
+terraform -chdir=infra/modules/load_test_runner test
 ```
 
 CI는 원격 State를 사용하는 AWS plan/apply를 실행하지 않는다. provider 초기화가 필요한 검증과

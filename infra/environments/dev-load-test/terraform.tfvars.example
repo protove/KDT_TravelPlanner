@@ -1,0 +1,16 @@
+aws_account_id = "123456789012"
+aws_region     = "ap-northeast-2"
+project_name   = "kdt-travelplanner"
+state_bucket   = "kdt-travelplanner-tfstate-123456789012-ap-northeast-2"
+
+# Keep these defaults while the Load Runner targets the existing EC2 Runtime.
+persistent_state_key = "dev/terraform.tfstate"
+runtime_state_key    = "dev-runtime/terraform.tfstate"
+
+# Dedicated least-privilege test DB Secret, never the RDS master Secret.
+test_db_secret_arn = "arn:aws:secretsmanager:ap-northeast-2:123456789012:secret:kdt-travelplanner-dev/loadtest/db-XXXXXX"
+
+# Exact commit containing the reviewed AWS load-test scripts.
+load_runner_source_commit_sha = "0123456789abcdef0123456789abcdef01234567"
+load_runner_instance_type     = "t3.small"
+load_runner_botocore_version  = "1.43.68"
