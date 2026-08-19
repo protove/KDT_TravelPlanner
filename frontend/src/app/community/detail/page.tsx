@@ -33,30 +33,28 @@ function CommunityDetailContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const id = searchParams.get("id") ?? undefined;
-  const isLoggedIn = useAuthStore((s) => s.isLoggedIn);
+  // community-api-contract.md 2절 — GET /posts/{postId}는 인증 불필요. 로그인 여부와 관계없이
+  // 조회 가능해야 하므로 accessToken 유무로 화면 접근을 막지 않는다(비로그인이면 isMine=false로 옴).
   const isInitializing = useAuthStore((s) => s.isInitializing);
   const accessToken = useAuthStore((s) => s.accessToken);
 
   const [post, setPost] = React.useState<CommunityPostDetail | null>(null);
   const [categories, setCategories] = React.useState<CommunityCategory[]>([]);
+  const [notFound, setNotFound] = React.useState(false);
 
   React.useEffect(() => {
-    if (!isInitializing && !isLoggedIn) router.replace("/");
-  }, [isInitializing, isLoggedIn, router]);
-
-  React.useEffect(() => {
-    if (!accessToken || !id) return;
+    if (!id) return;
     getPost(accessToken, id)
       .then(setPost)
-      .catch(() => router.replace("/403"));
-  }, [accessToken, id, router]);
+      .catch(() => setNotFound(true));
+  }, [accessToken, id]);
 
   React.useEffect(() => {
-    if (!accessToken) return;
     getCategories(accessToken).then(setCategories).catch(() => {});
   }, [accessToken]);
 
-  if (isInitializing || !isLoggedIn) return null;
+  if (isInitializing) return null;
+  if (notFound) return null;
   if (!post) return null;
 
   const categoryName = categories.find((c) => c.code === post.categoryCode)?.name ?? post.categoryCode;
