@@ -74,16 +74,18 @@ class CommunityPostService(
 		postId: UUID,
 		requesterId: UUID?,
 	): CommunityPostDetailResponse {
-		val post = communityPostRepository.findById(postId).orElseThrow(::CommunityPostNotFoundException)
-
+		if (!communityPostRepository.existsById(postId)) {
+			throw CommunityPostNotFoundException()
+		}
 		communityPostRepository.incrementViewCount(postId)
+		val post = communityPostRepository.findById(postId).orElseThrow(::CommunityPostNotFoundException)
 		val commentCount = communityPostRepository.countActiveComments(postId)
 		val reactionCount = communityPostRepository.countReactions(postId)
 
 		return CommunityPostDetailResponse.from(
 			post = post,
 			bodyJson = objectMapper.readTree(post.bodyJson),
-			viewCount = post.viewCount + 1,
+			viewCount = post.viewCount,
 			commentCount = commentCount,
 			reactionCount = reactionCount,
 			isMine = requesterId != null && requesterId == post.author.id,
