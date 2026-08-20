@@ -20,11 +20,28 @@ def load_module(name: str, path: Path):
 
 
 SUMMARY = load_module("scrum41_sql_summary", ROOT / "scripts/loadtest/summarize-compose-sql-round-trip-diagnostic.py")
+RUNNER = load_module("scrum41_sql_runner", ROOT / "scripts/loadtest/run-compose-sql-round-trip-diagnostic.py")
 SAFETY = load_module("scrum41_sql_safety", ROOT / "scripts/loadtest/verify-compose-sql-diagnostic-evidence.py")
 CAPTURE = load_module("scrum41_sql_capture", ROOT / "scripts/loadtest/verify-compose-sql-grafana-captures.py")
 
 
 class SqlDiagnosticSummaryTest(unittest.TestCase):
+    def test_k6_metric_values_support_native_and_fixture_shapes(self) -> None:
+        self.assertEqual(SUMMARY.metric_values({"http_req_duration": {"p(95)": 12.5}}, "http_req_duration"), {"p(95)": 12.5})
+        self.assertEqual(SUMMARY.metric_values({"http_req_duration": {"values": {"p(95)": 12.5}}}, "http_req_duration"), {"p(95)": 12.5})
+
+    def test_classifier_excludes_postgres_observability_queries_from_unknown_application_sql(self) -> None:
+        system_queries = (
+            "SELECT * FROM pg_stat_database",
+            "SELECT name, setting FROM pg_settings",
+            "SELECT clock_timestamp()::text",
+            "SELECT version()",
+        )
+        for query in system_queries:
+            normalized = RUNNER.normalize_query(query)
+            self.assertEqual(RUNNER.classify_query(normalized), "transaction_or_session", query)
+        self.assertEqual(RUNNER.classify_query("SELECT * FROM MYSTERY_TABLE"), "unknown_application_table_statement")
+
     def test_classification_branches_are_fixed_and_replicate_gated(self) -> None:
         base = {"replicate": 1, "valid": True}
 

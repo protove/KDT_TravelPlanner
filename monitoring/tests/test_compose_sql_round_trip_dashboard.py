@@ -50,7 +50,9 @@ class ComposeSqlRoundTripDashboardTest(unittest.TestCase):
         self.assertIn("track_io_timing=on", overlay)
         self.assertIn("--collector.stat_statements", overlay)
         self.assertIn("prom/pushgateway:v1.11.1@sha256:", overlay)
-        self.assertNotIn("ports:\n      - \"127.0.0.1", overlay)
+        pushgateway_block = overlay.split("  pushgateway:", 1)[1].split("\n  prometheus:", 1)[0]
+        self.assertNotIn("\n    ports:", pushgateway_block)
+        self.assertIn('127.0.0.1:${PROMETHEUS_PORT:-9090}:9090', overlay)
         self.assertNotIn(":latest", overlay)
         self.assertNotIn("request_id", overlay)
         self.assertNotIn("item_id", overlay)

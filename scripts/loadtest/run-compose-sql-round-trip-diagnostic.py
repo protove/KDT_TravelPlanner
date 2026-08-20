@@ -130,6 +130,35 @@ def wait_http(url: str, timeout_seconds: int = 240) -> None:
     raise DiagnosticError(f"endpoint did not become ready: {url} ({last_error[:160]})")
 
 
+def wait_backend_readiness(compose: list[str], env: dict[str, str], timeout_seconds: int = 240) -> None:
+    """Probe the management port from inside the backend container.
+
+    The base Compose contract exposes the application port on localhost but keeps
+    management port 9091 internal; probing the mapped application port therefore
+    returns a legitimate 404 instead of readiness.
+    """
+    deadline = time.monotonic() + timeout_seconds
+    last_error = "unavailable"
+    command = [
+        *compose,
+        "exec",
+        "--no-TTY",
+        "backend",
+        "wget",
+        "-q",
+        "-O",
+        "-",
+        "http://127.0.0.1:9091/actuator/health/readiness",
+    ]
+    while time.monotonic() < deadline:
+        result = run_command(command, env)
+        if result.returncode == 0:
+            return
+        last_error = (result.stderr or result.stdout or "command failed").strip()
+        time.sleep(2)
+    raise DiagnosticError(f"backend readiness did not become ready ({last_error[:160]})")
+
+
 def http_json(url: str, *, timeout: int = 30) -> dict[str, Any]:
     try:
         with urllib.request.urlopen(url, timeout=timeout) as response:
@@ -202,8 +231,8 @@ def metric_delta(before: dict[str, Any], after: dict[str, Any]) -> dict[str, Any
     return {"schemaVersion": "scrum41-sql-backend-metric-delta/v1", "beforeCapturedAtUtc": before.get("capturedAtUtc"), "afterCapturedAtUtc": after.get("capturedAtUtc"), "before": before.get("values"), "after": after.get("values"), "delta": values, "available": bool(before.get("available") and after.get("available"))}
 
 
-def psql(compose: list[str], env: dict[str, str], sql: str) -> str:
-    result = run_command([*compose, "exec", "--no-TTY", "--user", "postgres", "psql", "-v", "ON_ERROR_STOP=1", "-U", env.get("POSTGRES_USER", "postgres"), "-d", env.get("POSTGRES_DB", "travelplanner"), "-tA", "-c", sql], env)
+def psql(compose: list[str], env: dict[str, str], sql: str, *, database_user: str | None = None) -> str:
+    result = run_command([*compose, "exec", "--no-TTY", "--user", "postgres", "postgres", "psql", "-v", "ON_ERROR_STOP=1", "-U", database_user or env.get("POSTGRES_USER", "postgres"), "-d", env.get("POSTGRES_DB", "travelplanner"), "-tA", "-c", sql], env)
     assert_ok(result, "psql")
     return (result.stdout or "").strip()
 
@@ -233,6 +262,8 @@ def classify_query(normalized: str) -> str:
         return "transaction_or_session"
     if "PG_STAT_STATEMENTS" in normalized or "PG_CATALOG" in normalized or normalized.startswith(("BEGIN", "COMMIT", "ROLLBACK", "SET ", "SHOW ", "RESET ", "START TRANSACTION")):
         return "transaction_or_session"
+    if "PG_" in normalized or "CURRENT_DATABASE()" in normalized or "CLOCK_TIMESTAMP()" in normalized or "VERSION()" in normalized:
+        return "transaction_or_session"
     if "TIMELINE_TABLE" in normalized and normalized.startswith(("UPDATE", "INSERT", "DELETE")):
         return "timeline_update" if normalized.startswith("UPDATE") else "unknown_application_table_statement"
     if "TIMELINE_TABLE" in normalized:
@@ -255,8 +286,8 @@ def statement_snapshot(compose: list[str], env: dict[str, str], reset_at: str) -
         'sharedBlksRead', s.shared_blks_read,
         'tempBlksWritten', s.temp_blks_written,
         'walBytes', s.wal_bytes,
-        'blkReadMs', s.blk_read_time,
-        'blkWriteMs', s.blk_write_time
+        'blkReadMs', s.shared_blk_read_time,
+        'blkWriteMs', s.shared_blk_write_time
     )), '[]'::json)::text
     FROM pg_stat_statements s
     JOIN pg_database d ON d.oid = s.dbid
@@ -314,21 +345,31 @@ def stage_metrics_payload(stage: dict[str, Any], breakdown: dict[str, Any], repl
         f"scrum41_sql_diagnostic_item_count{{{render_labels(labels)}}} {item_count}",
         "# TYPE scrum41_sql_diagnostic_update_amplification gauge",
         f"scrum41_sql_diagnostic_update_amplification{{{render_labels(labels)}}} {stage['timelineUpdateCallsPerRequest'] or 0}",
+        "# TYPE scrum41_sql_diagnostic_sql_calls_per_request gauge",
     ]
     for family in ("travel_select", "timeline_select", "membership_permission_select", "timeline_update", "transaction_or_session", "unknown_application_table_statement"):
         family_labels = {**labels, "query_family": family}
         values = (breakdown.get("queryFamilies") or {}).get(family) or {}
         calls = float(values.get("calls") or 0)
+        lines.append(
+            f"scrum41_sql_diagnostic_sql_calls_per_request{{{render_labels(family_labels)}}} {calls / max(stage['validity']['successfulRequests'], 1)}"
+        )
+    lines.append("# TYPE scrum41_sql_diagnostic_db_exec_ms_per_request gauge")
+    for family in ("travel_select", "timeline_select", "membership_permission_select", "timeline_update", "transaction_or_session", "unknown_application_table_statement"):
+        family_labels = {**labels, "query_family": family}
+        values = (breakdown.get("queryFamilies") or {}).get(family) or {}
         total_exec = float(values.get("totalExecMs") or 0)
+        lines.append(
+            f"scrum41_sql_diagnostic_db_exec_ms_per_request{{{render_labels(family_labels)}}} {total_exec / max(stage['validity']['successfulRequests'], 1)}"
+        )
+    lines.append("# TYPE scrum41_sql_diagnostic_db_mean_exec_ms_per_call gauge")
+    for family in ("travel_select", "timeline_select", "membership_permission_select", "timeline_update", "transaction_or_session", "unknown_application_table_statement"):
+        family_labels = {**labels, "query_family": family}
+        values = (breakdown.get("queryFamilies") or {}).get(family) or {}
         mean_exec = float(values.get("meanExecMs") or 0)
-        lines.extend([
-            "# TYPE scrum41_sql_diagnostic_sql_calls_per_request gauge",
-            f"scrum41_sql_diagnostic_sql_calls_per_request{{{render_labels(family_labels)}}} {calls / max(stage['validity']['successfulRequests'], 1)}",
-            "# TYPE scrum41_sql_diagnostic_db_exec_ms_per_request gauge",
-            f"scrum41_sql_diagnostic_db_exec_ms_per_request{{{render_labels(family_labels)}}} {total_exec / max(stage['validity']['successfulRequests'], 1)}",
-            "# TYPE scrum41_sql_diagnostic_db_mean_exec_ms_per_call gauge",
-            f"scrum41_sql_diagnostic_db_mean_exec_ms_per_call{{{render_labels(family_labels)}}} {mean_exec}",
-        ])
+        lines.append(
+            f"scrum41_sql_diagnostic_db_mean_exec_ms_per_call{{{render_labels(family_labels)}}} {mean_exec}"
+        )
     return "\n".join(lines) + "\n"
 
 
@@ -394,9 +435,27 @@ def crop_panel_fallback(full_path: Path, panel_path: Path, index: int, panel_cou
         rows = (panel_count + columns - 1) // columns
         width, height = image.size
         column, row = index % columns, index // columns
-        image.crop((int(width * column / columns), int(height * row / rows), int(width * (column + 1) / columns), int(height * (row + 1) / rows))).save(panel_path, format="PNG")
+        crop = image.crop((int(width * column / columns), int(height * row / rows), int(width * (column + 1) / columns), int(height * (row + 1) / rows)))
+        # The browser's element screenshot can be a narrow/short viewport.  A
+        # deterministic crop from the 1920x1080 dashboard is the evidence
+        # fallback, but keep every panel above the capture contract even when
+        # a dashboard layout produces a smaller crop.
+        if crop.width < 640 or crop.height < 240:
+            crop = crop.resize((max(640, crop.width), max(240, crop.height)), Image.Resampling.LANCZOS)
+        crop.save(panel_path, format="PNG")
     except Exception as error:
         raise DiagnosticError(f"panel fallback failed: {error}") from error
+
+
+def png_is_usable(path: Path) -> bool:
+    if not path.is_file() or path.stat().st_size < 8192:
+        return False
+    try:
+        from PIL import Image
+        width, height = Image.open(path).size
+        return width >= 640 and height >= 240
+    except Exception:
+        return False
 
 
 def capture_grafana(replicate_dir: Path, campaign_id: str, replicate: int, grafana_url: str, prometheus_url: str, from_epoch: float, to_epoch: float, env: dict[str, str]) -> None:
@@ -448,6 +507,8 @@ def capture_grafana(replicate_dir: Path, campaign_id: str, replicate: int, grafa
             if not region_match:
                 raise DiagnosticError("panel region ref missing")
             copy_cli_screenshot(run_playwright(pwcli, session, "screenshot", region_match.group(1)), panel_path)
+            if not png_is_usable(panel_path):
+                crop_panel_fallback(full_path, panel_path, index, len(key_ids))
         except DiagnosticError:
             crop_panel_fallback(full_path, panel_path, index, len(key_ids))
     try:
@@ -535,7 +596,7 @@ def run_campaign(args: argparse.Namespace) -> Path:
         try:
             assert_ok(run_command([*compose, "config", "--quiet"], compose_env), f"Compose config replicate {replicate}")
             assert_ok(run_command([*compose, "up", "--build", "--detach", "--wait"], compose_env, capture=False, timeout=900), f"Compose up replicate {replicate}")
-            wait_http(f"http://127.0.0.1:{backend_port}/actuator/health/readiness")
+            wait_backend_readiness(compose, compose_env)
             wait_http(f"http://127.0.0.1:{prometheus_port}/-/ready")
             wait_http(f"http://127.0.0.1:{grafana_port}/api/health")
             sampler = StatsSampler(project, env_file, replicate_dir / "service-stats.jsonl", compose_env)

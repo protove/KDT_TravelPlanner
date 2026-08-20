@@ -94,11 +94,11 @@ def seed(args: argparse.Namespace) -> None:
     nickname = "sql" + hashlib.sha256(tag.encode()).hexdigest()[:12]
     runtime.psql(
         "INSERT INTO user_table (id, provider, provider_user_id, email, name, nickname, "
-        "profile_completed, created_at, updated_at) VALUES " + ", ".join((
+        "profile_completed, created_at, updated_at) VALUES (" + ", ".join((
             sql_literal(user_id), "'GOOGLE'", sql_literal(provider_user_id),
             sql_literal(provider_user_id + "@diagnostic.local"), "'SQL Diagnostic'", sql_literal(nickname),
-            "TRUE", "now()", "now()",
-        ))
+        "TRUE", "now()", "now()",
+        )) + ")"
     )
     ttl_ms = parse_duration_ms(env_values.get("REFRESH_TOKEN_TTL"))
     refresh_token, family_id = runtime.seed_redis_token(user_id, ttl_ms)

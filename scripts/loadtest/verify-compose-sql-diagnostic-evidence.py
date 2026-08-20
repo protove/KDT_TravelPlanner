@@ -61,7 +61,26 @@ def verify(root: Path, require_analysis: bool = False, require_captures: bool = 
         if path.name in {"credentials.json", "data.json"} or "token" in path.name.lower():
             findings.append({"file": relative, "type": "credential-like-file"})
         checked += 1
-        if path.suffix.lower() == ".json":
+        if path.name == "raw.json":
+            # k6's JSON output is a JSON-lines stream despite the historical
+            # .json filename.  Parse each event independently so a valid run
+            # is not rejected as one malformed JSON document, while retaining
+            # the same secret/UUID inspection for every event.
+            try:
+                lines = path.read_text(encoding="utf-8").splitlines()
+                if not any(line.strip() for line in lines):
+                    findings.append({"file": relative, "type": "invalid-json"})
+                for line_number, line in enumerate(lines, start=1):
+                    if not line.strip():
+                        continue
+                    try:
+                        inspect_value(json.loads(line), relative, findings, f"$[{line_number}]")
+                    except (UnicodeDecodeError, json.JSONDecodeError):
+                        findings.append({"file": relative, "type": "invalid-json"})
+                        break
+            except (OSError, UnicodeDecodeError):
+                findings.append({"file": relative, "type": "invalid-json"})
+        elif path.suffix.lower() == ".json":
             try:
                 inspect_value(load_json(path), relative, findings)
             except (OSError, UnicodeDecodeError, json.JSONDecodeError):

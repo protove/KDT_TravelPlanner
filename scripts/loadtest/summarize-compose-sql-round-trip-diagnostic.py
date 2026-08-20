@@ -92,6 +92,15 @@ def k6_metrics(stage_dir: Path) -> tuple[dict[str, Any], dict[str, Any]]:
     return metrics, compact
 
 
+def metric_values(metrics: dict[str, Any], name: str) -> dict[str, Any]:
+    """Read both k6's native flat metric shape and fixture value wrappers."""
+    metric = metrics.get(name) or {}
+    if not isinstance(metric, dict):
+        return {}
+    values = metric.get("values")
+    return values if isinstance(values, dict) else metric
+
+
 def read_stats(stage_dir: Path) -> dict[str, Any]:
     stats = load_json(stage_dir / "pg-stat-statements.json")
     statements = stats.get("statements")
@@ -110,15 +119,25 @@ def stage_summary(stage_dir: Path) -> dict[str, Any]:
     if mode not in MODES or item_count not in COUNTS:
         raise SummaryError(f"invalid stage dimensions: {stage_dir}")
     metrics, compact = k6_metrics(stage_dir)
-    duration = metrics.get("http_req_duration", {}).get("values", {})
+    duration = metric_values(metrics, "http_req_duration")
     p95 = number(duration.get("p(95)"))
     if p95 is None:
         raise SummaryError(f"http_req_duration p95 missing: {stage_dir}")
-    requests = number(metrics.get("http_reqs", {}).get("values", {}).get("count"), 0.0) or 0.0
-    successful = number(metrics.get("sql_diagnostic_successful_requests", {}).get("values", {}).get("count"), requests) or 0.0
-    contract_rate_value = number(metrics.get("sql_diagnostic_contract_failures", {}).get("values", {}).get("rate"), None)
+    requests = number(metric_values(metrics, "http_reqs").get("count"), 0.0) or 0.0
+    successful = number(metric_values(metrics, "sql_diagnostic_successful_requests").get("count"), requests) or 0.0
+    contract_metric = metric_values(metrics, "sql_diagnostic_contract_failures")
+    contract_rate_value = number(contract_metric.get("rate"), None)
+    if contract_rate_value is None:
+        # k6's native JSON summary names a Rate metric's aggregate `value`;
+        # retain support for the explicit `rate` shape used by fixtures.
+        contract_rate_value = number(contract_metric.get("value"), None)
+    if contract_rate_value is None:
+        fails = number(contract_metric.get("fails"), None)
+        passes = number(contract_metric.get("passes"), None)
+        if fails is not None and passes is not None and fails + passes > 0:
+            contract_rate_value = fails / (fails + passes)
     contract_rate = 1.0 if contract_rate_value is None else contract_rate_value
-    dropped = number(metrics.get("dropped_iterations", {}).get("values", {}).get("count"), 0.0) or 0.0
+    dropped = number(metric_values(metrics, "dropped_iterations").get("count"), 0.0) or 0.0
     stats = read_stats(stage_dir)
     if int(stats.get("unknownCount", 0)) != 0:
         raise SummaryError(f"unknown SQL family present: {stage_dir}")
@@ -156,7 +175,7 @@ def stage_summary(stage_dir: Path) -> dict[str, Any]:
         },
         "apiP95Ms": p95,
         "apiMeanMs": number(duration.get("avg"), None),
-        "requestBodyBytesP95": number(metrics.get("sql_diagnostic_request_body_bytes", {}).get("values", {}).get("p(95)"), None),
+        "requestBodyBytesP95": number(metric_values(metrics, "sql_diagnostic_request_body_bytes").get("p(95)"), None),
         "totalSqlCallsPerRequest": calls_per_request,
         "timelineUpdateCallsPerRequest": update_calls_per_request,
         "totalDbExecMsPerRequest": db_ms_per_request,
