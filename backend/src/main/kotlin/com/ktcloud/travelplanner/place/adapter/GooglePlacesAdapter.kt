@@ -19,6 +19,26 @@ private data class GooglePlaceSearchRequest(
 	val regionCode: String,
 )
 
+private data class GoogleNearbySearchRequest(
+	val languageCode: String = "ko",
+	val maxResultCount: Int = 20,
+	val locationRestriction: GoogleLocationRestriction,
+)
+
+private data class GoogleLocationRestriction(
+	val circle: GoogleCircle,
+)
+
+private data class GoogleCircle(
+	val center: GoogleLatLng,
+	val radius: Double,
+)
+
+private data class GoogleLatLng(
+	val latitude: BigDecimal,
+	val longitude: BigDecimal,
+)
+
 private data class GooglePlaceSearchResponse(
 	val places: List<GooglePlace> = emptyList(),
 )
@@ -55,6 +75,7 @@ class GooglePlacesAdapter(
 		countryCode: String,
 	): List<PlaceSearchResult> {
 		if (properties.apiKey.isBlank()) throw GooglePlacesNotConfiguredException()
+
 		return try {
 			val response = restClient.post()
 				.uri("/v1/places:searchText")
@@ -70,13 +91,61 @@ class GooglePlacesAdapter(
 				.retrieve()
 				.body(GooglePlaceSearchResponse::class.java)
 				?: throw GooglePlacesProviderException()
+
 			response.places.map(::mapPlace)
 		} catch (exception: GooglePlacesException) {
 			throw exception
 		} catch (exception: ResourceAccessException) {
 			throw exception.toGooglePlacesException()
 		} catch (exception: RestClientResponseException) {
-			if (exception.statusCode.value() == 429) throw GooglePlacesQuotaExceededException(exception)
+			if (exception.statusCode.value() == 429) {
+				throw GooglePlacesQuotaExceededException(exception)
+			}
+			throw GooglePlacesProviderException(exception)
+		} catch (exception: RestClientException) {
+			throw GooglePlacesProviderException(exception)
+		}
+	}
+
+	override fun searchNearbyPlaces(
+		latitude: BigDecimal,
+		longitude: BigDecimal,
+		radiusMeters: Double,
+	): List<PlaceSearchResult> {
+		if (properties.apiKey.isBlank()) throw GooglePlacesNotConfiguredException()
+
+		return try {
+			val response = restClient.post()
+				.uri("/v1/places:searchNearby")
+				.contentType(MediaType.APPLICATION_JSON)
+				.header(GOOGLE_API_KEY_HEADER, properties.apiKey)
+				.header(GOOGLE_FIELD_MASK_HEADER, RESPONSE_FIELD_MASK)
+				.body(
+					GoogleNearbySearchRequest(
+						locationRestriction = GoogleLocationRestriction(
+							circle = GoogleCircle(
+								center = GoogleLatLng(
+									latitude = latitude,
+									longitude = longitude,
+								),
+								radius = radiusMeters,
+							),
+						),
+					),
+				)
+				.retrieve()
+				.body(GooglePlaceSearchResponse::class.java)
+				?: throw GooglePlacesProviderException()
+
+			response.places.map(::mapPlace)
+		} catch (exception: GooglePlacesException) {
+			throw exception
+		} catch (exception: ResourceAccessException) {
+			throw exception.toGooglePlacesException()
+		} catch (exception: RestClientResponseException) {
+			if (exception.statusCode.value() == 429) {
+				throw GooglePlacesQuotaExceededException(exception)
+			}
 			throw GooglePlacesProviderException(exception)
 		} catch (exception: RestClientException) {
 			throw GooglePlacesProviderException(exception)
@@ -84,11 +153,22 @@ class GooglePlacesAdapter(
 	}
 
 	private fun mapPlace(place: GooglePlace): PlaceSearchResult {
-		val placeId = place.id?.takeIf(String::isNotBlank) ?: throw GooglePlacesProviderException()
-		val name = place.displayName?.text?.takeIf(String::isNotBlank) ?: throw GooglePlacesProviderException()
-		val latitude = place.location?.latitude ?: throw GooglePlacesProviderException()
-		val longitude = place.location.longitude ?: throw GooglePlacesProviderException()
-		return PlaceSearchResult(placeId, name, latitude, longitude, place.rating)
+		val placeId = place.id?.takeIf(String::isNotBlank)
+			?: throw GooglePlacesProviderException()
+		val name = place.displayName?.text?.takeIf(String::isNotBlank)
+			?: throw GooglePlacesProviderException()
+		val latitude = place.location?.latitude
+			?: throw GooglePlacesProviderException()
+		val longitude = place.location.longitude
+			?: throw GooglePlacesProviderException()
+
+		return PlaceSearchResult(
+			placeId = placeId,
+			name = name,
+			latitude = latitude,
+			longitude = longitude,
+			rating = place.rating,
+		)
 	}
 
 	companion object {
@@ -99,15 +179,34 @@ class GooglePlacesAdapter(
 	}
 }
 
-sealed class GooglePlacesException(errorCode: ErrorCode, cause: Throwable? = null) :
-	ExternalServiceException(errorCode, cause = cause)
+sealed class GooglePlacesException(
+	errorCode: ErrorCode,
+	cause: Throwable? = null,
+) : ExternalServiceException(
+	errorCode,
+	cause = cause,
+)
 
-class GooglePlacesNotConfiguredException : GooglePlacesException(ErrorCode.GOOGLE_PLACES_NOT_CONFIGURED)
+class GooglePlacesNotConfiguredException :
+	GooglePlacesException(ErrorCode.GOOGLE_PLACES_NOT_CONFIGURED)
 
-class GooglePlacesTimeoutException(cause: Throwable) : GooglePlacesException(ErrorCode.GOOGLE_PLACES_TIMEOUT, cause)
+class GooglePlacesTimeoutException(
+	cause: Throwable,
+) : GooglePlacesException(
+	ErrorCode.GOOGLE_PLACES_TIMEOUT,
+	cause,
+)
 
-class GooglePlacesQuotaExceededException(cause: Throwable) :
-	GooglePlacesException(ErrorCode.GOOGLE_PLACES_QUOTA_EXCEEDED, cause)
+class GooglePlacesQuotaExceededException(
+	cause: Throwable,
+) : GooglePlacesException(
+	ErrorCode.GOOGLE_PLACES_QUOTA_EXCEEDED,
+	cause,
+)
 
-class GooglePlacesProviderException(cause: Throwable? = null) :
-	GooglePlacesException(ErrorCode.GOOGLE_PLACES_ERROR, cause)
+class GooglePlacesProviderException(
+	cause: Throwable? = null,
+) : GooglePlacesException(
+	ErrorCode.GOOGLE_PLACES_ERROR,
+	cause,
+)

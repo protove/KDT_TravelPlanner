@@ -17,6 +17,8 @@ export interface MapPanelProps {
   markers?: MapMarker[];
   onMarkerClick?: (id: string) => void;
   onOptimizeRoute?: () => void;
+  onSearchNearby?: (center: { lat: number; lng: number }) => void;
+  nearbySearchDisabled?: boolean;
   className?: string;
 }
 
@@ -41,7 +43,14 @@ const MAP_OPTIONS: google.maps.MapOptions = {
  * 넣고 백엔드 /api/v1/travels/{id}/routes의 encodedPolyline을 google.maps.geometry.encoding으로
  * 디코딩해서 Polyline으로 그리면 된다.
  */
-function MapPanel({ markers = [], onMarkerClick, onOptimizeRoute, className }: MapPanelProps) {
+function MapPanel({
+  markers = [],
+  onMarkerClick,
+  onOptimizeRoute,
+  onSearchNearby,
+  nearbySearchDisabled = false,
+  className,
+}: MapPanelProps) {
   const { isLoaded, loadError } = useJsApiLoader({
     id: "travel-planner-google-maps",
     googleMapsApiKey: GOOGLE_MAPS_API_KEY,
@@ -65,6 +74,12 @@ function MapPanel({ markers = [], onMarkerClick, onOptimizeRoute, className }: M
   React.useEffect(() => {
     if (isLoaded) fitToMarkers();
   }, [isLoaded, fitToMarkers]);
+
+  function handleSearchNearby() {
+    const center = mapRef.current?.getCenter();
+    if (!center) return;
+    onSearchNearby?.({ lat: center.lat(), lng: center.lng() });
+  }
 
   return (
     <div className={cn("relative min-h-[320px] w-full overflow-hidden rounded-xl bg-muted shadow-card", className)}>
@@ -111,9 +126,16 @@ function MapPanel({ markers = [], onMarkerClick, onOptimizeRoute, className }: M
         </div>
       )}
 
-      <Button size="sm" onClick={onOptimizeRoute} className="absolute bottom-3 right-3">
-        경로 최적화
-      </Button>
+      <div className="absolute bottom-3 right-3 flex gap-2">
+        {onSearchNearby && (
+          <Button size="sm" variant="outline" onClick={handleSearchNearby} disabled={nearbySearchDisabled || !isLoaded}>
+            주변 장소 찾기
+          </Button>
+        )}
+        <Button size="sm" onClick={onOptimizeRoute}>
+          경로 최적화
+        </Button>
+      </div>
     </div>
   );
 }
