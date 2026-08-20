@@ -227,7 +227,10 @@ function CommunityWriteContent() {
                 maxLength={TAG_MAX_LENGTH}
                 onChange={(e) => setTagInput(e.target.value)}
                 onKeyDown={(e) => {
-                  if (e.key === "Enter") {
+                  // 한글/일본어/중국어 IME 조합 중 Enter는 "글자 확정"이지 "태그 추가"가 아니다.
+                  // isComposing 체크 없이 처리하면 조합 중간 글자가 별도 태그로 잘못 들어간다
+                  // (예: "도쿄" 입력 중 Enter 두 번 발화되어 "도쿄"와 "쿄"가 따로 추가됨).
+                  if (e.key === "Enter" && !e.nativeEvent.isComposing) {
                     e.preventDefault();
                     handleAddTag();
                   }
