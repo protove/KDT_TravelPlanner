@@ -222,6 +222,9 @@ CI는 원격 State를 사용하는 AWS plan/apply를 실행하지 않는다. pro
 
 Trivy의 WAF(`AVD-AWS-0011`)와 고객 관리 KMS key(`AVD-AWS-0132`) 권고는 현재 확정 범위와 충돌하므로 `infra/.trivyignore.yaml`에 대상 파일·근거·만료일을 기록한다. 만료 전 WAF 비용 통제와 KMS 운영 책임을 다시 검토하며, 그 밖의 HIGH/CRITICAL 결과는 CI를 실패시킨다.
 
+CI에서만 재현되는 문제(provider lock 플랫폼 불일치, Trivy 등급 등)는
+[`TROUBLESHOOTING.md`](TROUBLESHOOTING.md)에 원인과 해결 과정을 기록한다.
+
 자세한 최초 구성과 인증 구조는 다음 로컬 Reference를 참고한다.
 
 - `reference/infrastructure/terraform/TERRAFORM_AWS_INITIAL_SETUP.md`
