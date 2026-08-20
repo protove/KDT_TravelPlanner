@@ -107,7 +107,10 @@ function TripDetailContent() {
     placeQuery,
     setPlaceQuery,
     placeResults,
-    setPlaceResults,
+    placeSearchLoading,
+    placeSearchError,
+    clearPlaceSearch,
+    searchNearbyFromMapCenter,
     setEditingPlace,
     setSelectedGooglePlaceId,
     setSelectedPlaceCoords,
@@ -166,14 +169,46 @@ React.useEffect(() => {
   // 아직 "저장" 전인 신규 항목도, 장소 검색으로 좌표를 이미 아는 경우 활성 날짜에 배정되는
   // 즉시 미리보기 마커로 보여준다(savedMarkers엔 저장 전이라 안 잡힘).
   const draftMarkers = timelineItems
-    .filter((t) => t.dayNumber === activeDayNumber && draftPlaceCoords[t.timelineItemId])
+    .filter((t) => (t.dayNumber === activeDayNumber || t.dayNumber === null) && draftPlaceCoords[t.timelineItemId])
     .map((t) => ({
       id: t.timelineItemId,
       name: t.name,
       lat: draftPlaceCoords[t.timelineItemId].lat,
       lng: draftPlaceCoords[t.timelineItemId].lng,
     }));
-  const mapMarkers = [...savedMarkers, ...draftMarkers];
+  const nearbyMarkers = !addingPlace
+    ? placeResults.map((place) => ({
+        id: `nearby:${place.placeId}`,
+        name: place.name,
+        lat: place.latitude,
+        lng: place.longitude,
+      }))
+    : [];
+
+  const mapMarkers = [...savedMarkers, ...draftMarkers, ...nearbyMarkers];
+
+  function handleMapMarkerClick(id: string) {
+    if (id.startsWith("nearby:")) {
+      const placeId = id.slice("nearby:".length);
+      const place = placeResults.find((result) => result.placeId === placeId);
+
+      if (!place) return;
+
+      setEditingPlace(null);
+      setAddingPlace(true);
+      setPlaceDraftName(place.name);
+      setSelectedGooglePlaceId(place.placeId);
+      setSelectedPlaceCoords({
+        lat: place.latitude,
+        lng: place.longitude,
+      });
+
+      clearPlaceSearch();
+      return;
+    }
+
+    openEditPlace(id);
+  }
 
   // 드래그로 바뀐 카드 순서를 draft에 반영한다. dnd-kit이 알려주는 건 활성 날짜 카드들의 새 id 순서뿐이라,
   // 그 날짜(dayNumber) 항목의 visitOrder만 1..n으로 다시 매기고 다른 날짜 항목은 그대로 둔다.
@@ -247,7 +282,14 @@ React.useEffect(() => {
             onDayChange={setActiveDay}
             items={activeDayItems}
             unassigned={unassignedPlaces}
-            map={<MapPanel markers={mapMarkers} onMarkerClick={openEditPlace} />}
+            map={
+              <MapPanel
+                markers={mapMarkers}
+                onMarkerClick={handleMapMarkerClick}
+                onSearchNearby={canEditSchedule ? searchNearbyFromMapCenter : undefined}
+                nearbySearchDisabled={placeSearchLoading}
+              />
+            }
             readOnly={!canEditSchedule}
             onOpenItem={openEditPlace}
             onEditItem={openEditPlace}
@@ -291,8 +333,7 @@ React.useEffect(() => {
           if (!open) {
             setEditingPlace(null);
             setAddingPlace(false);
-            setPlaceQuery("");
-            setPlaceResults([]);
+            clearPlaceSearch();
           }
         }}
         mode={editingPlace ? "edit" : "add"}
@@ -311,6 +352,8 @@ React.useEffect(() => {
         onFoodSubcategoryChange={setPlaceDraftFoodSubcategory}
         placeQuery={placeQuery}
         onPlaceQueryChange={setPlaceQuery}
+        placeSearchLoading={placeSearchLoading}
+        placeSearchError={placeSearchError}
         placeResults={placeResults.map(
           (r): PlaceSearchResultOption => ({
             placeId: r.placeId,
@@ -324,8 +367,7 @@ React.useEffect(() => {
           setPlaceNameError(null);
           setSelectedGooglePlaceId(result.placeId);
           setSelectedPlaceCoords({ lat: result.latitude, lng: result.longitude });
-          setPlaceQuery("");
-          setPlaceResults([]);
+          clearPlaceSearch();
         }}
         dateChips={editingPlace ? dateChips : undefined}
         onSelectDateChip={handleSelectDateChip}

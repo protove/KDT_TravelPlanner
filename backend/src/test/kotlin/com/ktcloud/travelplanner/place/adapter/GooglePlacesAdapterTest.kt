@@ -9,6 +9,7 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
 import org.springframework.http.MediaType
 import org.springframework.web.client.RestClient
+import java.math.BigDecimal
 import java.net.InetSocketAddress
 import java.net.URI
 import java.nio.charset.StandardCharsets
@@ -25,6 +26,7 @@ class GooglePlacesAdapterTest {
 	fun setUp() {
 		server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0).apply {
 			createContext("/v1/places:searchText") { exchange -> handler.get().invoke(exchange) }
+			createContext("/v1/places:searchNearby") { exchange -> handler.get().invoke(exchange) }
 			start()
 		}
 	}
@@ -57,6 +59,42 @@ class GooglePlacesAdapterTest {
 		assertEquals("도쿄 타워", result.name)
 		assertEquals("35.658581", result.latitude.toPlainString())
 		assertTrue(requireNotNull(requestBody.get()).contains("\"regionCode\":\"JP\""))
+	}
+
+	@Test
+	fun `maps nearby Google response and sends location restriction request`() {
+		val requestBody = AtomicReference<String>()
+		handler.set { exchange ->
+			assertEquals("test-places-key", exchange.requestHeaders.getFirst("X-Goog-Api-Key"))
+			assertEquals(
+				"places.id,places.displayName.text,places.location,places.rating",
+				exchange.requestHeaders.getFirst("X-Goog-FieldMask"),
+			)
+			requestBody.set(exchange.requestBody.readAllBytes().toString(StandardCharsets.UTF_8))
+			respond(
+				exchange,
+				200,
+				"""{"places":[{"id":"nearby-1","displayName":{"text":"우에노 공원"},"location":{"latitude":35.7148,"longitude":139.7735},"rating":4.4}]}""",
+			)
+		}
+
+		val result = adapter().searchNearbyPlaces(
+			latitude = BigDecimal("35.681236"),
+			longitude = BigDecimal("139.767125"),
+			radiusMeters = 1500.0,
+		).single()
+
+		assertEquals("nearby-1", result.placeId)
+		assertEquals("우에노 공원", result.name)
+		assertEquals("35.7148", result.latitude.toPlainString())
+		assertEquals("139.7735", result.longitude.toPlainString())
+		assertEquals("4.4", result.rating?.toPlainString())
+
+		val body = requireNotNull(requestBody.get())
+		assertTrue(body.contains("\"locationRestriction\""))
+		assertTrue(body.contains("\"latitude\":35.681236"))
+		assertTrue(body.contains("\"longitude\":139.767125"))
+		assertTrue(body.contains("\"radius\":1500.0") || body.contains("\"radius\":1500"))
 	}
 
 	@Test

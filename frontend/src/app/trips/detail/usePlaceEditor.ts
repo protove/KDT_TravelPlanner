@@ -1,7 +1,7 @@
 import * as React from "react";
 import type { Country } from "@/lib/api/location";
 import { type TimelineItem } from "@/lib/api/travel";
-import { searchPlaces, type PlaceSearchResult } from "@/lib/api/places";
+import { searchNearbyPlaces, searchPlaces, type PlaceSearchResult } from "@/lib/api/places";
 import { type PlaceDateChip, type TimelineCategoryOption } from "@/components/organisms/PlaceModal";
 import { NEW_ITEM_PREFIX, formatIsoDate, computeNextVisitOrder, type getDateTabs } from "./utils";
 import { hasIncompleteHangul, hasRepeatedCharSpam } from "@/lib/validation/text";
@@ -11,6 +11,7 @@ type DateTab = ReturnType<typeof getDateTabs>[number];
 // 나라 미선택 시 장소 검색(Google Places)에 대신 쓸 기본 국가 코드.
 // 결과가 이 나라로 편향(bias)되니 완벽하진 않지만, 나라를 안 골랐다고 검색 자체가 막히는 것보단 낫다.
 const DEFAULT_COUNTRY_CODE = "KR";
+const NEARBY_SEARCH_RADIUS_METERS = 1500;
 
 interface UsePlaceEditorParams {
   accessToken: string | null;
@@ -43,8 +44,10 @@ export function usePlaceEditor({
   const [placeDraftCategory, setPlaceDraftCategory] = React.useState<TimelineCategoryOption>("관광지");
   const [placeDraftFoodSubcategory, setPlaceDraftFoodSubcategory] = React.useState("");
   const [placeDraftDayNumbers, setPlaceDraftDayNumbers] = React.useState<number[]>([]);
-  const [placeQuery, setPlaceQuery] = React.useState("");
+  const [placeQuery, setPlaceQueryState] = React.useState("");
   const [placeResults, setPlaceResults] = React.useState<PlaceSearchResult[]>([]);
+  const [placeSearchLoading, setPlaceSearchLoading] = React.useState(false);
+  const [placeSearchError, setPlaceSearchError] = React.useState<string | null>(null);
   const [selectedGooglePlaceId, setSelectedGooglePlaceId] = React.useState<string | null>(null);
   // 검색 결과에서 고른 장소의 좌표 — 저장 전에도 지도에 바로 미리보기 마커를 찍기 위한 값.
   const [selectedPlaceCoords, setSelectedPlaceCoords] = React.useState<{ lat: number; lng: number } | null>(null);
@@ -54,12 +57,85 @@ export function usePlaceEditor({
 
   React.useEffect(() => {
     const countryCode = countries.find((c) => c.countryId === selectedCountryId)?.code ?? DEFAULT_COUNTRY_CODE;
-    if (!accessToken || !placeQuery.trim()) return;
+    const trimmedQuery = placeQuery.trim();
+    if (!accessToken || !trimmedQuery) return;
+    let active = true;
     const handle = setTimeout(() => {
-      searchPlaces(accessToken, placeQuery.trim(), countryCode).then(setPlaceResults).catch(() => {});
+      setPlaceSearchLoading(true);
+      setPlaceSearchError(null);
+      searchPlaces(accessToken, trimmedQuery, countryCode)
+        .then((results) => {
+          if (active) setPlaceResults(results);
+        })
+        .catch(() => {
+          if (!active) return;
+          setPlaceResults([]);
+          setPlaceSearchError("장소를 불러오지 못했어요. 다시 검색해 주세요.");
+        })
+        .finally(() => {
+          if (active) setPlaceSearchLoading(false);
+        });
     }, 300);
-    return () => clearTimeout(handle);
+    return () => {
+      active = false;
+      clearTimeout(handle);
+    };
   }, [accessToken, placeQuery, countries, selectedCountryId]);
+
+  function setPlaceQuery(query: string) {
+    setPlaceQueryState(query);
+    if (!query.trim()) {
+      setPlaceResults([]);
+      setPlaceSearchLoading(false);
+      setPlaceSearchError(null);
+    }
+  }
+
+  function clearPlaceSearch() {
+    setPlaceQueryState("");
+    setPlaceResults([]);
+    setPlaceSearchLoading(false);
+    setPlaceSearchError(null);
+  }
+
+  async function searchNearbyFromMapCenter(center: { lat: number; lng: number }) {
+    if (!accessToken) {
+      setPlaceSearchError("로그인 후 주변 장소를 찾을 수 있어요.");
+      return;
+    }
+
+    setAddingPlace(false);
+    setEditingPlace(null);
+    setPlaceDraftName("");
+    setPlaceDraftNote("");
+    setPlaceDraftCategory("관광지");
+    setPlaceDraftFoodSubcategory("");
+    setPlaceDraftDayNumbers([]);
+    setPlaceQueryState("");
+    setSelectedGooglePlaceId(null);
+    setSelectedPlaceCoords(null);
+    setPlaceSearchLoading(true);
+    setPlaceSearchError(null);
+
+    try {
+      const results = await searchNearbyPlaces(accessToken, {
+        latitude: center.lat,
+        longitude: center.lng,
+        radiusMeters: NEARBY_SEARCH_RADIUS_METERS,
+      });
+      setPlaceResults(results);
+      if (results.length === 0) {
+        setPlaceSearchError("현재 지도 주변에서 찾은 장소가 없어요.");
+        setAddingPlace(true);
+      }
+    } catch {
+      setPlaceResults([]);
+      setPlaceSearchError("주변 장소를 불러오지 못했어요. 지도를 조금 이동한 뒤 다시 시도해 주세요.");
+      setAddingPlace(true);
+    } finally {
+      setPlaceSearchLoading(false);
+    }
+  }
 
   function openEditPlace(itemId: string) {
     const item = timelineItems.find((t) => t.timelineItemId === itemId);
@@ -79,8 +155,10 @@ export function usePlaceEditor({
     setPlaceDraftCategory("관광지");
     setPlaceDraftFoodSubcategory("");
     setPlaceDraftDayNumbers([]);
-    setPlaceQuery("");
+    setPlaceQueryState("");
     setPlaceResults([]);
+    setPlaceSearchError(null);
+    setPlaceSearchLoading(false);
     setSelectedGooglePlaceId(null);
     setSelectedPlaceCoords(null);
   }
@@ -214,6 +292,10 @@ export function usePlaceEditor({
     setPlaceQuery,
     placeResults,
     setPlaceResults,
+    placeSearchLoading,
+    placeSearchError,
+    clearPlaceSearch,
+    searchNearbyFromMapCenter,
     setSelectedGooglePlaceId,
     setSelectedPlaceCoords,
     draftPlaceCoords,

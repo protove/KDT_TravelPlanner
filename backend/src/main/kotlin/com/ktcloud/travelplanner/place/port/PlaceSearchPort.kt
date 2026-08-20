@@ -7,6 +7,12 @@ interface PlaceSearchPort {
 		query: String,
 		countryCode: String,
 	): List<PlaceSearchResult>
+
+	fun searchNearbyPlaces(
+		latitude: BigDecimal,
+		longitude: BigDecimal,
+		radiusMeters: Double,
+	): List<PlaceSearchResult>
 }
 
 data class PlaceSearchResult(
