@@ -45,6 +45,7 @@ function TripThumbnail({ src, alt }: TripThumbnailProps) {
               className="absolute inset-0 z-10 h-full w-full rounded-none"
             />
           )}
+
           <Image
             src={src}
             alt={alt}
@@ -102,7 +103,7 @@ function TripCard({
         if (event.key === "Enter" || event.key === " ") onClick?.();
       }}
       className={cn(
-        "cursor-pointer overflow-hidden rounded-xl bg-card shadow-card transition-shadow hover:shadow-dialog",
+        "min-w-0 cursor-pointer overflow-hidden rounded-xl bg-card shadow-card transition-shadow hover:shadow-dialog",
         className,
       )}
     >
@@ -111,25 +112,36 @@ function TripCard({
         src={thumbnailSrc}
         alt={`${title} 대표 이미지`}
       />
+
       <div className="p-4">
-        <div className="flex items-start justify-between gap-2.5">
-          <div>
-            <div className="text-base font-bold text-foreground">{title}</div>
-            <div className="mt-0.5 text-sm text-muted-foreground">{dates}</div>
+        <div className="flex min-w-0 items-start justify-between gap-2.5">
+          <div className="min-w-0 flex-1">
+            <div
+              className="break-words text-base font-bold text-foreground"
+              title={title}
+            >
+              {title}
+            </div>
+
+            <div className="mt-0.5 break-words text-sm text-muted-foreground">
+              {dates}
+            </div>
           </div>
+
           {role ? (
-            <Badge variant="secondary" className="whitespace-nowrap">
+            <Badge variant="secondary" className="shrink-0 whitespace-nowrap">
               {role}
             </Badge>
           ) : (
             showDday && (
-              <Badge variant="accent" className="whitespace-nowrap">
+              <Badge variant="accent" className="shrink-0 whitespace-nowrap">
                 D-{dday}
               </Badge>
             )
           )}
         </div>
-        <div className="mt-3.5 flex items-center justify-between">
+
+        <div className="mt-3.5 flex min-w-0 items-center justify-between gap-2">
           <div className="flex">
             {members.map((member, index) => (
               <Avatar
@@ -146,10 +158,13 @@ function TripCard({
               </Avatar>
             ))}
           </div>
+
           {isPast ? (
             <span className="text-sm font-bold text-primary">앨범 보기</span>
           ) : (
-            <span className="text-xs text-muted-foreground">{days}일 일정</span>
+            <span className="text-xs text-muted-foreground">
+              {days}일 일정
+            </span>
           )}
         </div>
       </div>
@@ -167,19 +182,23 @@ function TripCardSkeleton({ className }: { className?: string }) {
       )}
     >
       <Skeleton className="h-[140px] w-full rounded-none" />
+
       <div className="space-y-3 p-4">
         <div className="flex items-start justify-between gap-3">
           <div className="flex-1 space-y-2">
             <Skeleton className="h-5 w-2/3" />
             <Skeleton className="h-4 w-1/2" />
           </div>
+
           <Skeleton className="h-6 w-12 rounded-full" />
         </div>
+
         <div className="flex items-center justify-between">
           <div className="flex gap-1">
             <Skeleton className="h-[26px] w-[26px] rounded-full" />
             <Skeleton className="h-[26px] w-[26px] rounded-full" />
           </div>
+
           <Skeleton className="h-4 w-14" />
         </div>
       </div>

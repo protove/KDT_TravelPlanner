@@ -39,6 +39,7 @@ jobs:
         directory:
           - infra/bootstrap
           - infra/environments/dev
+          - infra/environments/dev-eks
           - infra/environments/dev-load-test
           - infra/environments/dev-runtime
           - infra/environments/prod
@@ -55,6 +56,7 @@ jobs:
           - infra/modules/monitoring_ec2
           - infra/modules/load_test_security
           - infra/modules/load_test_runner
+          - infra/modules/eks_cluster
     steps:
       - name: Check out repository
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -80,6 +82,7 @@ jobs:
       fail-fast: false
       matrix:
         directory:
+          - infra/environments/dev-eks
           - infra/environments/dev-load-test
           - infra/modules/terraform_state_backend
           - infra/modules/profile_image
@@ -94,6 +97,7 @@ jobs:
           - infra/modules/monitoring_ec2
           - infra/modules/load_test_security
           - infra/modules/load_test_runner
+          - infra/modules/eks_cluster
     steps:
       - name: Check out repository
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -134,6 +138,7 @@ jobs:
           for directory in \
             infra/bootstrap \
             infra/environments/dev \
+            infra/environments/dev-eks \
             infra/environments/dev-load-test \
             infra/environments/dev-runtime \
             infra/environments/prod \
@@ -149,7 +154,8 @@ jobs:
             infra/modules/backend_service \
             infra/modules/monitoring_ec2 \
             infra/modules/load_test_security \
-            infra/modules/load_test_runner
+            infra/modules/load_test_runner \
+            infra/modules/eks_cluster
           do
             tflint \
               --config="${GITHUB_WORKSPACE}/infra/.tflint.hcl" \

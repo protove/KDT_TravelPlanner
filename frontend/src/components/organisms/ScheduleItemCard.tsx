@@ -41,12 +41,20 @@ function ScheduleItemCard({
         {!isLast && <div className="w-0.5 flex-1 bg-border" />}
       </div>
 
-      <div className="mb-3.5 flex flex-1 items-start gap-2.5 rounded-xl bg-card p-3.5 shadow-card">
+      <div className="mb-3.5 flex min-w-0 flex-1 items-start gap-2.5 rounded-xl bg-card p-3.5 shadow-card">
         {dragHandle}
-        <button type="button" onClick={onOpen} className="flex flex-1 cursor-pointer text-left">
-          <div className="text-[15px] font-bold text-foreground">{placeName}</div>
+        <button
+          type="button"
+          onClick={onOpen}
+          className="flex min-w-0 flex-1 flex-col cursor-pointer text-left"
+        >
+          <div className="truncate text-[15px] font-bold text-foreground" title={placeName}>
+            {placeName}
+          </div>
           {note ? (
-            <div className="mt-1 text-sm text-muted-foreground">{note}</div>
+            <div className="mt-1 truncate text-sm text-muted-foreground" title={note}>
+              {note}
+            </div>
           ) : (
             !readOnly && <div className="mt-1 text-sm text-muted-foreground">+ 할 일 메모 추가</div>
           )}

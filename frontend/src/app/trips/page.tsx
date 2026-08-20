@@ -21,6 +21,7 @@ const PREVIEW_THUMBNAILS = [
   "/images/trips/busan-thumbnail.png",
   "/images/trips/jeju-thumbnail.png",
 ] as const;
+
 const PREVIEW_TRAVELS: TravelSummary[] = [
   {
     travelId: "preview-tokyo",
@@ -88,17 +89,23 @@ export default function TripsPage() {
   const [tab, setTab] = React.useState<ListTab>("mine");
   const [query, setQuery] = React.useState("");
   const [travels, setTravels] = React.useState<TravelSummary[]>([]);
+  const [error, setError] = React.useState<string | null>(null);
   const [page, setPage] = React.useState(0);
   const [isLast, setIsLast] = React.useState(false);
-  const [completedRequestKey, setCompletedRequestKey] = React.useState<string | null>(null);
+  const [completedRequestKey, setCompletedRequestKey] =
+    React.useState<string | null>(null);
   const [loadingMore, setLoadingMore] = React.useState(false);
   const [showNewTripModal, setShowNewTripModal] = React.useState(false);
   const [refreshKey, setRefreshKey] = React.useState(0);
   const [isPreview, setIsPreview] = React.useState(false);
   const [isPreviewLoading, setIsPreviewLoading] = React.useState(false);
+
   const sentinelRef = React.useRef<HTMLDivElement>(null);
+
   const requestKey = `${accessToken ?? ""}:${query}:${refreshKey}`;
-  const isLoading = isPreview ? isPreviewLoading : completedRequestKey !== requestKey;
+  const isLoading = isPreview
+    ? isPreviewLoading
+    : completedRequestKey !== requestKey;
 
   React.useEffect(() => {
     const previewRequested =
@@ -108,14 +115,17 @@ export default function TripsPage() {
     if (previewRequested) {
       const keepLoading =
         new URLSearchParams(window.location.search).get("loading") === "1";
+
       const startTimer = window.setTimeout(() => {
         setIsPreview(true);
         setIsPreviewLoading(true);
         setTravels(PREVIEW_TRAVELS);
       }, 0);
+
       const finishTimer = keepLoading
         ? undefined
         : window.setTimeout(() => setIsPreviewLoading(false), 1_300);
+
       return () => {
         window.clearTimeout(startTimer);
         if (finishTimer) window.clearTimeout(finishTimer);
@@ -125,35 +135,54 @@ export default function TripsPage() {
     if (!isInitializing && !isLoggedIn) router.replace("/");
   }, [isInitializing, isLoggedIn, router]);
 
-  // 검색어가 바뀌면 첫 페이지부터 새로 조회한다.
+  // 검색어 또는 refreshKey가 바뀌면 첫 페이지부터 새로 조회한다.
   React.useEffect(() => {
     if (!accessToken) return;
+
     let isCurrentRequest = true;
-    fetchTravels(accessToken, { keyword: query.trim() || undefined, page: 0, size: PAGE_SIZE })
+
+
+    fetchTravels(accessToken, {
+      keyword: query.trim() || undefined,
+      page: 0,
+      size: PAGE_SIZE,
+    })
       .then((res) => {
         if (!isCurrentRequest) return;
+
         setTravels(res.content);
         setPage(0);
         setIsLast(res.isLast);
+        setError(null);
       })
       .catch(() => {
         if (!isCurrentRequest) return;
-        setTravels([]);
+
+        setError("여행일정을 불러오지 못했습니다.");
         setIsLast(true);
       })
       .finally(() => {
-        if (isCurrentRequest) setCompletedRequestKey(requestKey);
+        if (isCurrentRequest) {
+          setCompletedRequestKey(requestKey);
+        }
       });
+
     return () => {
       isCurrentRequest = false;
     };
   }, [accessToken, query, requestKey]);
 
   const loadMore = React.useCallback(() => {
-    if (!accessToken || isLast || loadingMore) return;
+    if (!accessToken || isLast || loadingMore || error) return;
+
     const nextPage = page + 1;
     setLoadingMore(true);
-    fetchTravels(accessToken, { keyword: query.trim() || undefined, page: nextPage, size: PAGE_SIZE })
+
+    fetchTravels(accessToken, {
+      keyword: query.trim() || undefined,
+      page: nextPage,
+      size: PAGE_SIZE,
+    })
       .then((res) => {
         setTravels((prev) => [...prev, ...res.content]);
         setPage(nextPage);
@@ -161,16 +190,19 @@ export default function TripsPage() {
       })
       .catch(() => setIsLast(true))
       .finally(() => setLoadingMore(false));
-  }, [accessToken, query, page, isLast, loadingMore]);
+  }, [accessToken, query, page, isLast, loadingMore, error]);
 
   // 리스트 하단의 sentinel이 화면에 보이면 다음 페이지를 불러온다.
   React.useEffect(() => {
     const el = sentinelRef.current;
     if (!el) return;
+
     const observer = new IntersectionObserver((entries) => {
       if (entries[0].isIntersecting) loadMore();
     });
+
     observer.observe(el);
+
     return () => observer.disconnect();
   }, [loadMore]);
 
@@ -183,43 +215,85 @@ export default function TripsPage() {
 
   const filtered = travels.filter((travel) => {
     const matchesTab =
-      tab === "mine" ? travel.permission === "OWNER" : travel.permission !== "OWNER";
+      tab === "mine"
+        ? travel.permission === "OWNER"
+        : travel.permission !== "OWNER";
+
     const matchesQuery =
       !isPreview ||
       query.trim() === "" ||
       travel.title.toLowerCase().includes(query.trim().toLowerCase());
+
     return matchesTab && matchesQuery;
   });
 
   return (
     <ListLayout
       title={<h1 className="text-2xl font-bold text-foreground">여행일정</h1>}
-      actions={<Button onClick={() => setShowNewTripModal(true)}>+ 새 여행 만들기</Button>}
+      actions={
+        <Button onClick={() => setShowNewTripModal(true)}>
+          + 새 여행 만들기
+        </Button>
+      }
     >
       <SearchBar
         placeholder="일정 검색"
         value={query}
-        onChange={(e) => setQuery(e.target.value)}
+        onChange={(e) =>{
+          setError(null);
+          setQuery(e.target.value);
+        }}
         containerClassName="mb-4"
       />
 
-      <Tabs value={tab} onValueChange={(v) => setTab(v as ListTab)} className="mb-5 w-fit">
+      <Tabs
+        value={tab}
+        onValueChange={(v) => setTab(v as ListTab)}
+        className="mb-5 w-fit"
+      >
         <TabsList>
           <TabsTrigger value="mine">내 일정</TabsTrigger>
           <TabsTrigger value="shared">공유받은 일정</TabsTrigger>
         </TabsList>
       </Tabs>
 
-      <TripList
-        trips={filtered.map((t, index) => ({
-          ...toTripListItem(t, index),
-          onClick: () => router.push(`/trips/detail?id=${encodeURIComponent(t.travelId)}`),
-        }))}
-        isLoading={isLoading}
-        isLoadingMore={loadingMore}
-        emptyMessage={tab === "mine" ? "아직 만든 여행일정이 없어요." : "공유받은 여행일정이 없어요."}
-      />
-      <div ref={sentinelRef} className="h-px" />
+      {error ? (
+        <div
+          role="alert"
+          className="flex flex-col items-center gap-3 py-10 text-center"
+        >
+          <p className="text-sm text-destructive">{error}</p>
+
+          <Button
+            variant="outline"
+            onClick={() => {
+              setError(null);
+              setRefreshKey((key) => key + 1);
+            }}
+          >
+            다시 시도
+          </Button>
+        </div>
+      ) : (
+        <TripList
+          trips={filtered.map((t, index) => ({
+            ...toTripListItem(t, index),
+            onClick: () =>
+              router.push(
+                `/trips/detail?id=${encodeURIComponent(t.travelId)}`,
+              ),
+          }))}
+          isLoading={isLoading}
+          isLoadingMore={loadingMore}
+          emptyMessage={
+            tab === "mine"
+              ? "아직 만든 여행일정이 없어요."
+              : "공유받은 여행일정이 없어요."
+          }
+        />
+      )}
+
+      {!error && <div ref={sentinelRef} className="h-px" />}
 
       <NewTripModal
         open={showNewTripModal}

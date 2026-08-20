@@ -44,24 +44,35 @@ function ParticipantManageDialog({
 
           <div className="flex flex-col gap-2">
             {participants.map((participant) => (
-              <div key={participant.id} className="flex items-center gap-2.5 rounded-xl bg-card p-2.5 shadow-card">
-                <UserChip name={participant.name} avatarColor={participant.avatarColor} className="flex-1" />
-                {participant.status === "pending" ? (
-                  <Badge variant="secondary">대기</Badge>
-                ) : (
-                  <PermissionSelect
-                    value={participant.permission}
-                    onChange={(value) => onPermissionChange(participant.id, value)}
-                  />
-                )}
-                <button
-                  type="button"
-                  title="내보내기"
-                  onClick={() => setRemoveTarget(participant)}
-                  className="flex h-8 w-8 cursor-pointer items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-destructive"
-                >
-                  <Icon icon={X} size="sm" aria-label="내보내기" />
-                </button>
+              <div
+                key={participant.id}
+                className="flex min-w-0 flex-col gap-2.5 rounded-xl bg-card p-2.5 shadow-card min-[360px]:flex-row min-[360px]:items-center"
+              >
+                <UserChip
+                  name={participant.name}
+                  avatarColor={participant.avatarColor}
+                  className="min-w-0 flex-1"
+                />
+
+                <div className="flex shrink-0 items-center justify-end gap-2">
+                  {participant.status === "pending" ? (
+                    <Badge variant="secondary">대기</Badge>
+                  ) : (
+                    <PermissionSelect
+                      value={participant.permission}
+                      onChange={(value) => onPermissionChange(participant.id, value)}
+                    />
+                  )}
+
+                  <button
+                    type="button"
+                    title="내보내기"
+                    onClick={() => setRemoveTarget(participant)}
+                    className="flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-destructive"
+                  >
+                    <Icon icon={X} size="sm" aria-label="내보내기" />
+                  </button>
+                </div>
               </div>
             ))}
           </div>

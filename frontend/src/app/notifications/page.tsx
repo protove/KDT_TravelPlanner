@@ -2,6 +2,7 @@
 
 import * as React from "react";
 import { useRouter } from "next/navigation";
+import { Button } from "@/components/atoms/Button";
 import { NotificationList } from "@/components/organisms/NotificationList";
 import { ListLayout } from "@/components/templates/ListLayout";
 import { useAuthStore } from "@/lib/stores/useAuthStore";
@@ -39,17 +40,22 @@ export default function NotificationsPage() {
         <p className="py-10 text-center text-sm text-muted-foreground">
           받은 초대를 불러오는 중입니다.
         </p>
+      ) : error ? (
+        <div
+          role="alert"
+          className="flex flex-col items-center gap-3 py-10 text-center"
+        >
+          <p className="text-sm text-destructive">{error}</p>
+          <Button variant="outline" onClick={() => void load()}>
+            다시 시도
+          </Button>
+        </div>
       ) : (
         <NotificationList
           notifications={notifications}
           onAccept={(id) => void accept(id)}
           onReject={(id) => void reject(id)}
         />
-      )}
-      {error && (
-        <p role="alert" className="mt-3 text-sm text-destructive">
-          {error}
-        </p>
       )}
     </ListLayout>
   );
