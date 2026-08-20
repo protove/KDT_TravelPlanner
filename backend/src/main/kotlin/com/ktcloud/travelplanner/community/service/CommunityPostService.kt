@@ -70,19 +70,20 @@ class CommunityPostService(
 	// community-api-contract.md 2절 — 존재하지 않거나 soft delete된 게시글은 404.
 	// CommunityPost의 @SQLRestriction("deleted_at IS NULL")로 findById가 이미 soft delete를 걸러준다.
 	// existsById를 별도로 부르지 않고 findById 결과를 존재 확인 + 조회에 그대로 재사용한다.
-	// incrementViewCount(clearAutomatically=true) 이후 다시 findById로 재조회하지 않고
-	// 조회 전에 읽은 값에 +1을 더해 응답한다 (DB 왕복 한 번 절약).
+	// incrementViewCount(clearAutomatically=true)는 영속성 컨텍스트를 통째로 비워서 post를
+	// detach시키므로, post.author/category/tags 같은 LAZY 연관관계 접근(응답 DTO 조립)은
+	// 반드시 increment 호출 이전에 전부 끝내야 한다 (그렇지 않으면 LazyInitializationException).
+	// viewCount는 increment 이후 값을 다시 조회하지 않고, 조회 시점 값에 +1을 더해 응답한다.
 	@Transactional
 	fun getPostDetail(
 		postId: UUID,
 		requesterId: UUID?,
 	): CommunityPostDetailResponse {
 		val post = communityPostRepository.findById(postId).orElseThrow(::CommunityPostNotFoundException)
-		communityPostRepository.incrementViewCount(postId)
 		val commentCount = communityPostRepository.countActiveComments(postId)
 		val reactionCount = communityPostRepository.countReactions(postId)
 
-		return CommunityPostDetailResponse.from(
+		val response = CommunityPostDetailResponse.from(
 			post = post,
 			bodyJson = objectMapper.readTree(post.bodyJson),
 			viewCount = post.viewCount + 1,
@@ -90,6 +91,8 @@ class CommunityPostService(
 			reactionCount = reactionCount,
 			isMine = requesterId != null && requesterId == post.author.id,
 		)
+		communityPostRepository.incrementViewCount(postId)
+		return response
 	}
 
 	// community-api-contract.md 2절/3절 — 목록 조회. 인증 불필요.
