@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import unittest
 from pathlib import Path
+import importlib.util
 
 
 ROOT = Path(__file__).parents[2]
@@ -10,6 +11,15 @@ PROFILE = ROOT / "load-tests/sql-diagnostic-profile.json"
 SEEDER = ROOT / "scripts/loadtest/seed-compose-sql-diagnostic-data.py"
 K6_FLOW = ROOT / "load-tests/k6/flows/sql-round-trip-diagnostic.js"
 K6_SCENARIO = ROOT / "load-tests/k6/scenarios/sql-round-trip-diagnostic.js"
+RUNNER = ROOT / "scripts/loadtest/run-compose-sql-round-trip-diagnostic.py"
+
+
+def load_runner():
+    spec = importlib.util.spec_from_file_location("scrum41_sql_runner", RUNNER)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 class SqlRoundTripDiagnosticContractTest(unittest.TestCase):
@@ -46,6 +56,13 @@ class SqlRoundTripDiagnosticContractTest(unittest.TestCase):
         source = K6_SCENARIO.read_text(encoding="utf-8")
         self.assertIn("executor: 'shared-iterations'", source)
         self.assertIn("vus: 1", source)
+
+    def test_compose_project_slug_is_docker_lowercase(self) -> None:
+        runner = load_runner()
+        slug = runner.slug("scrum41-opt-smoke-20260820T095500Z")
+        self.assertEqual(slug, "scrum41-opt-smoke-20260820t09550")
+        self.assertLessEqual(len(slug), 32)
+        self.assertEqual(slug, slug.lower())
 
 
 if __name__ == "__main__":

@@ -56,7 +56,7 @@ def epoch(value: str) -> float:
 
 
 def slug(value: str) -> str:
-    normalized = re.sub(r"[^A-Za-z0-9-]", "-", value).strip("-")
+    normalized = re.sub(r"[^A-Za-z0-9-]", "-", value).strip("-").lower()
     if not normalized:
         raise DiagnosticError("campaign id must contain an alphanumeric character")
     return normalized[:32]
