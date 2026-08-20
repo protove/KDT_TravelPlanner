@@ -32,3 +32,4 @@ evidence/
 # Run-control artifacts for the AWS load-test / recovery campaigns: approval
 # records, source-lineage contracts, protection checkpoints, audits, reports.
 recovery-control/
+docs/community-api-contract.md
