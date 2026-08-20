@@ -63,8 +63,8 @@ class TimelineMigrationIntegrationTest : ContainerIntegrationTestSupport() {
 	}
 
 	@Test
-	fun `empty schema migrates through V13 with the deferrable order constraint`() {
-		val schema = "timeline_empty_v13_test"
+	fun `empty schema migrates through V19 with the deferrable order constraint`() {
+		val schema = "timeline_empty_v19_test"
 		jdbcTemplate.execute("DROP SCHEMA IF EXISTS $schema CASCADE")
 		jdbcTemplate.execute("CREATE SCHEMA $schema")
 
@@ -73,11 +73,11 @@ class TimelineMigrationIntegrationTest : ContainerIntegrationTestSupport() {
 				.dataSource(dataSource)
 				.schemas(schema)
 				.defaultSchema(schema)
-				.target(MigrationVersion.fromVersion("13"))
+				.target(MigrationVersion.fromVersion("19"))
 				.load()
 				.migrate()
 
-			assertEquals(13, result.migrationsExecuted)
+			assertEquals(19, result.migrationsExecuted)
 			assertEquals(
 				true,
 				jdbcTemplate.queryForObject(
@@ -93,8 +93,8 @@ class TimelineMigrationIntegrationTest : ContainerIntegrationTestSupport() {
 	}
 
 	@Test
-	fun `V12 history upgrades through V13 without changing constraint identity`() {
-		val schema = "timeline_v12_v13_test"
+	fun `V18 history upgrades through V19 without changing constraint identity`() {
+		val schema = "timeline_v18_v19_test"
 		jdbcTemplate.execute("DROP SCHEMA IF EXISTS $schema CASCADE")
 		jdbcTemplate.execute("CREATE SCHEMA $schema")
 
@@ -103,7 +103,7 @@ class TimelineMigrationIntegrationTest : ContainerIntegrationTestSupport() {
 				.dataSource(dataSource)
 				.schemas(schema)
 				.defaultSchema(schema)
-				.target(MigrationVersion.fromVersion("12"))
+				.target(MigrationVersion.fromVersion("18"))
 				.load()
 				.migrate()
 			val ownerId = UUID.randomUUID()
@@ -114,14 +114,14 @@ class TimelineMigrationIntegrationTest : ContainerIntegrationTestSupport() {
 				"INSERT INTO $schema.user_table (id, provider, provider_user_id, profile_completed, created_at, updated_at) " +
 					"VALUES (?, 'GOOGLE', ?, FALSE, ?, ?)",
 				ownerId,
-				"timeline-v12-owner-$ownerId",
+				"timeline-v18-owner-$ownerId",
 				now,
 				now,
 			)
 			jdbcTemplate.update(
 				"INSERT INTO $schema.planners_table " +
 					"(id, owner_id, title, start_date, end_date, created_at, updated_at) " +
-					"VALUES (?, ?, 'V12 일정 보존', '2026-08-01', '2026-08-03', ?, ?)",
+					"VALUES (?, ?, 'V18 일정 보존', '2026-08-01', '2026-08-03', ?, ?)",
 				travelId,
 				ownerId,
 				now,
@@ -139,7 +139,7 @@ class TimelineMigrationIntegrationTest : ContainerIntegrationTestSupport() {
 				.dataSource(dataSource)
 				.schemas(schema)
 				.defaultSchema(schema)
-				.target(MigrationVersion.fromVersion("13"))
+				.target(MigrationVersion.fromVersion("19"))
 				.load()
 				.migrate()
 
@@ -148,7 +148,7 @@ class TimelineMigrationIntegrationTest : ContainerIntegrationTestSupport() {
 				1,
 				jdbcTemplate.queryForObject(
 					"SELECT COUNT(*) FROM $schema.flyway_schema_history " +
-						"WHERE version = '13' AND success = TRUE",
+						"WHERE version = '19' AND success = TRUE",
 					Int::class.java,
 				),
 			)

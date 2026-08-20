@@ -31,7 +31,7 @@ EVIDENCE_VERIFIER = ROOT / "scripts/loadtest/verify-compose-sql-diagnostic-evide
 K6_IMAGE = "grafana/k6:0.54.0@sha256:1f40432b1cbe7234e977f96c362c9bc550a2d2b583d014dd8669fe40d3e9e755"
 PUSHGATEWAY_IMAGE = "prom/pushgateway:v1.11.1@sha256:03738d278e082ee9821df730c741b3b465c251fc2b68a85883def301a55a6215"
 RELEVANT_SOURCE_PATHS = (
-    "backend/src/main/resources/db/migration/V13__defer_timeline_order_unique_constraint.sql",
+    "backend/src/main/resources/db/migration/V19__defer_timeline_order_unique_constraint.sql",
     "backend/src/main/kotlin/com/ktcloud/travelplanner/timeline/repository/TimelineItemOrderRepository.kt",
     "backend/src/main/kotlin/com/ktcloud/travelplanner/timeline/repository/JdbcTimelineItemOrderRepository.kt",
     "backend/src/main/kotlin/com/ktcloud/travelplanner/timeline/service/TimelineItemOrderUpdateService.kt",

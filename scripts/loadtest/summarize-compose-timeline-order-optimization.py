@@ -368,7 +368,7 @@ def write_report(root: Path, comparison: dict[str, Any], verdict: dict[str, Any]
         "",
         "## 운영 migration 주의",
         "",
-        "V13은 기존 unique constraint를 drop/add해 DEFERRABLE INITIALLY IMMEDIATE로 재생성한다. 운영 적용 전 lock/배포 창, concurrent writer drain, rollback 절차를 별도로 검토해야 하며 이 실행은 production migration/deploy를 수행하지 않는다.",
+        "V19는 기존 unique constraint를 drop/add해 DEFERRABLE INITIALLY IMMEDIATE로 재생성한다. 운영 적용 전 lock/배포 창, concurrent writer drain, rollback 절차를 별도로 검토해야 하며 이 실행은 production migration/deploy를 수행하지 않는다.",
         "",
         "## 고정 threshold",
         "",

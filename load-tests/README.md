@@ -209,7 +209,7 @@ SQL 진단에서 확인한 병목 가설을 검증하기 위해 timeline reorder
 `SELECT ... FOR UPDATE` snapshot → `SET CONSTRAINTS ... DEFERRED` → 한 번의
 `UPDATE ... FROM unnest(...)` → row-count 확인 → `SET CONSTRAINTS ... IMMEDIATE` 순서로
 실행한다. 동일 transaction 안에서 snapshot과 bulk update를 수행하며, noop은 DB write를
-생략하고 권한·순열 검증과 rollback·동시성 경로는 기존 계약으로 유지한다. V13 migration은
+생략하고 권한·순열 검증과 rollback·동시성 경로는 기존 계약으로 유지한다. V19 migration은
 기존 unique constraint의 동작 시점을 보존하면서 transaction 내부 swap을 허용한다.
 
 Runner는 source seal을 만들기 때문에 versioned source 변경을 먼저 commit한 깨끗한 working
