@@ -9,6 +9,12 @@ export interface PlaceSearchResult {
   rating: number | null;
 }
 
+export interface NearbyPlaceSearchParams {
+  latitude: number;
+  longitude: number;
+  radiusMeters?: number;
+}
+
 /** Google Place 검색. query/countryCode 둘 다 백엔드 필수 파라미터(PlaceSearchController). */
 export async function searchPlaces(
   accessToken: string,
@@ -17,4 +23,20 @@ export async function searchPlaces(
 ): Promise<PlaceSearchResult[]> {
   const params = new URLSearchParams({ query, countryCode });
   return apiFetch<PlaceSearchResult[]>(`/api/v1/places/search?${params.toString()}`, accessToken);
+}
+
+export async function searchNearbyPlaces(
+  accessToken: string,
+  { latitude, longitude, radiusMeters }: NearbyPlaceSearchParams,
+): Promise<PlaceSearchResult[]> {
+  const params = new URLSearchParams({
+    latitude: String(latitude),
+    longitude: String(longitude),
+  });
+
+  if (radiusMeters !== undefined) {
+    params.set("radiusMeters", String(radiusMeters));
+  }
+
+  return apiFetch<PlaceSearchResult[]>(`/api/v1/places/nearby?${params.toString()}`, accessToken);
 }

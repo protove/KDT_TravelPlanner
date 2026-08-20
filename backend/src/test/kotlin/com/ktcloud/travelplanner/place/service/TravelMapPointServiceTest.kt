@@ -26,6 +26,7 @@ class TravelMapPointServiceTest {
 	private val travelMemberRepository = mock(TravelMemberRepository::class.java)
 	private val timelineItemRepository = mock(TimelineItemRepository::class.java)
 	private val placeLocationService = mock(PlaceLocationService::class.java)
+
 	private val service = TravelMapPointService(
 		travelRepository,
 		travelMemberRepository,
@@ -36,34 +37,135 @@ class TravelMapPointServiceTest {
 	@Test
 	fun `owner receives resolved points and separate unmapped and unresolved ids in visit order`() {
 		val travel = travel(OWNER_ID)
-		val first = timelineItem(travel, visitOrder = 1, name = "도쿄 타워", googlePlaceId = "place-1")
-		val unmapped = timelineItem(travel, visitOrder = 2, name = "자유 일정", googlePlaceId = null)
-		val unresolved = timelineItem(travel, visitOrder = 3, name = "폐업 장소", googlePlaceId = "place-missing")
-		val fourth = timelineItem(travel, visitOrder = 4, name = "도쿄역", googlePlaceId = "place-4")
-		`when`(travelRepository.findById(TRAVEL_ID)).thenReturn(Optional.of(travel))
-		`when`(timelineItemRepository.findAllByTravelIdAndDayNumberOrderByVisitOrderAsc(TRAVEL_ID, 1))
+		val first = timelineItem(
+			travel = travel,
+			visitOrder = 1,
+			name = "도쿄 타워",
+			googlePlaceId = "place-1",
+		)
+		val unmapped = timelineItem(
+			travel = travel,
+			visitOrder = 2,
+			name = "자유 일정",
+			googlePlaceId = null,
+		)
+		val unresolved = timelineItem(
+			travel = travel,
+			visitOrder = 3,
+			name = "폐업 장소",
+			googlePlaceId = "place-missing",
+		)
+		val fourth = timelineItem(
+			travel = travel,
+			visitOrder = 4,
+			name = "도쿄역",
+			googlePlaceId = "place-4",
+		)
+
+		`when`(travelRepository.findById(TRAVEL_ID))
+			.thenReturn(Optional.of(travel))
+		`when`(timelineItemRepository.findAllByTravelIdOrderByDayNumberAscVisitOrderAsc(TRAVEL_ID))
 			.thenReturn(listOf(first, unmapped, unresolved, fourth))
 		`when`(placeLocationService.getLocation("place-1"))
-			.thenReturn(PlaceLocation(BigDecimal("35.658581"), BigDecimal("139.745433")))
-		`when`(placeLocationService.getLocation("place-missing")).thenReturn(null)
+			.thenReturn(
+				PlaceLocation(
+					BigDecimal("35.658581"),
+					BigDecimal("139.745433"),
+				),
+			)
+		`when`(placeLocationService.getLocation("place-missing"))
+			.thenReturn(null)
 		`when`(placeLocationService.getLocation("place-4"))
-			.thenReturn(PlaceLocation(BigDecimal("35.681236"), BigDecimal("139.767125")))
+			.thenReturn(
+				PlaceLocation(
+					BigDecimal("35.681236"),
+					BigDecimal("139.767125"),
+				),
+			)
 
 		val response = service.getMapPoints(TRAVEL_ID, OWNER_ID, 1)
 
-		assertEquals(listOf(first.id, fourth.id), response.points.map { it.timelineItemId })
-		assertEquals(listOf(1, 4), response.points.map { it.visitOrder })
-		assertEquals(listOf(unmapped.id), response.unmappedTimelineItemIds)
-		assertEquals(listOf(unresolved.id), response.unresolvedTimelineItemIds)
+		assertEquals(
+			listOf(first.id, fourth.id),
+			response.points.map { it.timelineItemId },
+		)
+		assertEquals(
+			listOf(1, 4),
+			response.points.map { it.visitOrder },
+		)
+		assertEquals(
+			listOf(unmapped.id),
+			response.unmappedTimelineItemIds,
+		)
+		assertEquals(
+			listOf(unresolved.id),
+			response.unresolvedTimelineItemIds,
+		)
 		verifyNoInteractions(travelMemberRepository)
+	}
+
+	@Test
+	fun `map points include unassigned places together with requested day`() {
+		val travel = travel(OWNER_ID)
+
+		val assigned = timelineItem(
+			travel = travel,
+			visitOrder = 1,
+			name = "덕수궁",
+			googlePlaceId = "place-assigned",
+			dayNumber = 1,
+		)
+		val unassigned = timelineItem(
+			travel = travel,
+			visitOrder = 2,
+			name = "대한민국역사박물관",
+			googlePlaceId = "place-unassigned",
+			dayNumber = null,
+		)
+		val otherDay = timelineItem(
+			travel = travel,
+			visitOrder = 1,
+			name = "다른 날짜 장소",
+			googlePlaceId = "place-day-2",
+			dayNumber = 2,
+		)
+
+		`when`(travelRepository.findById(TRAVEL_ID))
+			.thenReturn(Optional.of(travel))
+		`when`(timelineItemRepository.findAllByTravelIdOrderByDayNumberAscVisitOrderAsc(TRAVEL_ID))
+			.thenReturn(listOf(unassigned, assigned, otherDay))
+		`when`(placeLocationService.getLocation("place-assigned"))
+			.thenReturn(
+				PlaceLocation(
+					BigDecimal("37.565804"),
+					BigDecimal("126.975146"),
+				),
+			)
+		`when`(placeLocationService.getLocation("place-unassigned"))
+			.thenReturn(
+				PlaceLocation(
+					BigDecimal("37.573714"),
+					BigDecimal("126.978913"),
+				),
+			)
+
+		val response = service.getMapPoints(TRAVEL_ID, OWNER_ID, 1)
+
+		assertEquals(
+			setOf(assigned.id, unassigned.id),
+			response.points.map { it.timelineItemId }.toSet(),
+		)
 	}
 
 	@Test
 	fun `accepted read only participant can read an empty map day`() {
 		val travel = travel(OWNER_ID)
-		`when`(travelRepository.findById(TRAVEL_ID)).thenReturn(Optional.of(travel))
-		`when`(travelMemberRepository.findAcceptedRole(TRAVEL_ID, MEMBER_ID)).thenReturn(TravelRole.READ_ONLY)
-		`when`(timelineItemRepository.findAllByTravelIdAndDayNumberOrderByVisitOrderAsc(TRAVEL_ID, 2))
+
+		`when`(travelRepository.findById(TRAVEL_ID))
+			.thenReturn(Optional.of(travel))
+		`when`(travelMemberRepository.findAcceptedRole(TRAVEL_ID, MEMBER_ID))
+			.thenReturn(TravelRole.READ_ONLY)
+		`when`(timelineItemRepository.findAllByTravelIdOrderByDayNumberAscVisitOrderAsc(TRAVEL_ID))
 			.thenReturn(emptyList())
 
 		val response = service.getMapPoints(TRAVEL_ID, MEMBER_ID, 2)
@@ -77,30 +179,45 @@ class TravelMapPointServiceTest {
 
 	@Test
 	fun `missing travel is rejected before permission and timeline lookup`() {
-		`when`(travelRepository.findById(TRAVEL_ID)).thenReturn(Optional.empty())
+		`when`(travelRepository.findById(TRAVEL_ID))
+			.thenReturn(Optional.empty())
 
 		assertThrows<MapPointTravelNotFoundException> {
 			service.getMapPoints(TRAVEL_ID, MEMBER_ID, 1)
 		}
-		verifyNoInteractions(travelMemberRepository, timelineItemRepository, placeLocationService)
+
+		verifyNoInteractions(
+			travelMemberRepository,
+			timelineItemRepository,
+			placeLocationService,
+		)
 	}
 
 	@Test
 	fun `non participant is rejected before timeline and provider lookup`() {
 		val travel = travel(OWNER_ID)
-		`when`(travelRepository.findById(TRAVEL_ID)).thenReturn(Optional.of(travel))
-		`when`(travelMemberRepository.findAcceptedRole(TRAVEL_ID, MEMBER_ID)).thenReturn(null)
+
+		`when`(travelRepository.findById(TRAVEL_ID))
+			.thenReturn(Optional.of(travel))
+		`when`(travelMemberRepository.findAcceptedRole(TRAVEL_ID, MEMBER_ID))
+			.thenReturn(null)
 
 		assertThrows<MapPointAccessDeniedException> {
 			service.getMapPoints(TRAVEL_ID, MEMBER_ID, 1)
 		}
-		verifyNoInteractions(timelineItemRepository, placeLocationService)
+
+		verifyNoInteractions(
+			timelineItemRepository,
+			placeLocationService,
+		)
 	}
 
 	@Test
 	fun `day number outside travel period is rejected before timeline lookup`() {
 		val travel = travel(OWNER_ID)
-		`when`(travelRepository.findById(TRAVEL_ID)).thenReturn(Optional.of(travel))
+
+		`when`(travelRepository.findById(TRAVEL_ID))
+			.thenReturn(Optional.of(travel))
 
 		assertThrows<InvalidMapDayNumberException> {
 			service.getMapPoints(TRAVEL_ID, OWNER_ID, 0)
@@ -108,7 +225,11 @@ class TravelMapPointServiceTest {
 		assertThrows<InvalidMapDayNumberException> {
 			service.getMapPoints(TRAVEL_ID, OWNER_ID, 4)
 		}
-		verifyNoInteractions(timelineItemRepository, placeLocationService)
+
+		verifyNoInteractions(
+			timelineItemRepository,
+			placeLocationService,
+		)
 	}
 
 	private fun travel(ownerId: UUID): Travel = Travel(
@@ -124,10 +245,13 @@ class TravelMapPointServiceTest {
 		visitOrder: Short,
 		name: String,
 		googlePlaceId: String?,
+		dayNumber: Short? = 1,
 	): TimelineItem = TimelineItem(
 		travel = travel,
-		dayNumber = 1,
-		visitDate = LocalDate.parse("2026-08-01"),
+		dayNumber = dayNumber,
+		visitDate = dayNumber?.let {
+			travel.startDate.plusDays(it.toLong() - 1)
+		},
 		category = TimelineCategory.ATTRACTION,
 		name = name,
 		googlePlaceId = googlePlaceId,

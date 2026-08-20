@@ -57,6 +57,8 @@ export interface PlaceModalProps {
   placeQuery?: string;
   onPlaceQueryChange?: (value: string) => void;
   placeResults?: PlaceSearchResultOption[];
+  placeSearchLoading?: boolean;
+  placeSearchError?: string | null;
   onSelectPlaceResult?: (result: PlaceSearchResultOption) => void;
   dateChips?: PlaceDateChip[];
   onSelectDateChip?: (index: number) => void;
@@ -81,6 +83,8 @@ function PlaceModal({
   placeQuery,
   onPlaceQueryChange,
   placeResults = [],
+  placeSearchLoading = false,
+  placeSearchError,
   onSelectPlaceResult,
   dateChips,
   onSelectDateChip,
@@ -101,6 +105,16 @@ function PlaceModal({
               value={placeQuery ?? ""}
               onChange={(e) => onPlaceQueryChange(e.target.value)}
             />
+            {placeSearchLoading && (
+              <p className="mt-1.5 text-xs text-muted-foreground" role="status">
+                장소를 찾는 중...
+              </p>
+            )}
+            {placeSearchError && !placeSearchLoading && (
+              <p className="mt-1.5 text-xs text-destructive" role="alert">
+                {placeSearchError}
+              </p>
+            )}
             {placeResults.length > 0 && (
               <div className="mt-1.5 flex max-h-48 flex-col gap-1 overflow-y-auto rounded-lg border border-border bg-popover p-1.5 shadow-dialog">
                 {placeResults.map((result) => (
