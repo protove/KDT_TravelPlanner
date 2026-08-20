@@ -1,0 +1,37 @@
+{
+  "schemaVersion": "scrum41-sql-round-trip-profile/v1",
+  "jiraKey": "SCRUM-41",
+  "itemCounts": [3, 10, 25, 50, 100, 200],
+  "modes": ["noop", "reverse"],
+  "warmupIterations": 4,
+  "measuredIterations": 30,
+  "virtualUsers": 1,
+  "pacingSeconds": 0.25,
+  "replicates": 3,
+  "orderByReplicate": {
+    "1": {"itemCounts": [3, 10, 25, 50, 100, 200], "modeOrder": ["noop", "reverse"]},
+    "2": {"itemCounts": [200, 100, 50, 25, 10, 3], "modeOrder": ["reverse", "noop"]},
+    "3": {"itemCounts": [25, 3, 100, 10, 200, 50], "modeOrder": "alternate-noop-first"}
+  },
+  "thresholds": {
+    "unexpectedErrorRateMax": 0.0,
+    "contractFailureRateMax": 0.0,
+    "droppedIterationsMax": 0,
+    "reverseUpdateCallsPerRequestTolerance": 0.05,
+    "reverseUpdateCallsSpearmanMin": 0.95,
+    "apiP95SpearmanMin": 0.80,
+    "apiP95RatioMin": 2.0,
+    "timelineUpdateMeanExecMsMax": 5.0,
+    "slowSqlCallsRatioMax": 2.0,
+    "replicateAgreementMin": 2
+  },
+  "queryFamilies": [
+    "travel_select",
+    "timeline_select",
+    "membership_permission_select",
+    "timeline_update",
+    "transaction_or_session",
+    "unknown_application_table_statement"
+  ],
+  "notes": "Compose-only diagnostic profile; thresholds are cause-classification rules, not product SLOs."
+}

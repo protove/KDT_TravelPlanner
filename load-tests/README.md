@@ -121,6 +121,145 @@ PromQL/LogQL 결과와 k6 원본을 같은 UTC 시간 범위로 보존한다.
 진단을 위해 스택을 남길 때만 `--keep-stack`을 사용한다. 기본 project 이름이 아닌
 프로젝트를 지정하려면 실수 방지를 위해 `ALLOW_NON_REHEARSAL_PROJECT=1`을 명시해야 한다.
 
+## SCRUM-41 Compose DB/Redis 의존성 지연 진단
+
+`SCRUM-41` 진단은 기존 `compose.yml`·monitoring overlay를 수정하지 않고
+`compose.monitoring.diagnostic.yml`만 추가해 PostgreSQL/Redis exporter와
+Prometheus remote-write 수집을 켠다. 20 RPS, 3분 warmup, 10분 measured,
+20 preallocated/40 max VU 조건으로 다음 네 workload를 replicate 순서를 교차해
+실행한다.
+
+- `refresh-only`: refresh 경로만 호출하는 control
+- `read-only`: travel list/detail/map read control
+- `fixed-cardinality-mixed`: 3개 item reorder를 반복하는 fixed control
+- `growing-cardinality-mixed`: 매 cycle item 수를 늘리는 진단 workload
+
+실행 전 Docker daemon과 exporter/k6 image pull이 필요하며, 포트가 사용 중이면
+각 포트를 고유 값으로 바꾼다.
+
+```bash
+python3 scripts/loadtest/run-compose-dependency-diagnostic.py \
+  --campaign-id scrum41-full-<timestamp>-v3 \
+  --backend-port 18080 --grafana-port 3301 \
+  --prometheus-port 9900 --loki-port 3310 --alloy-port 13245
+```
+
+실행 결과는 `evidence/load-tests/<campaign-id>-dependency-diagnostic/`에
+replicate별 `metadata.json`, k6 raw/native summary, `operations.jsonl`,
+`runner-stats.jsonl`, Prometheus query 결과, Grafana 전체 dashboard와 9개 패널
+PNG를 저장한다. 결과 요약과 사전 고정 규칙 판정은 다음 명령으로 생성·검증한다.
+
+```bash
+python3 scripts/loadtest/summarize-compose-dependency-diagnostic.py \
+  --evidence-root evidence/load-tests/<campaign-id>-dependency-diagnostic
+python3 scripts/loadtest/verify-compose-grafana-captures.py \
+  --evidence-root evidence/load-tests/<campaign-id>-dependency-diagnostic/replicate-1
+python3 scripts/loadtest/verify-compose-diagnostic-evidence.py \
+  --evidence-root evidence/load-tests/<campaign-id>-dependency-diagnostic \
+  --require-captures
+```
+
+`DIAGNOSTIC_REPORT.md`와 `verdict.json`은 로컬 Compose 관측 결과만 기술한다.
+AWS EC2/ASG/RDS/ElastiCache 성능이나 운영 SLO로 일반화하지 않으며, credential·Cookie와
+실제 사용자 데이터는 evidence에 기록하지 않는다. 진단용 Grafana anonymous Viewer
+설정도 해당 overlay에만 존재하고 base 설정에는 영향을 주지 않는다.
+
+## SCRUM-41 SQL round-trip diagnostic
+
+이 집중 실험은 위 dependency 실험의 후속이다. `itemCount` 3/10/25/50/100/200에서
+같은 payload를 보내는 `noop`과 canonical/reversed permutation을 번갈아 보내는
+`reverse`를 한 VU로 실행한다. stage마다 warmup 4회, measured 30회, 요청 사이 250ms를
+고정하고, 새 PostgreSQL volume에서 `pg_stat_statements`를 reset한 뒤 k6 raw,
+query family aggregate, Backend/Prometheus delta, Grafana query/PNG를 함께 봉인한다.
+
+새 overlay는 `compose.yml`, 기존 monitoring 파일, Dockerfile을 수정하지 않는다.
+PostgreSQL의 `shared_preload_libraries=pg_stat_statements`, `compute_query_id=on`,
+`track_io_timing=on`과 idempotent init SQL, digest-pinned Pushgateway, SQL 전용
+Prometheus/Grafana dashboard가 모두 진단 project의 app-network 내부에서만 동작한다.
+
+실행 예시는 별도 안전 env 파일을 사용한다. 실제 `.env.dev`/`.env.prod`를 수정하거나
+evidence에 복사하지 않는다.
+
+```bash
+python3 scripts/loadtest/run-compose-sql-round-trip-diagnostic.py \
+  --campaign-id scrum41-sql-round-trip-<timestamp> \
+  --env-file /private/tmp/scrum41-sql-diagnostic.env \
+  --backend-port 18080 --prometheus-port 9900 --grafana-port 3301
+```
+
+짧은 smoke는 `--smoke`로 itemCount 3/10, warmup 2회, measured 4회를 사용한다.
+완료 후 독립 재생성과 안전 검사를 수행한다.
+
+```bash
+python3 scripts/loadtest/summarize-compose-sql-round-trip-diagnostic.py \
+  --evidence-root evidence/load-tests/<campaign-id>-sql-round-trip-diagnostic
+python3 scripts/loadtest/verify-compose-sql-diagnostic-evidence.py \
+  --evidence-root evidence/load-tests/<campaign-id>-sql-round-trip-diagnostic \
+  --require-analysis --require-captures
+```
+
+판정은 `noop UPDATE=0`, reverse의 `3*floor(itemCount/2)` UPDATE calls, API p95 및
+개별 UPDATE mean execution time을 분리해 해석한다. `residualMsPerRequest`는 DB 왕복만을
+뜻하지 않으며 JDBC/JPA/애플리케이션 처리의 합계로 제한한다. 결과는 Compose synthetic
+fixture에 한정되고 production SQL 최적화나 AWS SLO 결론을 수행하지 않는다.
+
+## SCRUM-41 timeline order bulk-update 재현 검증
+
+SQL 진단에서 확인한 병목 가설을 검증하기 위해 timeline reorder 경로를
+`SELECT ... FOR UPDATE` snapshot → `SET CONSTRAINTS ... DEFERRED` → 한 번의
+`UPDATE ... FROM unnest(...)` → row-count 확인 → `SET CONSTRAINTS ... IMMEDIATE` 순서로
+실행한다. 동일 transaction 안에서 snapshot과 bulk update를 수행하며, noop은 DB write를
+생략하고 권한·순열 검증과 rollback·동시성 경로는 기존 계약으로 유지한다. V19 migration은
+기존 unique constraint의 동작 시점을 보존하면서 transaction 내부 swap을 허용한다.
+
+Runner는 source seal을 만들기 때문에 versioned source 변경을 먼저 commit한 깨끗한 working
+tree에서 실행해야 한다. 이전 SQL 실험의 baseline provenance와 preflight 기록을 함께 넘겨
+비교 대상과 실행 환경을 고정한다.
+
+```bash
+python3 scripts/loadtest/run-compose-sql-round-trip-diagnostic.py \
+  --campaign-id scrum41-opt-smoke-<timestamp> --smoke \
+  --env-file .env.dev.example \
+  --backend-port 18180 --prometheus-port 9910 --grafana-port 3311 \
+  --preflight-json .codex/plans/timeline-order-bulk-update-verification/runs/<run-id>/preflight.json \
+  --baseline-provenance .codex/plans/timeline-order-bulk-update-verification/runs/<run-id>/baseline-provenance.json
+
+python3 scripts/loadtest/run-compose-sql-round-trip-diagnostic.py \
+  --campaign-id scrum41-opt-full-<timestamp> \
+  --env-file .env.dev.example \
+  --backend-port 18280 --prometheus-port 9920 --grafana-port 3321 \
+  --preflight-json .codex/plans/timeline-order-bulk-update-verification/runs/<run-id>/preflight.json \
+  --baseline-provenance .codex/plans/timeline-order-bulk-update-verification/runs/<run-id>/baseline-provenance.json
+```
+
+실험 후에는 기존 SQL 요약과 별도로 고정된 baseline hash·source seal·threshold를 검증하는
+비교기를 실행한다. smoke는 파이프라인과 캡처 경로만 확인하고, 최종 판정은 itemCount
+3/10/25/50/100/200 전체를 3회 반복한 full campaign에서만 수행한다.
+
+```bash
+python3 scripts/loadtest/summarize-compose-timeline-order-optimization.py \
+  --evidence-root evidence/load-tests/<campaign-id>-sql-round-trip-diagnostic \
+  --baseline-root evidence/load-tests/<baseline-campaign-id>-sql-round-trip-diagnostic \
+  --baseline-provenance .codex/plans/timeline-order-bulk-update-verification/runs/<run-id>/baseline-provenance.json
+
+python3 scripts/loadtest/verify-compose-sql-diagnostic-evidence.py \
+  --evidence-root evidence/load-tests/<campaign-id>-sql-round-trip-diagnostic \
+  --require-captures
+```
+
+사전 고정 기준은 noop UPDATE 0, reverse UPDATE 1회, reverse rows/request가
+`itemCount`와 일치, 총 SQL 수가 baseline 대비 1.25배 이하, 오류·deadlock 0이다. 최적화
+효과는 baseline 300 calls 대비 모든 유효 replicate에서 N200 update 99% 이상 감소,
+API p95 중앙값 58.1742ms 이하, DB execution/request replicate median 6.66270125ms 이하이며, 각 기준은
+계획에 정의된 3회 중 2회 이상 규칙을 따른다. 유효한 실패가 발생한 뒤 threshold를
+바꾸거나 재시도해 판정을 맞추지 않는다.
+
+이 실험은 기존 Compose/Dockerfile을 변경하지 않는 진단 overlay만 사용한다. Grafana 전체
+dashboard와 핵심 SQL/HTTP 패널 PNG, PromQL 결과, k6 raw 및 비교 report를 같은 evidence
+root에 보존하고, 마지막에 `closure-audit.json`을 추가한 뒤 evidence safety verifier를
+`--require-analysis`로 실행한다. 결과는 합성 Compose fixture의 개선 재현 여부만 말하며
+운영 AWS SLO나 데이터베이스 전체의 일반적 성능을 보장하지 않는다.
+
 ## 인증과 합성 데이터
 
 `seed-compose-load-data.py`는 백엔드의 현재 구현 계약을 소비한다.

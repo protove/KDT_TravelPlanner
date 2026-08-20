@@ -1,0 +1,45 @@
+services:
+  prometheus:
+    command:
+      - --config.file=/etc/prometheus/prometheus.diagnostic.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=${PROMETHEUS_RETENTION:-7d}
+      - --web.enable-lifecycle
+      - --web.enable-remote-write-receiver
+    volumes:
+      - ./monitoring/prometheus/prometheus.diagnostic.yml:/etc/prometheus/prometheus.diagnostic.yml:ro
+    depends_on:
+      postgres-exporter:
+        condition: service_started
+      redis-exporter:
+        condition: service_started
+
+  postgres-exporter:
+    image: ghcr.io/prometheus-community/postgres-exporter:v0.20.1@sha256:6a3af65923aab6a73a4030724a75f6ba3fda3b437ca514274efea4593638ab7e
+    environment:
+      DATA_SOURCE_URI: postgres:5432/${POSTGRES_DB}?sslmode=disable
+      DATA_SOURCE_USER: ${POSTGRES_USER}
+      DATA_SOURCE_PASS: ${POSTGRES_PASSWORD}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - app-network
+
+  redis-exporter:
+    image: ghcr.io/oliver006/redis_exporter:v1.77.0@sha256:e3431bd5775a19bc6dfa923a67a27b3c1155017c08a72aef28f32e2206b6ff5e
+    environment:
+      REDIS_ADDR: redis://redis:6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - app-network
+
+  grafana:
+    environment:
+      # Diagnostic-only local browser capture; the base Compose auth settings
+      # remain unchanged and this overlay is never used for deployment.
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer

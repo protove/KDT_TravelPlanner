@@ -1,0 +1,87 @@
+services:
+  postgres:
+    command:
+      - postgres
+      - -c
+      - shared_preload_libraries=pg_stat_statements
+      - -c
+      - compute_query_id=on
+      - -c
+      - track_io_timing=on
+    volumes:
+      - ./load-tests/sql/enable-pg-stat-statements.sql:/docker-entrypoint-initdb.d/20-enable-pg-stat-statements.sql:ro
+
+  backend:
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB}?ApplicationName=scrum41-sql-diagnostic
+      LOGGING_FILE_NAME: /var/log/travel-planner/travel-planner.log
+
+  postgres-exporter:
+    image: ghcr.io/prometheus-community/postgres-exporter:v0.20.1@sha256:6a3af65923aab6a73a4030724a75f6ba3fda3b437ca514274efea4593638ab7e
+    command:
+      - --collector.stat_statements
+      - --collector.stat_statements.limit=100
+      - --collector.stat_statements.query_length=160
+    environment:
+      DATA_SOURCE_URI: postgres:5432/${POSTGRES_DB}?sslmode=disable
+      DATA_SOURCE_USER: ${POSTGRES_USER}
+      DATA_SOURCE_PASS: ${POSTGRES_PASSWORD}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - app-network
+
+  redis-exporter:
+    image: ghcr.io/oliver006/redis_exporter:v1.77.0@sha256:e3431bd5775a19bc6dfa923a67a27b3c1155017c08a72aef28f32e2206b6ff5e
+    environment:
+      REDIS_ADDR: redis://redis:6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - app-network
+
+  pushgateway:
+    image: prom/pushgateway:v1.11.1@sha256:03738d278e082ee9821df730c741b3b465c251fc2b68a85883def301a55a6215
+    command:
+      - --web.listen-address=0.0.0.0:9091
+      - --persistence.file=/pushgateway/metrics.json
+    expose:
+      - "9091"
+    volumes:
+      - sql_diagnostic_pushgateway:/pushgateway
+    networks:
+      - app-network
+
+  prometheus:
+    command:
+      - --config.file=/etc/prometheus/prometheus.sql-diagnostic.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=${PROMETHEUS_RETENTION:-7d}
+      - --web.enable-lifecycle
+      - --web.enable-remote-write-receiver
+    volumes:
+      - ./monitoring/prometheus/prometheus.sql-diagnostic.yml:/etc/prometheus/prometheus.sql-diagnostic.yml:ro
+    depends_on:
+      backend:
+        condition: service_healthy
+      postgres-exporter:
+        condition: service_started
+      redis-exporter:
+        condition: service_started
+      pushgateway:
+        condition: service_started
+    ports:
+      - "127.0.0.1:${PROMETHEUS_PORT:-9090}:9090"
+
+  grafana:
+    environment:
+      # Diagnostic-only local capture; no deployment credentials are changed.
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_USERS_ALLOW_SIGN_UP: "false"
+
+volumes:
+  sql_diagnostic_pushgateway:

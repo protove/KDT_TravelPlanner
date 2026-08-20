@@ -109,7 +109,7 @@ while IFS= read -r changed_path; do
       ;;
     .github/workflows/monitoring-verification.yml|.github/workflows/terraform-verification.yml|.github/workflows/backend-dev-image.yml)
       ;;
-    compose.monitoring.yml|compose.monitoring.dev.yml|monitoring/*|infra/*|load-tests/*|scripts/loadtest/*|reference/*|docs/*|presentation/*|evidence/*|output/*|.agents/*|.codex/*|README.md|AGENTS.md|.gitignore|.gitattributes|.DS_Store|k8s/*|.github/workflows/k8s-verify.yml)
+    compose.monitoring.yml|compose.monitoring.dev.yml|compose.monitoring.diagnostic.yml|compose.monitoring.sql-diagnostic.yml|monitoring/*|infra/*|load-tests/*|scripts/loadtest/*|reference/*|docs/*|presentation/*|evidence/*|output/*|.agents/*|.codex/*|README.md|AGENTS.md|.gitignore|.gitattributes|.DS_Store|k8s/*|.github/workflows/k8s-verify.yml)
       ;;
     *)
       # Unknown paths must be reviewed before they can silently bypass a release.

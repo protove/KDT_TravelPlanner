@@ -8,6 +8,7 @@ import org.junit.jupiter.api.assertThrows
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.dao.DataIntegrityViolationException
 import org.springframework.jdbc.core.JdbcTemplate
+import org.springframework.transaction.support.TransactionTemplate
 import java.time.OffsetDateTime
 import java.time.ZoneOffset
 import java.util.UUID
@@ -21,6 +22,9 @@ class TimelineMigrationIntegrationTest : ContainerIntegrationTestSupport() {
 
 	@Autowired
 	private lateinit var dataSource: DataSource
+
+	@Autowired
+	private lateinit var transactionTemplate: TransactionTemplate
 
 	@Test
 	fun `current membership schema upgrades through timeline migration`() {
@@ -51,6 +55,119 @@ class TimelineMigrationIntegrationTest : ContainerIntegrationTestSupport() {
 				jdbcTemplate.queryForObject(
 					"SELECT COUNT(*) FROM $schema.flyway_schema_history WHERE version = '6' AND success = TRUE",
 					Int::class.java,
+				),
+			)
+		} finally {
+			jdbcTemplate.execute("DROP SCHEMA IF EXISTS $schema CASCADE")
+		}
+	}
+
+	@Test
+	fun `empty schema migrates through V19 with the deferrable order constraint`() {
+		val schema = "timeline_empty_v19_test"
+		jdbcTemplate.execute("DROP SCHEMA IF EXISTS $schema CASCADE")
+		jdbcTemplate.execute("CREATE SCHEMA $schema")
+
+		try {
+			val result = Flyway.configure()
+				.dataSource(dataSource)
+				.schemas(schema)
+				.defaultSchema(schema)
+				.target(MigrationVersion.fromVersion("19"))
+				.load()
+				.migrate()
+
+			assertEquals(19, result.migrationsExecuted)
+			assertEquals(
+				true,
+				jdbcTemplate.queryForObject(
+					"SELECT condeferrable FROM pg_catalog.pg_constraint " +
+						"WHERE conname = 'uq_timeline_planner_day_order' " +
+						"AND conrelid = '$schema.timeline_table'::regclass",
+					Boolean::class.java,
+				),
+			)
+		} finally {
+			jdbcTemplate.execute("DROP SCHEMA IF EXISTS $schema CASCADE")
+		}
+	}
+
+	@Test
+	fun `V18 history upgrades through V19 without changing constraint identity`() {
+		val schema = "timeline_v18_v19_test"
+		jdbcTemplate.execute("DROP SCHEMA IF EXISTS $schema CASCADE")
+		jdbcTemplate.execute("CREATE SCHEMA $schema")
+
+		try {
+			Flyway.configure()
+				.dataSource(dataSource)
+				.schemas(schema)
+				.defaultSchema(schema)
+				.target(MigrationVersion.fromVersion("18"))
+				.load()
+				.migrate()
+			val ownerId = UUID.randomUUID()
+			val travelId = UUID.randomUUID()
+			val timelineItemId = UUID.randomUUID()
+			val now = OffsetDateTime.of(2026, 1, 1, 0, 0, 0, 0, ZoneOffset.UTC)
+			jdbcTemplate.update(
+				"INSERT INTO $schema.user_table (id, provider, provider_user_id, profile_completed, created_at, updated_at) " +
+					"VALUES (?, 'GOOGLE', ?, FALSE, ?, ?)",
+				ownerId,
+				"timeline-v18-owner-$ownerId",
+				now,
+				now,
+			)
+			jdbcTemplate.update(
+				"INSERT INTO $schema.planners_table " +
+					"(id, owner_id, title, start_date, end_date, created_at, updated_at) " +
+					"VALUES (?, ?, 'V18 일정 보존', '2026-08-01', '2026-08-03', ?, ?)",
+				travelId,
+				ownerId,
+				now,
+				now,
+			)
+			jdbcTemplate.update(
+				"INSERT INTO $schema.timeline_table " +
+					"(id, planner_id, day_number, visit_date, category, name, visit_order) " +
+					"VALUES (?, ?, 1, '2026-08-01', '기타', '보존 일정', 2)",
+				timelineItemId,
+				travelId,
+			)
+
+			val result = Flyway.configure()
+				.dataSource(dataSource)
+				.schemas(schema)
+				.defaultSchema(schema)
+				.target(MigrationVersion.fromVersion("19"))
+				.load()
+				.migrate()
+
+			assertEquals(1, result.migrationsExecuted)
+			assertEquals(
+				1,
+				jdbcTemplate.queryForObject(
+					"SELECT COUNT(*) FROM $schema.flyway_schema_history " +
+						"WHERE version = '19' AND success = TRUE",
+					Int::class.java,
+				),
+			)
+			assertEquals(
+				true,
+				jdbcTemplate.queryForObject(
+					"SELECT condeferrable FROM pg_catalog.pg_constraint " +
+						"WHERE conname = 'uq_timeline_planner_day_order' " +
+						"AND conrelid = '$schema.timeline_table'::regclass",
+					Boolean::class.java,
+				),
+			)
+			assertEquals(
+				1,
+				jdbcTemplate.queryForObject(
+					"SELECT COUNT(*) FROM $schema.timeline_table WHERE id = ? AND planner_id = ? AND visit_order = 2",
+					Int::class.java,
+					timelineItemId,
+					travelId,
 				),
 			)
 		} finally {
@@ -105,6 +222,66 @@ class TimelineMigrationIntegrationTest : ContainerIntegrationTestSupport() {
 				"SELECT data_type FROM information_schema.columns " +
 					"WHERE table_name = 'timeline_table' AND column_name = 'google_place_id'",
 				String::class.java,
+			),
+		)
+	}
+
+	@Test
+	fun `timeline order uniqueness is deferrable but initially immediate`() {
+		val constraint = jdbcTemplate.queryForMap(
+			"SELECT condeferrable, condeferred FROM pg_constraint " +
+				"WHERE conname = 'uq_timeline_planner_day_order' " +
+				"AND conrelid = 'timeline_table'::regclass",
+		)
+
+		assertEquals(true, constraint["condeferrable"])
+		assertEquals(false, constraint["condeferred"])
+	}
+
+	@Test
+	fun `initially immediate uniqueness rejects duplicate but deferred transaction permits a swap`() {
+		val ownerId = UUID.randomUUID()
+		val travelId = UUID.randomUUID()
+		val firstItemId = UUID.randomUUID()
+		val secondItemId = UUID.randomUUID()
+		val now = OffsetDateTime.of(2026, 1, 1, 0, 0, 0, 0, ZoneOffset.UTC)
+		insertOwnerAndTravel(ownerId, travelId, now)
+		insertTimelineItem(travelId, "관광지", null, 1, firstItemId)
+		insertTimelineItem(travelId, "관광지", null, 2, secondItemId)
+
+		assertThrows<DataIntegrityViolationException> {
+			jdbcTemplate.update(
+				"UPDATE timeline_table SET visit_order = 2 WHERE id = ?",
+				firstItemId,
+			)
+		}
+
+		transactionTemplate.executeWithoutResult {
+			jdbcTemplate.update("SET CONSTRAINTS uq_timeline_planner_day_order DEFERRED")
+			jdbcTemplate.update(
+				"UPDATE timeline_table SET visit_order = 2 WHERE id = ?",
+				firstItemId,
+			)
+			jdbcTemplate.update(
+				"UPDATE timeline_table SET visit_order = 1 WHERE id = ?",
+				secondItemId,
+			)
+		}
+
+		assertEquals(
+			1,
+			jdbcTemplate.queryForObject(
+				"SELECT visit_order FROM timeline_table WHERE id = ?",
+				Short::class.java,
+				secondItemId,
+			),
+		)
+		assertEquals(
+			2,
+			jdbcTemplate.queryForObject(
+				"SELECT visit_order FROM timeline_table WHERE id = ?",
+				Short::class.java,
+				firstItemId,
 			),
 		)
 	}
@@ -191,17 +368,42 @@ class TimelineMigrationIntegrationTest : ContainerIntegrationTestSupport() {
 		category: String,
 		foodSubcategory: String?,
 		visitOrder: Int = 1,
+		itemId: UUID = UUID.randomUUID(),
 	) {
 		jdbcTemplate.update(
 			"INSERT INTO timeline_table " +
 				"(id, planner_id, day_number, visit_date, category, food_subcategory, name, visit_order) " +
 				"VALUES (?, ?, 1, '2026-08-01', ?, ?, ?, ?)",
-			UUID.randomUUID(),
+			itemId,
 			travelId,
 			category,
 			foodSubcategory,
 			"도쿄 타워",
 			visitOrder,
+		)
+	}
+
+	private fun insertOwnerAndTravel(
+		ownerId: UUID,
+		travelId: UUID,
+		now: OffsetDateTime,
+	) {
+		jdbcTemplate.update(
+			"INSERT INTO user_table (id, provider, provider_user_id, profile_completed, created_at, updated_at) " +
+				"VALUES (?, 'GOOGLE', ?, FALSE, ?, ?)",
+			ownerId,
+			"timeline-deferrable-owner-$ownerId",
+			now,
+			now,
+		)
+		jdbcTemplate.update(
+			"INSERT INTO planners_table " +
+				"(id, owner_id, title, start_date, end_date, created_at, updated_at) " +
+				"VALUES (?, ?, '타임라인 지연 제약', '2026-08-01', '2026-08-03', ?, ?)",
+			travelId,
+			ownerId,
+			now,
+			now,
 		)
 	}
 }

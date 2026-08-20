@@ -87,6 +87,10 @@ assert_case monitoring-compose 'compose.monitoring.yml' \
   'run_monitoring=true' 'run_compose=true' 'run_backend_dev_image=false' \
   'classification_error=false'
 
+assert_case monitoring-diagnostic-compose $'compose.monitoring.diagnostic.yml\ncompose.monitoring.sql-diagnostic.yml' \
+  'run_monitoring=true' 'run_compose=true' 'run_backend_dev_image=false' \
+  'classification_error=false' 'changed_count=2'
+
 assert_case dev-env '.env.dev.example' \
   'run_monitoring=true' 'run_k8s=true' 'run_compose=true' \
   'run_backend_dev_image=true' 'classification_error=false'
