@@ -1,0 +1,72 @@
+{
+  "schemaVersion": "compose-dependency-diagnostic/v1",
+  "jiraKey": "SCRUM-41",
+  "environment": "compose-production-like",
+  "profile": {
+    "ratePerSecond": 20,
+    "warmup": "3m",
+    "measuredDuration": "10m",
+    "preallocatedVUs": 20,
+    "maxVUs": 40,
+    "repetitions": 3
+  },
+  "variants": [
+    {
+      "id": "refresh-only",
+      "purpose": "Redis refresh-token rotation only",
+      "requestMix": { "refresh": 100 },
+      "cardinality": "fixed"
+    },
+    {
+      "id": "read-only",
+      "purpose": "PostgreSQL-backed read paths without writes",
+      "requestMix": { "travelList": 37, "travelDetail": 33, "mapPoints": 30 },
+      "cardinality": "fixed"
+    },
+    {
+      "id": "fixed-cardinality-mixed",
+      "purpose": "Baseline mix with reorder target fixed at three items",
+      "requestMix": {
+        "refresh": 12,
+        "travelList": 22,
+        "travelDetail": 20,
+        "mapPoints": 18,
+        "timelineCreateOnScratchTravel": 18,
+        "alternatingThreeItemReorder": 10
+      },
+      "cardinality": "reorder-fixed-create-separated"
+    },
+    {
+      "id": "growing-cardinality-mixed",
+      "purpose": "Baseline mix with cumulative create and reverse-all reorder",
+      "requestMix": {
+        "refresh": 12,
+        "travelList": 22,
+        "travelDetail": 20,
+        "mapPoints": 18,
+        "timelineCreate": 18,
+        "reverseAllItemsReorder": 10
+      },
+      "cardinality": "growing"
+    }
+  ],
+  "orderByReplicate": {
+    "1": ["refresh-only", "read-only", "fixed-cardinality-mixed", "growing-cardinality-mixed"],
+    "2": ["read-only", "growing-cardinality-mixed", "refresh-only", "fixed-cardinality-mixed"],
+    "3": ["fixed-cardinality-mixed", "refresh-only", "growing-cardinality-mixed", "read-only"]
+  },
+  "diagnosticMetrics": {
+    "requiredCustomMetrics": [
+      "diagnostic_reorder_item_count",
+      "diagnostic_request_body_bytes",
+      "diagnostic_successful_requests",
+      "diagnostic_contract_failures"
+    ],
+    "boundedItemCountBuckets": ["1-3", "4-10", "11-25", "26-50", "51+"]
+  },
+  "images": {
+    "k6": "grafana/k6:0.54.0@sha256:1f40432b1cbe7234e977f96c362c9bc550a2d2b583d014dd8669fe40d3e9e755",
+    "postgresExporter": "ghcr.io/prometheus-community/postgres-exporter:v0.20.1@sha256:6a3af65923aab6a73a4030724a75f6ba3fda3b437ca514274efea4593638ab7e",
+    "redisExporter": "ghcr.io/oliver006/redis_exporter:v1.77.0@sha256:e3431bd5775a19bc6dfa923a67a27b3c1155017c08a72aef28f32e2206b6ff5e"
+  }
+}

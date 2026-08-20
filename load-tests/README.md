@@ -121,6 +121,49 @@ PromQL/LogQL 결과와 k6 원본을 같은 UTC 시간 범위로 보존한다.
 진단을 위해 스택을 남길 때만 `--keep-stack`을 사용한다. 기본 project 이름이 아닌
 프로젝트를 지정하려면 실수 방지를 위해 `ALLOW_NON_REHEARSAL_PROJECT=1`을 명시해야 한다.
 
+## SCRUM-41 Compose DB/Redis 의존성 지연 진단
+
+`SCRUM-41` 진단은 기존 `compose.yml`·monitoring overlay를 수정하지 않고
+`compose.monitoring.diagnostic.yml`만 추가해 PostgreSQL/Redis exporter와
+Prometheus remote-write 수집을 켠다. 20 RPS, 3분 warmup, 10분 measured,
+20 preallocated/40 max VU 조건으로 다음 네 workload를 replicate 순서를 교차해
+실행한다.
+
+- `refresh-only`: refresh 경로만 호출하는 control
+- `read-only`: travel list/detail/map read control
+- `fixed-cardinality-mixed`: 3개 item reorder를 반복하는 fixed control
+- `growing-cardinality-mixed`: 매 cycle item 수를 늘리는 진단 workload
+
+실행 전 Docker daemon과 exporter/k6 image pull이 필요하며, 포트가 사용 중이면
+각 포트를 고유 값으로 바꾼다.
+
+```bash
+python3 scripts/loadtest/run-compose-dependency-diagnostic.py \
+  --campaign-id scrum41-full-<timestamp>-v3 \
+  --backend-port 18080 --grafana-port 3301 \
+  --prometheus-port 9900 --loki-port 3310 --alloy-port 13245
+```
+
+실행 결과는 `evidence/load-tests/<campaign-id>-dependency-diagnostic/`에
+replicate별 `metadata.json`, k6 raw/native summary, `operations.jsonl`,
+`runner-stats.jsonl`, Prometheus query 결과, Grafana 전체 dashboard와 9개 패널
+PNG를 저장한다. 결과 요약과 사전 고정 규칙 판정은 다음 명령으로 생성·검증한다.
+
+```bash
+python3 scripts/loadtest/summarize-compose-dependency-diagnostic.py \
+  --evidence-root evidence/load-tests/<campaign-id>-dependency-diagnostic
+python3 scripts/loadtest/verify-compose-grafana-captures.py \
+  --evidence-root evidence/load-tests/<campaign-id>-dependency-diagnostic/replicate-1
+python3 scripts/loadtest/verify-compose-diagnostic-evidence.py \
+  --evidence-root evidence/load-tests/<campaign-id>-dependency-diagnostic \
+  --require-captures
+```
+
+`DIAGNOSTIC_REPORT.md`와 `verdict.json`은 로컬 Compose 관측 결과만 기술한다.
+AWS EC2/ASG/RDS/ElastiCache 성능이나 운영 SLO로 일반화하지 않으며, credential·Cookie와
+실제 사용자 데이터는 evidence에 기록하지 않는다. 진단용 Grafana anonymous Viewer
+설정도 해당 overlay에만 존재하고 base 설정에는 영향을 주지 않는다.
+
 ## 인증과 합성 데이터
 
 `seed-compose-load-data.py`는 백엔드의 현재 구현 계약을 소비한다.
