@@ -97,7 +97,7 @@ classify_path() {
     k8s/*)
       run_k8s=true
       ;;
-    compose.monitoring.yml|compose.monitoring.dev.yml)
+    compose.monitoring.yml|compose.monitoring.dev.yml|compose.monitoring.diagnostic.yml|compose.monitoring.sql-diagnostic.yml)
       run_monitoring=true
       run_compose=true
       ;;

@@ -85,6 +85,10 @@ assert_flags "monitoring" "$(new_path_case "monitoring" monitoring/prometheus/pr
   'run_frontend_verify=false' 'run_backend_verify=false' 'run_compose_verify=false' \
   'deploy_frontend=false' 'publish_backend=false' 'classification_error=false'
 
+assert_flags "monitoring-diagnostic-compose" "$(new_path_case "monitoring-diagnostic-compose" compose.monitoring.diagnostic.yml compose.monitoring.sql-diagnostic.yml)" \
+  'run_frontend_verify=false' 'run_backend_verify=false' 'run_compose_verify=false' \
+  'deploy_frontend=false' 'publish_backend=false' 'classification_error=false'
+
 assert_flags "terraform" "$(new_path_case "terraform" infra/modules/backend_service/main.tf)" \
   'run_frontend_verify=false' 'run_backend_verify=false' 'run_compose_verify=false' \
   'deploy_frontend=false' 'publish_backend=false' 'classification_error=false'
