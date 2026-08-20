@@ -29,7 +29,7 @@ interface CommunityPostRepository : JpaRepository<CommunityPost, UUID> {
 			JOIN post.author author
 			WHERE (:categoryCode IS NULL OR category.code = :categoryCode)
 				AND (:tagName IS NULL OR EXISTS (SELECT 1 FROM post.tags t WHERE t.name = :tagName))
-				AND (:keyword IS NULL OR LOWER(post.title) LIKE LOWER(CONCAT('%', :keyword, '%')))
+				AND (:keyword IS NULL OR LOWER(post.title) LIKE LOWER(CONCAT('%', CAST(:keyword AS string), '%')))
 			ORDER BY post.createdAt DESC
 		""",
 		countQuery = """
@@ -38,7 +38,7 @@ interface CommunityPostRepository : JpaRepository<CommunityPost, UUID> {
 			JOIN post.category category
 			WHERE (:categoryCode IS NULL OR category.code = :categoryCode)
 				AND (:tagName IS NULL OR EXISTS (SELECT 1 FROM post.tags t WHERE t.name = :tagName))
-				AND (:keyword IS NULL OR LOWER(post.title) LIKE LOWER(CONCAT('%', :keyword, '%')))
+				AND (:keyword IS NULL OR LOWER(post.title) LIKE LOWER(CONCAT('%', CAST(:keyword AS string), '%')))
 		""",
 	)
 	fun findPostsOrderByCreatedAt(
@@ -69,7 +69,7 @@ interface CommunityPostRepository : JpaRepository<CommunityPost, UUID> {
 			JOIN post.author author
 			WHERE (:categoryCode IS NULL OR category.code = :categoryCode)
 				AND (:tagName IS NULL OR EXISTS (SELECT 1 FROM post.tags t WHERE t.name = :tagName))
-				AND (:keyword IS NULL OR LOWER(post.title) LIKE LOWER(CONCAT('%', :keyword, '%')))
+				AND (:keyword IS NULL OR LOWER(post.title) LIKE LOWER(CONCAT('%', CAST(:keyword AS string), '%')))
 			ORDER BY (0 * 2 + 0) DESC, post.createdAt DESC
 		""",
 		countQuery = """
@@ -78,7 +78,7 @@ interface CommunityPostRepository : JpaRepository<CommunityPost, UUID> {
 			JOIN post.category category
 			WHERE (:categoryCode IS NULL OR category.code = :categoryCode)
 				AND (:tagName IS NULL OR EXISTS (SELECT 1 FROM post.tags t WHERE t.name = :tagName))
-				AND (:keyword IS NULL OR LOWER(post.title) LIKE LOWER(CONCAT('%', :keyword, '%')))
+				AND (:keyword IS NULL OR LOWER(post.title) LIKE LOWER(CONCAT('%', CAST(:keyword AS string), '%')))
 		""",
 	)
 	fun findPostsOrderByPopularity(
