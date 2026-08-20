@@ -30,6 +30,10 @@ class ComposeSqlRoundTripDashboardTest(unittest.TestCase):
             "hikaricp_connections_pending",
         ):
             self.assertIn(metric, expressions)
+        self.assertIn("k6_sql_diagnostic_request_body_bytes_p95", expressions)
+        self.assertIn("k6_sql_diagnostic_contract_failures_rate", expressions)
+        self.assertNotIn("k6_sql_diagnostic_request_body_bytes{", expressions)
+        self.assertNotIn("k6_sql_diagnostic_contract_failures{", expressions)
         serialized = json.dumps(dashboard).lower()
         for forbidden in ("request_id", "requestid", "item_id", "itemid", "password", "cookie", "jwt"):
             self.assertNotIn(forbidden, serialized)
