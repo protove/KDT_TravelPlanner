@@ -11,12 +11,15 @@ persistent_state_key = "dev/terraform.tfstate"
 endpoint_public_access = false
 public_access_cidrs    = ["0.0.0.0/0"]
 
-# Same shared IAM Identity Center role the team already uses for EC2 SSM
-# access (e.g. kdt-travel-terraform), so everyone who can SSM into the
-# bastion can also kubectl. Without this, only the identity that ran apply
-# gets implicit cluster-admin.
+# The IAM Identity Center permission-set role the team actually uses for
+# EC2 SSM access today (check with the infra owner which one — do not
+# assume it is AdministratorAccess; grant the narrowest role that already
+# covers SSM, matching this repo's "separate bootstrap/operator/runtime
+# privilege" principle). So everyone who can SSM into the bastion can also
+# kubectl. Without this, only the identity that ran apply gets implicit
+# cluster-admin.
 admin_principal_arns = [
-  # "arn:aws:iam::123456789012:role/kdt-travel-terraform",
+  # "arn:aws:iam::123456789012:role/aws-reserved/sso.amazonaws.com/ap-northeast-2/AWSReservedSSO_<PermissionSetName>_<hash>",
 ]
 
 kubernetes_version      = "1.31"

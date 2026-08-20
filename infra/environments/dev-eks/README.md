@@ -33,11 +33,18 @@ opt-in**이지 기본 운영 경로가 아니다. 켜두는 채로 방치하지 
 ### 권한: Access Entry로 명시 등록
 
 `admin_principal_arns` 변수에 IAM 역할 ARN을 넣으면, 그 역할을 가진 사람 전원이 클러스터
-관리자 권한을 받는다. 보통 팀이 EC2 SSM 접속에 이미 쓰고 있는 그 공용 IAM Identity
-Center 역할(예: `kdt-travel-terraform`) 하나만 넣으면 된다 — 그러면 "그 bastion에 SSM
-접속 가능한 사람 = kubectl 가능한 사람"으로 그대로 일치한다. 비워두면 apply를 실제로
-실행한 신원만 자동으로 관리자 권한을 받는다(EKS 기본 동작, `bootstrap_cluster_creator_
-admin_permissions = true`).
+관리자 권한을 받는다. 이상적으로는 팀이 EC2 SSM 접속에 실제로 쓰고 있는, **가장 좁은
+권한의** 공용 IAM Identity Center 역할 하나만 넣으면 된다 — 그러면 "그 bastion에 SSM
+접속 가능한 사람 = kubectl 가능한 사람"으로 그대로 일치한다.
+
+**주의**: `AdministratorAccess` 같은 계정 전체 관리자 역할을 그대로 넣지 않는다. 이
+Root를 만들며 실제로 확인해보니, 조장님이 EC2 SSM 접속에 `AdministratorAccess` Permission
+Set을 쓰고 있었는데, 이걸 그대로 등록하면 "AWS 계정 관리자 권한이 있는 사람은 전부 자동으로
+EKS 클러스터 관리자"가 되어버려 `infra/README.md`의 "Bootstrap/일상 실행/Runtime 권한을
+분리한다"는 최소 권한 원칙과 어긋난다. apply 전에 인프라 담당자가 실제로 어떤 Permission
+Set을 쓸지 확정한다(전용 SSM 접속 역할이 따로 없다면, 이번 기회에 하나 만드는 것도
+고려한다). 비워두면 apply를 실제로 실행한 신원만 자동으로 관리자 권한을 받는다(EKS 기본
+동작, `bootstrap_cluster_creator_admin_permissions = true`).
 
 ## State와 의존성
 
