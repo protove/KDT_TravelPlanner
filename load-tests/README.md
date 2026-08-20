@@ -164,6 +164,45 @@ AWS EC2/ASG/RDS/ElastiCache 성능이나 운영 SLO로 일반화하지 않으며
 실제 사용자 데이터는 evidence에 기록하지 않는다. 진단용 Grafana anonymous Viewer
 설정도 해당 overlay에만 존재하고 base 설정에는 영향을 주지 않는다.
 
+## SCRUM-41 SQL round-trip diagnostic
+
+이 집중 실험은 위 dependency 실험의 후속이다. `itemCount` 3/10/25/50/100/200에서
+같은 payload를 보내는 `noop`과 canonical/reversed permutation을 번갈아 보내는
+`reverse`를 한 VU로 실행한다. stage마다 warmup 4회, measured 30회, 요청 사이 250ms를
+고정하고, 새 PostgreSQL volume에서 `pg_stat_statements`를 reset한 뒤 k6 raw,
+query family aggregate, Backend/Prometheus delta, Grafana query/PNG를 함께 봉인한다.
+
+새 overlay는 `compose.yml`, 기존 monitoring 파일, Dockerfile을 수정하지 않는다.
+PostgreSQL의 `shared_preload_libraries=pg_stat_statements`, `compute_query_id=on`,
+`track_io_timing=on`과 idempotent init SQL, digest-pinned Pushgateway, SQL 전용
+Prometheus/Grafana dashboard가 모두 진단 project의 app-network 내부에서만 동작한다.
+
+실행 예시는 별도 안전 env 파일을 사용한다. 실제 `.env.dev`/`.env.prod`를 수정하거나
+evidence에 복사하지 않는다.
+
+```bash
+python3 scripts/loadtest/run-compose-sql-round-trip-diagnostic.py \
+  --campaign-id scrum41-sql-round-trip-<timestamp> \
+  --env-file /private/tmp/scrum41-sql-diagnostic.env \
+  --backend-port 18080 --prometheus-port 9900 --grafana-port 3301
+```
+
+짧은 smoke는 `--smoke`로 itemCount 3/10, warmup 2회, measured 4회를 사용한다.
+완료 후 독립 재생성과 안전 검사를 수행한다.
+
+```bash
+python3 scripts/loadtest/summarize-compose-sql-round-trip-diagnostic.py \
+  --evidence-root evidence/load-tests/<campaign-id>-sql-round-trip-diagnostic
+python3 scripts/loadtest/verify-compose-sql-diagnostic-evidence.py \
+  --evidence-root evidence/load-tests/<campaign-id>-sql-round-trip-diagnostic \
+  --require-analysis --require-captures
+```
+
+판정은 `noop UPDATE=0`, reverse의 `3*floor(itemCount/2)` UPDATE calls, API p95 및
+개별 UPDATE mean execution time을 분리해 해석한다. `residualMsPerRequest`는 DB 왕복만을
+뜻하지 않으며 JDBC/JPA/애플리케이션 처리의 합계로 제한한다. 결과는 Compose synthetic
+fixture에 한정되고 production SQL 최적화나 AWS SLO 결론을 수행하지 않는다.
+
 ## 인증과 합성 데이터
 
 `seed-compose-load-data.py`는 백엔드의 현재 구현 계약을 소비한다.

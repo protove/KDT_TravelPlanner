@@ -11,6 +11,8 @@ import com.ktcloud.travelplanner.travel.model.Travel
 import com.ktcloud.travelplanner.travel.repository.TravelRepository
 import com.ktcloud.travelplanner.user.model.User
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.params.ParameterizedTest
+import org.junit.jupiter.params.provider.ValueSource
 import org.junit.jupiter.api.assertThrows
 import org.mockito.Mockito.mock
 import org.mockito.Mockito.never
@@ -52,6 +54,44 @@ class TimelineItemOrderUpdateServiceTest {
 		assertEquals(2, thirdItem.visitOrder.toInt())
 		verify(timelineItemRepository, times(6)).saveAndFlush(org.mockito.ArgumentMatchers.any())
 		verifyNoInteractions(travelMemberRepository)
+	}
+
+	@ParameterizedTest
+	@ValueSource(ints = [3, 10, 25, 50, 100, 200])
+	fun `reverse permutation persistence calls grow by three per swapped pair`(itemCount: Int) {
+		val travelRepository = mock(TravelRepository::class.java)
+		val travelMemberRepository = mock(TravelMemberRepository::class.java)
+		val timelineItemRepository = mock(TimelineItemRepository::class.java)
+		val service = TimelineItemOrderUpdateService(
+			travelRepository,
+			travelMemberRepository,
+			timelineItemRepository,
+		)
+		val travel = travel(mockUser(OWNER_ID))
+		val items = (1..itemCount).map { visitOrder ->
+			item(
+				travel,
+				UUID.nameUUIDFromBytes("sql-diagnostic-item-$itemCount-$visitOrder".toByteArray()),
+				visitOrder.toShort(),
+			)
+		}
+		`when`(travelRepository.findById(TRAVEL_ID)).thenReturn(Optional.of(travel))
+		`when`(timelineItemRepository.findAllByTravelIdAndDayNumberOrderByVisitOrderAsc(TRAVEL_ID, 1))
+			.thenReturn(items)
+
+		service.updateTimelineItemOrder(
+			TRAVEL_ID,
+			OWNER_ID,
+			TimelineItemOrderUpdateRequest(
+				dayNumber = 1,
+				items = items.asReversed().mapIndexed { index, timelineItem ->
+					TimelineItemOrderUpdate(timelineItem.id, index + 1)
+				},
+			),
+		)
+
+		verify(timelineItemRepository, times(3 * (itemCount / 2)))
+			.saveAndFlush(org.mockito.ArgumentMatchers.any())
 	}
 
 	@Test
