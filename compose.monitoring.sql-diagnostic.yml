@@ -14,6 +14,7 @@ services:
   backend:
     environment:
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB}?ApplicationName=scrum41-sql-diagnostic
+      LOGGING_FILE_NAME: /var/log/travel-planner/travel-planner.log
 
   postgres-exporter:
     image: ghcr.io/prometheus-community/postgres-exporter:v0.20.1@sha256:6a3af65923aab6a73a4030724a75f6ba3fda3b437ca514274efea4593638ab7e
