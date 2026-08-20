@@ -29,7 +29,6 @@ import org.springframework.transaction.annotation.Transactional
 import java.time.LocalDate
 import java.util.UUID
 import kotlin.test.assertEquals
-import kotlin.test.assertTrue
 
 @ActiveProfiles("test")
 @SpringBootTest
@@ -47,7 +46,7 @@ class TimelineItemOrderSqlBehaviorIntegrationTest(
 	@Autowired private val entityManagerFactory: EntityManagerFactory,
 ) {
 	@Test
-	fun `noop has no entity updates while reverse produces repeated flush updates`() {
+	fun `noop and reverse use JDBC order path without Hibernate entity updates`() {
 		val noopOwner = saveUser("sql-noop-owner")
 		val noopTravel = saveTravel(noopOwner, "noop")
 		val noopItems = saveItems(noopTravel, 10)
@@ -72,9 +71,7 @@ class TimelineItemOrderSqlBehaviorIntegrationTest(
 		val reverseSnapshot = snapshot(statistics)
 
 		assertEquals(0L, noopSnapshot.entityUpdateCount)
-		assertTrue(reverseSnapshot.entityUpdateCount >= 3L)
-		assertTrue(reverseSnapshot.flushCount > noopSnapshot.flushCount)
-		assertTrue(reverseSnapshot.prepareStatementCount > noopSnapshot.prepareStatementCount)
+		assertEquals(0L, reverseSnapshot.entityUpdateCount)
 	}
 
 	private fun snapshot(statistics: Statistics): Snapshot = Snapshot(

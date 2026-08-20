@@ -30,6 +30,17 @@ CAPTURE_VERIFIER = ROOT / "scripts/loadtest/verify-compose-sql-grafana-captures.
 EVIDENCE_VERIFIER = ROOT / "scripts/loadtest/verify-compose-sql-diagnostic-evidence.py"
 K6_IMAGE = "grafana/k6:0.54.0@sha256:1f40432b1cbe7234e977f96c362c9bc550a2d2b583d014dd8669fe40d3e9e755"
 PUSHGATEWAY_IMAGE = "prom/pushgateway:v1.11.1@sha256:03738d278e082ee9821df730c741b3b465c251fc2b68a85883def301a55a6215"
+RELEVANT_SOURCE_PATHS = (
+    "backend/src/main/resources/db/migration/V13__defer_timeline_order_unique_constraint.sql",
+    "backend/src/main/kotlin/com/ktcloud/travelplanner/timeline/repository/TimelineItemOrderRepository.kt",
+    "backend/src/main/kotlin/com/ktcloud/travelplanner/timeline/repository/JdbcTimelineItemOrderRepository.kt",
+    "backend/src/main/kotlin/com/ktcloud/travelplanner/timeline/service/TimelineItemOrderUpdateService.kt",
+    "scripts/loadtest/run-compose-sql-round-trip-diagnostic.py",
+    "scripts/loadtest/summarize-compose-sql-round-trip-diagnostic.py",
+    "scripts/loadtest/verify-compose-sql-diagnostic-evidence.py",
+    "load-tests/k6/flows/sql-round-trip-diagnostic.js",
+    "load-tests/k6/scenarios/sql-round-trip-diagnostic.js",
+)
 
 
 class DiagnosticError(RuntimeError):
@@ -60,6 +71,36 @@ def read_env(path: Path) -> dict[str, str]:
         key, value = line.split("=", 1)
         values[key.strip()] = value.strip().strip("\"'")
     return values
+
+
+def source_seal() -> dict[str, Any]:
+    status = subprocess.run(
+        ["git", "status", "--porcelain", "--untracked-files=no"],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if status.returncode != 0:
+        raise DiagnosticError("unable to inspect git source status")
+    if status.stdout.strip():
+        raise DiagnosticError("campaign source tree has uncommitted tracked changes")
+    commit = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if commit.returncode != 0 or not commit.stdout.strip():
+        raise DiagnosticError("unable to resolve campaign source commit")
+    files: dict[str, str] = {}
+    for relative in RELEVANT_SOURCE_PATHS:
+        path = ROOT / relative
+        if not path.is_file():
+            raise DiagnosticError(f"relevant source file is missing: {relative}")
+        files[relative] = hashlib.sha256(path.read_bytes()).hexdigest()
+    return {"commit": commit.stdout.strip(), "trackedTreeClean": True, "files": files}
 
 
 def write_json(path: Path, value: object) -> None:
@@ -541,6 +582,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--prometheus-port", type=int, default=9900)
     parser.add_argument("--evidence-root", type=Path, default=ROOT / "evidence/load-tests")
     parser.add_argument("--env-file", type=Path, default=ROOT / ".env.dev.example")
+    parser.add_argument("--preflight-json", type=Path, default=None)
+    parser.add_argument("--baseline-provenance", type=Path, default=None)
     parser.add_argument("--smoke", action="store_true")
     parser.add_argument("--keep-stack", action="store_true")
     return parser.parse_args()
@@ -568,7 +611,18 @@ def run_campaign(args: argparse.Namespace) -> Path:
     evidence_root.mkdir(parents=True)
     profile_copy = evidence_root / "effective-profile.json"
     write_json(profile_copy, effective)
+    for source_path, target_name in (
+        (args.preflight_json, "preflight.json"),
+        (args.baseline_provenance, "baseline-provenance.json"),
+    ):
+        if source_path is None:
+            continue
+        source_path = source_path.resolve()
+        if not source_path.is_file():
+            raise DiagnosticError(f"provenance file does not exist: {source_path}")
+        shutil.copyfile(source_path, evidence_root / target_name)
     env_values = read_env(env_file)
+    source_seal_record = source_seal()
     source_digests = {
         "profile": hashlib.sha256(PROFILE_PATH.read_bytes()).hexdigest(),
         "effectiveProfile": hashlib.sha256(profile_copy.read_bytes()).hexdigest(),
@@ -577,10 +631,12 @@ def run_campaign(args: argparse.Namespace) -> Path:
         "dashboard": hashlib.sha256((ROOT / "monitoring/grafana/dashboards/compose-sql-round-trip-diagnostic.json").read_bytes()).hexdigest(),
         "k6Image": hashlib.sha256(K6_IMAGE.encode()).hexdigest(),
         "pushgatewayImage": hashlib.sha256(PUSHGATEWAY_IMAGE.encode()).hexdigest(),
+        "sourceCommit": source_seal_record["commit"],
+        "sourceFiles": source_seal_record["files"],
     }
-    campaign_metadata = {"schemaVersion": "scrum41-sql-round-trip-campaign/v1", "campaignId": campaign_id, "jiraKey": "SCRUM-41", "startedAtUtc": utc_now(), "profile": "load-tests/sql-diagnostic-profile.json", "effectiveProfile": "effective-profile.json", "replicates": args.replicates, "smoke": args.smoke, "composeFiles": [str(path.relative_to(ROOT)) for path in COMPOSE_PATHS], "sourceDigests": source_digests, "k6Image": K6_IMAGE, "pushgatewayImage": PUSHGATEWAY_IMAGE, "status": "running"}
+    campaign_metadata = {"schemaVersion": "scrum41-sql-round-trip-campaign/v1", "campaignId": campaign_id, "jiraKey": "SCRUM-41", "startedAtUtc": utc_now(), "profile": "load-tests/sql-diagnostic-profile.json", "effectiveProfile": "effective-profile.json", "replicates": args.replicates, "smoke": args.smoke, "composeFiles": [str(path.relative_to(ROOT)) for path in COMPOSE_PATHS], "sourceSeal": source_seal_record, "sourceDigests": source_digests, "k6Image": K6_IMAGE, "pushgatewayImage": PUSHGATEWAY_IMAGE, "status": "running"}
     write_json(evidence_root / "campaign-metadata.json", campaign_metadata)
-    write_json(evidence_root / "campaign-manifest.json", {"schemaVersion": "scrum41-sql-round-trip-campaign-manifest/v1", "campaignId": campaign_id, "jiraKey": "SCRUM-41", "profile": effective, "sourceDigests": source_digests, "stageOrder": {str(rep): stage_order(effective, rep) for rep in range(1, args.replicates + 1)}})
+    write_json(evidence_root / "campaign-manifest.json", {"schemaVersion": "scrum41-sql-round-trip-campaign-manifest/v1", "campaignId": campaign_id, "jiraKey": "SCRUM-41", "profile": effective, "sourceSeal": source_seal_record, "sourceDigests": source_digests, "stageOrder": {str(rep): stage_order(effective, rep) for rep in range(1, args.replicates + 1)}})
     for replicate in range(1, args.replicates + 1):
         project = f"travel-planner-sql-diagnostic-scrum-41-{slug(campaign_id)[-18:]}-r{replicate}"
         replicate_dir = evidence_root / f"replicate-{replicate}"

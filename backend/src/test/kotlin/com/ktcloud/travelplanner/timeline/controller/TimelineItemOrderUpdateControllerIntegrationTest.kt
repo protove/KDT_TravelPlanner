@@ -113,11 +113,58 @@ class TimelineItemOrderUpdateControllerIntegrationTest(
 			}
 	}
 
+	@Test
+	fun `accepted read write member can reorder items`() {
+		val owner = saveUser("order-read-write-owner")
+		val readWrite = saveUser("order-read-write-member")
+		val travel = saveTravel(owner)
+		val firstItem = saveItem(travel, 1, 1)
+		val secondItem = saveItem(travel, 1, 2)
+		acceptMember(travel, readWrite, TravelRole.READ_WRITE)
+
+		patchOrder(
+			travel,
+			readWrite,
+			requestBody(1, secondItem.id to 1, firstItem.id to 2),
+		).andExpect { status { isOk() } }
+
+		entityManager.clear()
+		val reorderedItems = timelineItemRepository.findAllByTravelIdAndDayNumberOrderByVisitOrderAsc(travel.id, 1)
+		assertEquals(listOf(secondItem.id, firstItem.id), reorderedItems.map(TimelineItem::id))
+	}
+
+	@Test
+	fun `missing travel returns not found`() {
+		val owner = saveUser("order-missing-travel-owner")
+		patchOrderById(
+			UUID.randomUUID(),
+			owner,
+			requestBody(1, UUID.randomUUID() to 1),
+		).andExpect {
+			status { isNotFound() }
+			jsonPath("$.code", equalTo("RESOURCE_NOT_FOUND"))
+		}
+	}
+
+	@Test
+	fun `anonymous reorder returns unauthorized`() {
+		mockMvc.patch("/api/v1/travels/${UUID.randomUUID()}/timeline-items/order") {
+			contentType = MediaType.APPLICATION_JSON
+			content = requestBody(1, UUID.randomUUID() to 1)
+		}.andExpect { status { isUnauthorized() } }
+	}
+
 	private fun patchOrder(
 		travel: Travel,
 		requester: User,
 		body: String,
-	) = mockMvc.patch("/api/v1/travels/${travel.id}/timeline-items/order") {
+	) = patchOrderById(travel.id, requester, body)
+
+	private fun patchOrderById(
+		travelId: UUID,
+		requester: User,
+		body: String,
+	) = mockMvc.patch("/api/v1/travels/$travelId/timeline-items/order") {
 		header(HttpHeaders.AUTHORIZATION, bearer(requester))
 		contentType = MediaType.APPLICATION_JSON
 		content = body

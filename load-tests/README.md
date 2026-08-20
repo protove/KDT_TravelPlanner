@@ -203,6 +203,63 @@ python3 scripts/loadtest/verify-compose-sql-diagnostic-evidence.py \
 뜻하지 않으며 JDBC/JPA/애플리케이션 처리의 합계로 제한한다. 결과는 Compose synthetic
 fixture에 한정되고 production SQL 최적화나 AWS SLO 결론을 수행하지 않는다.
 
+## SCRUM-41 timeline order bulk-update 재현 검증
+
+SQL 진단에서 확인한 병목 가설을 검증하기 위해 timeline reorder 경로를
+`SELECT ... FOR UPDATE` snapshot → `SET CONSTRAINTS ... DEFERRED` → 한 번의
+`UPDATE ... FROM unnest(...)` → row-count 확인 → `SET CONSTRAINTS ... IMMEDIATE` 순서로
+실행한다. 동일 transaction 안에서 snapshot과 bulk update를 수행하며, noop은 DB write를
+생략하고 권한·순열 검증과 rollback·동시성 경로는 기존 계약으로 유지한다. V13 migration은
+기존 unique constraint의 동작 시점을 보존하면서 transaction 내부 swap을 허용한다.
+
+Runner는 source seal을 만들기 때문에 versioned source 변경을 먼저 commit한 깨끗한 working
+tree에서 실행해야 한다. 이전 SQL 실험의 baseline provenance와 preflight 기록을 함께 넘겨
+비교 대상과 실행 환경을 고정한다.
+
+```bash
+python3 scripts/loadtest/run-compose-sql-round-trip-diagnostic.py \
+  --campaign-id scrum41-opt-smoke-<timestamp> --smoke \
+  --env-file .env.dev.example \
+  --backend-port 18180 --prometheus-port 9910 --grafana-port 3311 \
+  --preflight-json .codex/plans/timeline-order-bulk-update-verification/runs/<run-id>/preflight.json \
+  --baseline-provenance .codex/plans/timeline-order-bulk-update-verification/runs/<run-id>/baseline-provenance.json
+
+python3 scripts/loadtest/run-compose-sql-round-trip-diagnostic.py \
+  --campaign-id scrum41-opt-full-<timestamp> \
+  --env-file .env.dev.example \
+  --backend-port 18280 --prometheus-port 9920 --grafana-port 3321 \
+  --preflight-json .codex/plans/timeline-order-bulk-update-verification/runs/<run-id>/preflight.json \
+  --baseline-provenance .codex/plans/timeline-order-bulk-update-verification/runs/<run-id>/baseline-provenance.json
+```
+
+실험 후에는 기존 SQL 요약과 별도로 고정된 baseline hash·source seal·threshold를 검증하는
+비교기를 실행한다. smoke는 파이프라인과 캡처 경로만 확인하고, 최종 판정은 itemCount
+3/10/25/50/100/200 전체를 3회 반복한 full campaign에서만 수행한다.
+
+```bash
+python3 scripts/loadtest/summarize-compose-timeline-order-optimization.py \
+  --evidence-root evidence/load-tests/<campaign-id>-sql-round-trip-diagnostic \
+  --baseline-root evidence/load-tests/<baseline-campaign-id>-sql-round-trip-diagnostic \
+  --baseline-provenance .codex/plans/timeline-order-bulk-update-verification/runs/<run-id>/baseline-provenance.json
+
+python3 scripts/loadtest/verify-compose-sql-diagnostic-evidence.py \
+  --evidence-root evidence/load-tests/<campaign-id>-sql-round-trip-diagnostic \
+  --require-captures
+```
+
+사전 고정 기준은 noop UPDATE 0, reverse UPDATE 1회, reverse rows/request가
+`itemCount`와 일치, 총 SQL 수가 baseline 대비 1.25배 이하, 오류·deadlock 0이다. 최적화
+효과는 baseline 300 calls 대비 모든 유효 replicate에서 N200 update 99% 이상 감소,
+API p95 중앙값 58.1742ms 이하, DB 실행 p95 중앙값 6.66270125ms 이하이며, 각 기준은
+계획에 정의된 3회 중 2회 이상 규칙을 따른다. 유효한 실패가 발생한 뒤 threshold를
+바꾸거나 재시도해 판정을 맞추지 않는다.
+
+이 실험은 기존 Compose/Dockerfile을 변경하지 않는 진단 overlay만 사용한다. Grafana 전체
+dashboard와 핵심 SQL/HTTP 패널 PNG, PromQL 결과, k6 raw 및 비교 report를 같은 evidence
+root에 보존하고, 마지막에 `closure-audit.json`을 추가한 뒤 evidence safety verifier를
+`--require-analysis`로 실행한다. 결과는 합성 Compose fixture의 개선 재현 여부만 말하며
+운영 AWS SLO나 데이터베이스 전체의 일반적 성능을 보장하지 않는다.
+
 ## 인증과 합성 데이터
 
 `seed-compose-load-data.py`는 백엔드의 현재 구현 계약을 소비한다.

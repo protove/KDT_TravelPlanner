@@ -3,9 +3,10 @@ package com.ktcloud.travelplanner.timeline.service
 import com.ktcloud.travelplanner.global.exception.DomainException
 import com.ktcloud.travelplanner.global.exception.ErrorCode
 import com.ktcloud.travelplanner.membership.repository.TravelMemberRepository
+import com.ktcloud.travelplanner.timeline.dto.TimelineItemOrderUpdate
 import com.ktcloud.travelplanner.timeline.dto.TimelineItemOrderUpdateRequest
-import com.ktcloud.travelplanner.timeline.model.TimelineItem
-import com.ktcloud.travelplanner.timeline.repository.TimelineItemRepository
+import com.ktcloud.travelplanner.timeline.repository.TimelineItemOrderRepository
+import com.ktcloud.travelplanner.timeline.repository.TimelineItemOrderSnapshot
 import com.ktcloud.travelplanner.travel.model.Travel
 import com.ktcloud.travelplanner.travel.repository.TravelRepository
 import org.springframework.stereotype.Service
@@ -16,7 +17,7 @@ import java.util.UUID
 class TimelineItemOrderUpdateService(
 	private val travelRepository: TravelRepository,
 	private val travelMemberRepository: TravelMemberRepository,
-	private val timelineItemRepository: TimelineItemRepository,
+	private val timelineItemOrderRepository: TimelineItemOrderRepository,
 ) {
 	@Transactional
 	fun updateTimelineItemOrder(
@@ -28,12 +29,19 @@ class TimelineItemOrderUpdateService(
 		if (travel.isDeleted) throw TimelineOrderTravelNotFoundException()
 		validateWritePermission(travel, requesterId)
 		val dayNumber = request.dayNumber.toShortChecked()
-		val timelineItems = timelineItemRepository.findAllByTravelIdAndDayNumberOrderByVisitOrderAsc(
+		val timelineItemOrderSnapshots = timelineItemOrderRepository.findLockedByTravelIdAndDayNumber(
 			travelId,
 			dayNumber,
 		)
-		validatePermutation(timelineItems, request)
-		reorder(timelineItems, request)
+		validatePermutation(timelineItemOrderSnapshots, request)
+		val requestedItems = request.items.sortedBy(TimelineItemOrderUpdate::visitOrder)
+		if (timelineItemOrderSnapshots.isNoop(requestedItems)) return
+		timelineItemOrderRepository.updateVisitOrders(
+			travelId = travelId,
+			dayNumber = dayNumber,
+			itemIds = requestedItems.map(TimelineItemOrderUpdate::itemId),
+			visitOrders = requestedItems.map { it.visitOrder.toShort() },
+		)
 	}
 
 	private fun validateWritePermission(
@@ -47,11 +55,11 @@ class TimelineItemOrderUpdateService(
 	}
 
 	private fun validatePermutation(
-		timelineItems: List<TimelineItem>,
+		timelineItemOrderSnapshots: List<TimelineItemOrderSnapshot>,
 		request: TimelineItemOrderUpdateRequest,
 	) {
-		val itemCount = timelineItems.size
-		val existingItemIds = timelineItems.map(TimelineItem::id).toSet()
+		val itemCount = timelineItemOrderSnapshots.size
+		val existingItemIds = timelineItemOrderSnapshots.map(TimelineItemOrderSnapshot::itemId).toSet()
 		val requestedItemIds = request.items.map { it.itemId }
 		val requestedVisitOrders = request.items.map { it.visitOrder }
 		val expectedVisitOrders = (1..itemCount).toSet()
@@ -62,53 +70,22 @@ class TimelineItemOrderUpdateService(
 			requestedItemIds.toSet() != existingItemIds ||
 			requestedVisitOrders.toSet().size != itemCount ||
 			requestedVisitOrders.toSet() != expectedVisitOrders ||
-			timelineItems.map { it.visitOrder.toInt() }.toSet() != expectedVisitOrders ||
-			itemCount >= Short.MAX_VALUE.toInt()
+			timelineItemOrderSnapshots.map { it.visitOrder.toInt() }.toSet() != expectedVisitOrders
 		) {
 			throw InvalidTimelineItemOrderException()
 		}
 	}
 
-	private fun reorder(
-		timelineItems: List<TimelineItem>,
-		request: TimelineItemOrderUpdateRequest,
-	) {
-		val timelineItemsById = timelineItems.associateBy(TimelineItem::id)
-		val timelineItemsByOrder = timelineItems.associateBy { it.visitOrder.toInt() }.toMutableMap()
-		val requestedItemIdsByOrder = request.items.associate { it.visitOrder to it.itemId }
-		val temporaryVisitOrder = (timelineItems.size + 1).toShort()
-
-		for (desiredVisitOrder in 1..timelineItems.size) {
-			val targetItem = timelineItemsById.getValue(requestedItemIdsByOrder.getValue(desiredVisitOrder))
-			val currentVisitOrder = targetItem.visitOrder.toInt()
-			if (currentVisitOrder == desiredVisitOrder) continue
-
-			val displacedItem = timelineItemsByOrder.getValue(desiredVisitOrder)
-			persistVisitOrder(displacedItem, temporaryVisitOrder)
-			timelineItemsByOrder.remove(desiredVisitOrder)
-			timelineItemsByOrder[temporaryVisitOrder.toInt()] = displacedItem
-
-			persistVisitOrder(targetItem, desiredVisitOrder.toShort())
-			timelineItemsByOrder.remove(currentVisitOrder)
-			timelineItemsByOrder[desiredVisitOrder] = targetItem
-
-			persistVisitOrder(displacedItem, currentVisitOrder.toShort())
-			timelineItemsByOrder.remove(temporaryVisitOrder.toInt())
-			timelineItemsByOrder[currentVisitOrder] = displacedItem
-		}
-	}
-
-	private fun persistVisitOrder(
-		timelineItem: TimelineItem,
-		visitOrder: Short,
-	) {
-		timelineItem.changeVisitOrder(visitOrder)
-		timelineItemRepository.saveAndFlush(timelineItem)
-	}
-
 	private fun Int.toShortChecked(): Short {
 		if (this !in 1..Short.MAX_VALUE.toInt()) throw InvalidTimelineItemOrderException()
 		return toShort()
+	}
+
+	private fun List<TimelineItemOrderSnapshot>.isNoop(
+		requestedItems: List<TimelineItemOrderUpdate>,
+	): Boolean {
+		val requestedVisitOrdersByItemId = requestedItems.associate { it.itemId to it.visitOrder }
+		return all { snapshot -> requestedVisitOrdersByItemId.getValue(snapshot.itemId) == snapshot.visitOrder.toInt() }
 	}
 }
 

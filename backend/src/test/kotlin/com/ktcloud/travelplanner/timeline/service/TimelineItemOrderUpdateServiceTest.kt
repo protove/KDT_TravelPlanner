@@ -4,9 +4,8 @@ import com.ktcloud.travelplanner.membership.repository.TravelMemberRepository
 import com.ktcloud.travelplanner.testsupport.TestFixtures
 import com.ktcloud.travelplanner.timeline.dto.TimelineItemOrderUpdate
 import com.ktcloud.travelplanner.timeline.dto.TimelineItemOrderUpdateRequest
-import com.ktcloud.travelplanner.timeline.model.TimelineCategory
-import com.ktcloud.travelplanner.timeline.model.TimelineItem
-import com.ktcloud.travelplanner.timeline.repository.TimelineItemRepository
+import com.ktcloud.travelplanner.timeline.repository.TimelineItemOrderRepository
+import com.ktcloud.travelplanner.timeline.repository.TimelineItemOrderSnapshot
 import com.ktcloud.travelplanner.travel.model.Travel
 import com.ktcloud.travelplanner.travel.repository.TravelRepository
 import com.ktcloud.travelplanner.user.model.User
@@ -15,10 +14,10 @@ import org.junit.jupiter.params.ParameterizedTest
 import org.junit.jupiter.params.provider.ValueSource
 import org.junit.jupiter.api.assertThrows
 import org.mockito.Mockito.mock
-import org.mockito.Mockito.never
 import org.mockito.Mockito.times
 import org.mockito.Mockito.verify
 import org.mockito.Mockito.verifyNoInteractions
+import org.mockito.Mockito.verifyNoMoreInteractions
 import org.mockito.Mockito.`when`
 import java.time.LocalDate
 import java.util.Optional
@@ -28,20 +27,17 @@ import kotlin.test.assertEquals
 class TimelineItemOrderUpdateServiceTest {
 	private val travelRepository = mock(TravelRepository::class.java)
 	private val travelMemberRepository = mock(TravelMemberRepository::class.java)
-	private val timelineItemRepository = mock(TimelineItemRepository::class.java)
+	private val timelineItemOrderRepository = mock(TimelineItemOrderRepository::class.java)
 	private val service = TimelineItemOrderUpdateService(
 		travelRepository,
 		travelMemberRepository,
-		timelineItemRepository,
+		timelineItemOrderRepository,
 	)
 
 	@Test
-	fun `owner reorders a complete item permutation through a temporary order`() {
+	fun `owner reverse maps the complete permutation to one bulk update`() {
 		val travel = travel(mockUser(OWNER_ID))
-		val firstItem = item(travel, FIRST_ITEM_ID, 1)
-		val secondItem = item(travel, SECOND_ITEM_ID, 2)
-		val thirdItem = item(travel, THIRD_ITEM_ID, 3)
-		stubItems(travel, listOf(firstItem, secondItem, thirdItem))
+		stubSnapshots(travel, snapshots(FIRST_ITEM_ID, SECOND_ITEM_ID, THIRD_ITEM_ID))
 
 		service.updateTimelineItemOrder(
 			TRAVEL_ID,
@@ -49,56 +45,75 @@ class TimelineItemOrderUpdateServiceTest {
 			request(FIRST_ITEM_ID to 3, SECOND_ITEM_ID to 1, THIRD_ITEM_ID to 2),
 		)
 
-		assertEquals(3, firstItem.visitOrder.toInt())
-		assertEquals(1, secondItem.visitOrder.toInt())
-		assertEquals(2, thirdItem.visitOrder.toInt())
-		verify(timelineItemRepository, times(6)).saveAndFlush(org.mockito.ArgumentMatchers.any())
+		verify(timelineItemOrderRepository).updateVisitOrders(
+			TRAVEL_ID,
+			1,
+			listOf(SECOND_ITEM_ID, THIRD_ITEM_ID, FIRST_ITEM_ID),
+			listOf(1, 2, 3).map(Int::toShort),
+		)
 		verifyNoInteractions(travelMemberRepository)
 	}
 
 	@ParameterizedTest
 	@ValueSource(ints = [3, 10, 25, 50, 100, 200])
-	fun `reverse permutation persistence calls grow by three per swapped pair`(itemCount: Int) {
+	fun `reverse permutation performs one repository update regardless of item count`(itemCount: Int) {
 		val travelRepository = mock(TravelRepository::class.java)
 		val travelMemberRepository = mock(TravelMemberRepository::class.java)
-		val timelineItemRepository = mock(TimelineItemRepository::class.java)
+		val timelineItemOrderRepository = mock(TimelineItemOrderRepository::class.java)
 		val service = TimelineItemOrderUpdateService(
 			travelRepository,
 			travelMemberRepository,
-			timelineItemRepository,
+			timelineItemOrderRepository,
 		)
 		val travel = travel(mockUser(OWNER_ID))
-		val items = (1..itemCount).map { visitOrder ->
-			item(
-				travel,
-				UUID.nameUUIDFromBytes("sql-diagnostic-item-$itemCount-$visitOrder".toByteArray()),
-				visitOrder.toShort(),
+		val snapshots = (1..itemCount).map { visitOrder ->
+			TimelineItemOrderSnapshot(
+				itemId = UUID.nameUUIDFromBytes("sql-diagnostic-item-$itemCount-$visitOrder".toByteArray()),
+				visitOrder = visitOrder.toShort(),
 			)
 		}
 		`when`(travelRepository.findById(TRAVEL_ID)).thenReturn(Optional.of(travel))
-		`when`(timelineItemRepository.findAllByTravelIdAndDayNumberOrderByVisitOrderAsc(TRAVEL_ID, 1))
-			.thenReturn(items)
+		`when`(timelineItemOrderRepository.findLockedByTravelIdAndDayNumber(TRAVEL_ID, 1))
+			.thenReturn(snapshots)
 
 		service.updateTimelineItemOrder(
 			TRAVEL_ID,
 			OWNER_ID,
 			TimelineItemOrderUpdateRequest(
 				dayNumber = 1,
-				items = items.asReversed().mapIndexed { index, timelineItem ->
-					TimelineItemOrderUpdate(timelineItem.id, index + 1)
+				items = snapshots.asReversed().mapIndexed { index, snapshot ->
+					TimelineItemOrderUpdate(snapshot.itemId, index + 1)
 				},
 			),
 		)
 
-		verify(timelineItemRepository, times(3 * (itemCount / 2)))
-			.saveAndFlush(org.mockito.ArgumentMatchers.any())
+		verify(timelineItemOrderRepository, times(1)).updateVisitOrders(
+			TRAVEL_ID,
+			1,
+			snapshots.asReversed().map(TimelineItemOrderSnapshot::itemId),
+			(1..itemCount).map(Int::toShort),
+		)
+	}
+
+	@Test
+	fun `canonical order returns without a repository write`() {
+		val travel = travel(mockUser(OWNER_ID))
+		stubSnapshots(travel, snapshots(FIRST_ITEM_ID, SECOND_ITEM_ID, THIRD_ITEM_ID))
+
+		service.updateTimelineItemOrder(
+			TRAVEL_ID,
+			OWNER_ID,
+			request(FIRST_ITEM_ID to 1, SECOND_ITEM_ID to 2, THIRD_ITEM_ID to 3),
+		)
+
+		verify(timelineItemOrderRepository).findLockedByTravelIdAndDayNumber(TRAVEL_ID, 1)
+		verifyNoMoreInteractions(timelineItemOrderRepository)
 	}
 
 	@Test
 	fun `duplicate missing and another day item requests are rejected before writes`() {
 		val travel = travel(mockUser(OWNER_ID))
-		val items = listOf(item(travel, FIRST_ITEM_ID, 1), item(travel, SECOND_ITEM_ID, 2))
-		stubItems(travel, items)
+		stubSnapshots(travel, snapshots(FIRST_ITEM_ID, SECOND_ITEM_ID))
 
 		listOf(
 			request(FIRST_ITEM_ID to 1, FIRST_ITEM_ID to 2),
@@ -111,35 +126,44 @@ class TimelineItemOrderUpdateServiceTest {
 			}
 		}
 
-		verify(timelineItemRepository, never()).saveAndFlush(org.mockito.ArgumentMatchers.any())
+		verify(timelineItemOrderRepository, times(4))
+			.findLockedByTravelIdAndDayNumber(TRAVEL_ID, 1)
+		verifyNoMoreInteractions(timelineItemOrderRepository)
 	}
 
 	@Test
-	fun `read only member is rejected while read write is accepted`() {
+	fun `read only member is rejected while read write member can use canonical order`() {
 		val travel = travel(mockUser(OWNER_ID))
-		val item = item(travel, FIRST_ITEM_ID, 1)
 		`when`(travelRepository.findById(TRAVEL_ID)).thenReturn(Optional.of(travel))
 		`when`(travelMemberRepository.existsAcceptedReadWriteMember(TRAVEL_ID, MEMBER_ID))
 			.thenReturn(false, true)
 
 		assertThrows<TimelineItemOrderUpdateAccessDeniedException> {
-			service.updateTimelineItemOrder(TRAVEL_ID, MEMBER_ID, request(FIRST_ITEM_ID to 1))
+			service.updateTimelineItemOrder(
+				TRAVEL_ID,
+				MEMBER_ID,
+				request(FIRST_ITEM_ID to 1),
+			)
 		}
 
-		`when`(timelineItemRepository.findAllByTravelIdAndDayNumberOrderByVisitOrderAsc(TRAVEL_ID, 1))
-			.thenReturn(listOf(item))
+		`when`(timelineItemOrderRepository.findLockedByTravelIdAndDayNumber(TRAVEL_ID, 1))
+			.thenReturn(snapshots(FIRST_ITEM_ID))
 		service.updateTimelineItemOrder(TRAVEL_ID, MEMBER_ID, request(FIRST_ITEM_ID to 1))
-		verify(timelineItemRepository, never()).saveAndFlush(item)
+		verify(timelineItemOrderRepository).findLockedByTravelIdAndDayNumber(TRAVEL_ID, 1)
+		verifyNoMoreInteractions(timelineItemOrderRepository)
 	}
 
-	private fun stubItems(
+	private fun stubSnapshots(
 		travel: Travel,
-		items: List<TimelineItem>,
+		snapshots: List<TimelineItemOrderSnapshot>,
 	) {
 		`when`(travelRepository.findById(TRAVEL_ID)).thenReturn(Optional.of(travel))
-		`when`(timelineItemRepository.findAllByTravelIdAndDayNumberOrderByVisitOrderAsc(TRAVEL_ID, 1))
-			.thenReturn(items)
+		`when`(timelineItemOrderRepository.findLockedByTravelIdAndDayNumber(TRAVEL_ID, 1))
+			.thenReturn(snapshots)
 	}
+
+	private fun snapshots(vararg itemIds: UUID): List<TimelineItemOrderSnapshot> =
+		itemIds.mapIndexed { index, itemId -> TimelineItemOrderSnapshot(itemId, (index + 1).toShort()) }
 
 	private fun request(vararg items: Pair<UUID, Int>): TimelineItemOrderUpdateRequest =
 		TimelineItemOrderUpdateRequest(
@@ -157,20 +181,6 @@ class TimelineItemOrderUpdateServiceTest {
 		title = "타임라인 순서 여행",
 		startDate = LocalDate.parse("2026-08-01"),
 		endDate = LocalDate.parse("2026-08-03"),
-	)
-
-	private fun item(
-		travel: Travel,
-		itemId: UUID,
-		visitOrder: Short,
-	): TimelineItem = TimelineItem(
-		id = itemId,
-		travel = travel,
-		dayNumber = 1,
-		visitDate = LocalDate.parse("2026-08-01"),
-		category = TimelineCategory.OTHER,
-		name = "순서 테스트 일정",
-		visitOrder = visitOrder,
 	)
 
 	companion object {

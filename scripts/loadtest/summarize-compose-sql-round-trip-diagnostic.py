@@ -101,6 +101,19 @@ def metric_values(metrics: dict[str, Any], name: str) -> dict[str, Any]:
     return values if isinstance(values, dict) else metric
 
 
+def metric_rate(metrics: dict[str, Any], name: str) -> float:
+    values = metric_values(metrics, name)
+    for key in ("rate", "value"):
+        value = number(values.get(key), None)
+        if value is not None:
+            return value
+    fails = number(values.get("fails"), None)
+    passes = number(values.get("passes"), None)
+    if fails is not None and passes is not None and fails + passes > 0:
+        return fails / (fails + passes)
+    return 0.0
+
+
 def read_stats(stage_dir: Path) -> dict[str, Any]:
     stats = load_json(stage_dir / "pg-stat-statements.json")
     statements = stats.get("statements")
@@ -137,6 +150,9 @@ def stage_summary(stage_dir: Path) -> dict[str, Any]:
         if fails is not None and passes is not None and fails + passes > 0:
             contract_rate_value = fails / (fails + passes)
     contract_rate = 1.0 if contract_rate_value is None else contract_rate_value
+    http_failed_rate = metric_rate(metrics, "http_req_failed")
+    unexpected_error_rate = metric_rate(metrics, "unexpected_errors")
+    generic_contract_failure_rate = metric_rate(metrics, "contract_fail")
     dropped = number(metric_values(metrics, "dropped_iterations").get("count"), 0.0) or 0.0
     stats = read_stats(stage_dir)
     if int(stats.get("unknownCount", 0)) != 0:
@@ -153,8 +169,10 @@ def stage_summary(stage_dir: Path) -> dict[str, Any]:
     total_calls = sum(value["calls"] for value in family_values.values())
     total_db_ms = sum(value["totalExecMs"] for value in family_values.values())
     update_calls = family_values.get("timeline_update", {}).get("calls", 0.0)
+    update_rows = family_values.get("timeline_update", {}).get("rows", 0.0)
     calls_per_request = total_calls / successful if successful else None
     update_calls_per_request = update_calls / successful if successful else None
+    update_rows_per_request = update_rows / successful if successful else None
     db_ms_per_request = total_db_ms / successful if successful else None
     mean_update_ms = family_values.get("timeline_update", {}).get("meanExecMs", 0.0)
     metric_delta = load_json(stage_dir / "backend-metric-delta.json")
@@ -164,11 +182,14 @@ def stage_summary(stage_dir: Path) -> dict[str, Any]:
         "itemCount": item_count,
         "stage": stage_dir.name,
         "path": str(stage_dir),
-        "valid": bool(metadata.get("canonicalAfterMeasured", False)) and requests == successful and successful == float(metadata.get("measuredIterations", 30)) and contract_rate == 0 and dropped == 0,
+        "valid": bool(metadata.get("canonicalAfterMeasured", False)) and requests == successful and successful == float(metadata.get("measuredIterations", 30)) and contract_rate == 0 and generic_contract_failure_rate == 0 and http_failed_rate == 0 and unexpected_error_rate == 0 and dropped == 0,
         "validity": {
             "successfulRequests": successful,
             "measuredIterations": int(metadata.get("measuredIterations", 30)),
             "contractFailureRate": contract_rate,
+            "genericContractFailureRate": generic_contract_failure_rate,
+            "httpFailedRate": http_failed_rate,
+            "unexpectedErrorRate": unexpected_error_rate,
             "droppedIterations": dropped,
             "canonicalAfterMeasured": bool(metadata.get("canonicalAfterMeasured", False)),
             "unknownSqlFamilies": int(stats.get("unknownCount", 0)),
@@ -178,6 +199,7 @@ def stage_summary(stage_dir: Path) -> dict[str, Any]:
         "requestBodyBytesP95": number(metric_values(metrics, "sql_diagnostic_request_body_bytes").get("p(95)"), None),
         "totalSqlCallsPerRequest": calls_per_request,
         "timelineUpdateCallsPerRequest": update_calls_per_request,
+        "timelineUpdateRowsPerRequest": update_rows_per_request,
         "totalDbExecMsPerRequest": db_ms_per_request,
         "timelineUpdateMeanExecMsPerCall": mean_update_ms,
         "residualMsPerRequest": max(0.0, (number(duration.get("avg"), 0.0) or 0.0) - (db_ms_per_request or 0.0)),
