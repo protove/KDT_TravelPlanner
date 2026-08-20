@@ -26,5 +26,6 @@ misconfigurations:
     paths:
       - "modules/load_test_security/main.tf"
       - "modules/runtime_security/main.tf"
-    statement: "Backend and Load Runner egress is restricted to TCP 443 but must reach external APIs, registries, and AWS public service endpoints through the single NAT; VPC endpoints or an egress proxy are a later cost/operations decision."
+      - "environments/dev-eks/main.tf"
+    statement: "Backend, Load Runner and the dev-eks SSM verification bastion egress is restricted to TCP 443 but must reach external APIs, registries, and AWS public service endpoints (including SSM) through the single NAT; VPC endpoints or an egress proxy are a later cost/operations decision."
     expired_at: 2027-01-31

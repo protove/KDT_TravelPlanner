@@ -18,6 +18,7 @@ infra/
 │   ├── dev/                           # 개발 환경 Root
 │   ├── dev-runtime/                   # EC2 Runtime Root (현재 리소스 없음)
 │   ├── dev-load-test/                 # EC2 Runtime 대상 Load Runner Root (현재 미적용)
+│   ├── dev-eks/                       # EKS 클러스터 Root, dev에만 의존 (SCRUM-10, 현재 미적용)
 │   └── prod/                          # 운영 환경 Root
 └── modules/
     ├── terraform_state_backend/       # State S3와 최소 State 접근 정책
@@ -30,7 +31,8 @@ infra/
     ├── runtime_security/              # ALB/backend/data Security Group
     ├── load_test_security/            # Load Runner와 data 간 Security Group 경계
     ├── backend_data/                  # RDS PostgreSQL과 Redis
-    └── backend_service/               # ALB, Launch Template와 EC2 ASG
+    ├── backend_service/               # ALB, Launch Template와 EC2 ASG
+    └── eks_cluster/                   # EKS 컨트롤 플레인, 관리형 노드그룹, 클러스터 OIDC provider
 ```
 
 모듈은 AWS Provider를 설정하지 않는다. 각 Root의 `providers.tf`가 Region, 허용 AWS Account ID와 공통 태그를 설정한다.
@@ -219,6 +221,9 @@ CI는 원격 State를 사용하는 AWS plan/apply를 실행하지 않는다. pro
 실제 계정·State를 읽는 plan을 같은 단계로 해석하지 않는다.
 
 Trivy의 WAF(`AVD-AWS-0011`)와 고객 관리 KMS key(`AVD-AWS-0132`) 권고는 현재 확정 범위와 충돌하므로 `infra/.trivyignore.yaml`에 대상 파일·근거·만료일을 기록한다. 만료 전 WAF 비용 통제와 KMS 운영 책임을 다시 검토하며, 그 밖의 HIGH/CRITICAL 결과는 CI를 실패시킨다.
+
+CI에서만 재현되는 문제(provider lock 플랫폼 불일치, Trivy 등급 등)는
+[`TROUBLESHOOTING.md`](TROUBLESHOOTING.md)에 원인과 해결 과정을 기록한다.
 
 자세한 최초 구성과 인증 구조는 다음 로컬 Reference를 참고한다.
 
