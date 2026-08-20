@@ -2,12 +2,6 @@ name: Frontend Verification
 
 on:
   workflow_call:
-  pull_request:
-    branches:
-      - develop-front
-    paths:
-      - "frontend/**"
-      - ".github/workflows/frontend-test.yml"
 
 permissions:
   contents: read

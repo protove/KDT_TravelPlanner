@@ -1,17 +1,7 @@
 name: Backend Verification
 
 on:
-  pull_request:
-    branches:
-      - develop-backend
-      - develop
-      - main
-    paths:
-      - "backend/**"
-      - "compose.yml"
-      - ".github/workflows/backend-test.yml"
   workflow_call:
-  
 permissions:
   contents: read
 

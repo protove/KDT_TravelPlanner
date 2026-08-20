@@ -1,14 +1,7 @@
 name: Terraform Verification
 
 on:
-  pull_request:
-    branches:
-      - develop-backend
-    paths:
-      - "infra/**"
-      - ".github/workflows/terraform-verification.yml"
-      - ".env.dev.example"
-      - ".env.prod.example"
+  workflow_call:
 
 permissions:
   contents: read
@@ -46,6 +39,7 @@ jobs:
         directory:
           - infra/bootstrap
           - infra/environments/dev
+          - infra/environments/dev-load-test
           - infra/environments/dev-runtime
           - infra/environments/prod
           - infra/modules/terraform_state_backend
@@ -59,6 +53,7 @@ jobs:
           - infra/modules/backend_data
           - infra/modules/backend_service
           - infra/modules/monitoring_ec2
+          - infra/modules/load_test_security
           - infra/modules/load_test_runner
     steps:
       - name: Check out repository
@@ -85,6 +80,7 @@ jobs:
       fail-fast: false
       matrix:
         directory:
+          - infra/environments/dev-load-test
           - infra/modules/terraform_state_backend
           - infra/modules/profile_image
           - infra/modules/static_frontend
@@ -96,6 +92,7 @@ jobs:
           - infra/modules/backend_data
           - infra/modules/backend_service
           - infra/modules/monitoring_ec2
+          - infra/modules/load_test_security
           - infra/modules/load_test_runner
     steps:
       - name: Check out repository
@@ -137,6 +134,7 @@ jobs:
           for directory in \
             infra/bootstrap \
             infra/environments/dev \
+            infra/environments/dev-load-test \
             infra/environments/dev-runtime \
             infra/environments/prod \
             infra/modules/terraform_state_backend \
@@ -150,6 +148,7 @@ jobs:
             infra/modules/backend_data \
             infra/modules/backend_service \
             infra/modules/monitoring_ec2 \
+            infra/modules/load_test_security \
             infra/modules/load_test_runner
           do
             tflint \
