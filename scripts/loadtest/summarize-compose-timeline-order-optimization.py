@@ -125,7 +125,13 @@ def read_summary_stages(root: Path) -> tuple[list[dict[str, Any]], list[str]]:
     errors: list[str] = []
     for stage_dir in stage_dirs(root):
         try:
-            stages.append(normalize_stage(SUMMARY.stage_summary(stage_dir)))
+            stage = normalize_stage(SUMMARY.stage_summary(stage_dir))
+            metadata_path = stage_dir / "metadata.json"
+            if metadata_path.is_file():
+                metadata = load_json(metadata_path)
+                if metadata.get("sequence") is not None:
+                    stage["sequence"] = int(metadata["sequence"])
+            stages.append(stage)
         except Exception as error:  # fail closed but preserve the reason in comparison.json
             errors.append(f"{stage_dir.relative_to(root)}: {error}")
     return stages, errors
@@ -133,6 +139,55 @@ def read_summary_stages(root: Path) -> tuple[list[dict[str, Any]], list[str]]:
 
 def dimensions(stages: list[dict[str, Any]]) -> set[tuple[int, str]]:
     return {(int(stage["itemCount"]), str(stage["mode"])) for stage in stages}
+
+
+def manifest_stage_order(manifest: dict[str, Any]) -> dict[int, list[tuple[str, int]]]:
+    raw = manifest.get("stageOrder")
+    if not isinstance(raw, dict):
+        return {}
+    result: dict[int, list[tuple[str, int]]] = {}
+    for key, entries in raw.items():
+        if not isinstance(entries, list):
+            continue
+        parsed: list[tuple[str, int]] = []
+        for entry in entries:
+            if isinstance(entry, list) and len(entry) == 2:
+                parsed.append((str(entry[0]), int(entry[1])))
+        result[int(key)] = parsed
+    return result
+
+
+def actual_stage_order(stages: list[dict[str, Any]]) -> dict[int, list[tuple[str, int]]]:
+    grouped: dict[int, list[tuple[int, int, tuple[str, int]]]] = {}
+    for index, stage in enumerate(stages):
+        replicate = int(stage["replicate"])
+        sequence = int(stage.get("sequence", index))
+        identity = (str(stage["mode"]), int(stage["itemCount"]))
+        grouped.setdefault(replicate, []).append((sequence, index, identity))
+    return {replicate: [identity for _, _, identity in sorted(entries)] for replicate, entries in grouped.items()}
+
+
+def stage_matrix_errors(stages: list[dict[str, Any]], optimized_manifest: dict[str, Any], baseline_manifest: dict[str, Any]) -> list[str]:
+    expected = manifest_stage_order(baseline_manifest)
+    optimized_order = manifest_stage_order(optimized_manifest)
+    errors: list[str] = []
+    if not expected:
+        errors.append("baseline manifest stageOrder is missing or invalid")
+        return errors
+    if optimized_order != expected:
+        errors.append("optimized manifest stageOrder differs from baseline fixed matrix")
+    actual = actual_stage_order(stages)
+    if set(actual) != set(expected):
+        errors.append(f"replicate set mismatch: expected {sorted(expected)}, actual {sorted(actual)}")
+    for replicate, expected_entries in expected.items():
+        actual_entries = actual.get(replicate, [])
+        if len(actual_entries) != len(expected_entries):
+            errors.append(f"replicate {replicate} stage count mismatch: expected {len(expected_entries)}, actual {len(actual_entries)}")
+        if len(actual_entries) != len(set(actual_entries)):
+            errors.append(f"replicate {replicate} contains duplicate stage identities")
+        if actual_entries != expected_entries:
+            errors.append(f"replicate {replicate} stage order/matrix mismatch")
+    return errors
 
 
 def by_rep_mode_count(stages: list[dict[str, Any]], replicate: int, mode: str, count: int) -> dict[str, Any] | None:
@@ -171,16 +226,18 @@ def validate_baseline(root: Path, provenance_path: Path) -> tuple[dict[str, Any]
     return load_json(root / "summary.json"), manifest, provenance
 
 
-def validate_optimized_provenance(root: Path, baseline_manifest: dict[str, Any]) -> dict[str, Any]:
+def validate_optimized_provenance(root: Path, baseline_manifest: dict[str, Any], *, smoke: bool) -> dict[str, Any]:
     manifest = load_json(root / "campaign-manifest.json")
-    validate_optimized_provenance_from_manifests(manifest, baseline_manifest)
+    validate_optimized_provenance_from_manifests(manifest, baseline_manifest, smoke=smoke)
     return manifest
 
 
-def validate_optimized_provenance_from_manifests(manifest: dict[str, Any], baseline_manifest: dict[str, Any]) -> None:
+def validate_optimized_provenance_from_manifests(manifest: dict[str, Any], baseline_manifest: dict[str, Any], *, smoke: bool = False) -> None:
     optimized_digests = manifest.get("sourceDigests") or {}
     baseline_digests = baseline_manifest.get("sourceDigests") or {}
     compared_keys = ["profile", "overlay", "prometheus", "dashboard", "k6Image", "pushgatewayImage"]
+    if not smoke:
+        compared_keys.append("effectiveProfile")
     mismatches = {
         key: {"baseline": baseline_digests.get(key), "optimized": optimized_digests.get(key)}
         for key in compared_keys
@@ -188,6 +245,8 @@ def validate_optimized_provenance_from_manifests(manifest: dict[str, Any], basel
     }
     if mismatches:
         raise OptimizationError(f"profile/overlay/image digest mismatch: {sorted(mismatches)}")
+    if not smoke and profile_signature(manifest.get("profile") or {}) != profile_signature(baseline_manifest.get("profile") or {}):
+        raise OptimizationError("optimized effective profile signature differs from baseline fixed profile")
 
 
 def stage_valid(stage: dict[str, Any]) -> bool:
@@ -198,11 +257,14 @@ def stage_valid(stage: dict[str, Any]) -> bool:
 def evaluate(stages: list[dict[str, Any]], baseline_stages: list[dict[str, Any]], *, smoke: bool, errors: list[str], baseline_errors: list[str], optimized_manifest: dict[str, Any], baseline_manifest: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
     expected_dimensions = {(count, mode) for count in COUNTS for mode in MODES}
     actual_dimensions = dimensions(stages)
-    complete = not errors and actual_dimensions == expected_dimensions and len(stages) == 36
+    matrix_errors = [] if smoke else stage_matrix_errors(stages, optimized_manifest, baseline_manifest)
+    analysis_errors = [*errors, *matrix_errors]
+    complete = not analysis_errors and actual_dimensions == expected_dimensions and len(stages) == 36
     all_valid = complete and all(stage_valid(stage) for stage in stages)
     replicates = sorted({int(stage["replicate"]) for stage in stages})
     hard_checks: dict[str, Any] = {
         "stageCount": {"actual": len(stages), "expected": 36, "pass": len(stages) == 36},
+        "stageMatrixExact": {"pass": not matrix_errors, "errors": matrix_errors},
         "validEvidence": {"actual": all_valid, "pass": all_valid},
         "noopUpdateCallsZero": {"pass": all((stage.get("mode") != "noop" or abs(float(stage.get("timelineUpdateCallsPerRequest") or 0)) <= 1e-9) for stage in stages)},
         "reverseUpdateCallsOne": {"pass": all(stage.get("mode") != "reverse" or close_to(stage.get("timelineUpdateCallsPerRequest"), 1.0, THRESHOLDS["reverseUpdateCallsTolerance"]) for stage in stages)},
@@ -242,13 +304,13 @@ def evaluate(stages: list[dict[str, Any]], baseline_stages: list[dict[str, Any]]
     baseline_metrics_pass = baseline_api_median is not None and baseline_db_median is not None and abs(baseline_api_median - BASELINE_METRICS["n200ReverseApiP95MedianMs"]) < 1e-3 and abs(baseline_db_median - BASELINE_METRICS["n200ReverseDbExecMedianMs"]) < 1e-3
     api_pass = api_median is not None and api_median <= BASELINE_METRICS["n200ReverseApiP95MedianMs"] * THRESHOLDS["apiP95MedianFactorMax"]
     db_pass = db_median is not None and db_median <= BASELINE_METRICS["n200ReverseDbExecMedianMs"] * THRESHOLDS["dbExecMedianFactorMax"]
-    sql_pass = all(hard_checks[name]["pass"] for name in ("stageCount", "validEvidence", "noopUpdateCallsZero", "reverseUpdateCallsOne", "reverseUpdatedRowsPerRequestItemCount", "deadlocksAndErrorsZero")) and sql_ratio_pass and update_reduction_pass
+    sql_pass = all(hard_checks[name]["pass"] for name in ("stageCount", "stageMatrixExact", "validEvidence", "noopUpdateCallsZero", "reverseUpdateCallsOne", "reverseUpdatedRowsPerRequestItemCount", "deadlocksAndErrorsZero")) and sql_ratio_pass and update_reduction_pass
     latency_available = api_median is not None and db_median is not None and bool(per_replicate)
     latency_pass = baseline_metrics_pass and api_pass and db_pass and p95_ratio_pass
     if smoke:
         verdict = "optimization-smoke-functional-check"
         reason = "smoke profile is intentionally smaller than the fixed 36-stage campaign; full thresholds are deferred to N90."
-    elif not all_valid or baseline_errors or len(baseline_stages) < 36:
+    elif not all_valid or analysis_errors or baseline_errors or len(baseline_stages) < 36:
         verdict = "inconclusive-invalid-evidence"
         reason = "evidence validity, stage completeness, or baseline provenance was not sufficient for a fixed comparison."
     elif sql_pass and latency_pass:
@@ -274,7 +336,7 @@ def evaluate(stages: list[dict[str, Any]], baseline_stages: list[dict[str, Any]]
         "replicates": per_replicate,
         "aggregateChecks": {"sqlCallsRatioAgreementPass": sql_ratio_pass, "updateReductionAllReplicatesPass": update_reduction_pass, "apiP95MedianPass": api_pass, "dbExecMedianPass": db_pass, "p95RatioAgreementPass": p95_ratio_pass, "latencyAvailable": latency_available, "sqlPass": sql_pass, "latencyPass": latency_pass},
         "sourceDigests": {"baseline": baseline_manifest.get("sourceDigests"), "optimized": optimized_manifest.get("sourceDigests")},
-        "errors": errors,
+        "errors": analysis_errors,
     }
     verdict_payload = {"schemaVersion": "scrum41-timeline-order-optimization-verdict/v1", "jiraKey": "SCRUM-41", "verdict": verdict, "reason": reason, "thresholdSource": "immutable plan-v1.yaml", "comparison": "comparison.json"}
     return comparison, verdict_payload
@@ -318,7 +380,7 @@ def write_report(root: Path, comparison: dict[str, Any], verdict: dict[str, Any]
 
 def summarize(root: Path, baseline_root: Path, baseline_provenance: Path, *, smoke: bool = False) -> tuple[dict[str, Any], dict[str, Any]]:
     baseline_summary, baseline_manifest, _ = validate_baseline(baseline_root, baseline_provenance)
-    optimized_manifest = validate_optimized_provenance(root, baseline_manifest)
+    optimized_manifest = validate_optimized_provenance(root, baseline_manifest, smoke=smoke)
     optimized_stages, errors = read_summary_stages(root)
     baseline_stages = [normalize_stage(dict(stage)) for stage in baseline_summary.get("stages", []) if isinstance(stage, dict)]
     comparison, verdict = evaluate(optimized_stages, baseline_stages, smoke=smoke, errors=errors, baseline_errors=[], optimized_manifest=optimized_manifest, baseline_manifest=baseline_manifest)

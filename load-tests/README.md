@@ -250,7 +250,7 @@ python3 scripts/loadtest/verify-compose-sql-diagnostic-evidence.py \
 사전 고정 기준은 noop UPDATE 0, reverse UPDATE 1회, reverse rows/request가
 `itemCount`와 일치, 총 SQL 수가 baseline 대비 1.25배 이하, 오류·deadlock 0이다. 최적화
 효과는 baseline 300 calls 대비 모든 유효 replicate에서 N200 update 99% 이상 감소,
-API p95 중앙값 58.1742ms 이하, DB 실행 p95 중앙값 6.66270125ms 이하이며, 각 기준은
+API p95 중앙값 58.1742ms 이하, DB execution/request replicate median 6.66270125ms 이하이며, 각 기준은
 계획에 정의된 3회 중 2회 이상 규칙을 따른다. 유효한 실패가 발생한 뒤 threshold를
 바꾸거나 재시도해 판정을 맞추지 않는다.
 
