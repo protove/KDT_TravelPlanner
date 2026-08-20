@@ -1,6 +1,9 @@
 AGENTS.md
 CLAUDE.md
 /.agents/
+/.codex/
+/.codex-tmp/
+/.playwright-cli/
 
 .DS_Store
 .env.*
