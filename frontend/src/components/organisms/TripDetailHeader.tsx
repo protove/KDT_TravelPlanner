@@ -32,6 +32,7 @@ export interface TripDetailHeaderProps {
   onInviteClick: () => void;
   onManageClick: () => void;
   onLeaveClick: () => void;
+  onWriteReviewClick: () => void;
   countries: Country[];
   selectedCountryId: number | null;
   onCountryChange: (value: string) => void;
@@ -68,6 +69,7 @@ function TripDetailHeader({
   onInviteClick,
   onManageClick,
   onLeaveClick,
+  onWriteReviewClick,
   countries,
   selectedCountryId,
   onCountryChange,
@@ -158,18 +160,23 @@ function TripDetailHeader({
           </div>
         </div>
 
-        {isOwner ? (
-          <div className="flex items-center gap-2">
-            <Button variant="outline" onClick={onInviteClick}>
-              참여자 초대
-            </Button>
-            <Button onClick={onManageClick}>참여자 관리</Button>
-          </div>
-        ) : (
-          <Button variant="outline" onClick={onLeaveClick}>
-            나가기
+        <div className="flex items-center gap-2">
+          <Button variant="outline" onClick={onWriteReviewClick}>
+            이 일정으로 후기 쓰기
           </Button>
-        )}
+          {isOwner ? (
+            <>
+              <Button variant="outline" onClick={onInviteClick}>
+                참여자 초대
+              </Button>
+              <Button onClick={onManageClick}>참여자 관리</Button>
+            </>
+          ) : (
+            <Button variant="outline" onClick={onLeaveClick}>
+              나가기
+            </Button>
+          )}
+        </div>
       </div>
 
       {isEditing ? (

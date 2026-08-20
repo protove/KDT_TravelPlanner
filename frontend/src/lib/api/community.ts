@@ -51,9 +51,9 @@ export interface ListPostsParams {
   size?: number;
 }
 
-/** 게시글 목록을 페이지 단위로 조회한다. */
+/** 게시글 목록을 페이지 단위로 조회한다(인증 불필요). */
 export async function listPosts(
-  accessToken: string,
+  accessToken: string | null | undefined,
   params: ListPostsParams = {},
 ): Promise<PageResponse<CommunityPostSummary>> {
   const searchParams = new URLSearchParams();

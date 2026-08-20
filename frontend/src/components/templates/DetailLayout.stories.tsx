@@ -64,6 +64,7 @@ export const Default: Story = {
           onInviteClick={() => {}}
           onManageClick={() => {}}
           onLeaveClick={() => {}}
+          onWriteReviewClick={() => {}}
           countries={[{ countryId: 1, code: "JP", nameKo: "일본", nameEn: "Japan" }]}
           selectedCountryId={1}
           onCountryChange={() => {}}

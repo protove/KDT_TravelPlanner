@@ -2,8 +2,17 @@
 
 import * as React from "react";
 import { usePathname, useRouter } from "next/navigation";
-import { AppHeader } from "@/components/organisms/AppHeader";
+import { AppHeader, type AppHeaderNavKey } from "@/components/organisms/AppHeader";
 import { useAuthStore } from "@/lib/stores/useAuthStore";
+
+const NAV_PATHS: Record<AppHeaderNavKey, string> = {
+  trips: "/trips",
+  community: "/community",
+};
+
+function resolveActiveNav(pathname: string): AppHeaderNavKey | undefined {
+  return (Object.keys(NAV_PATHS) as AppHeaderNavKey[]).find((key) => pathname.startsWith(NAV_PATHS[key]));
+}
 
 // 로그인 전 화면(진입/콜백)은 자체 브랜딩만 보여주고 GNB가 필요 없다.
 const HIDDEN_PATHS = ["/auth", "/auth/callback"];
@@ -35,7 +44,9 @@ function HeaderLayout({ children }: HeaderLayoutProps) {
           nickname={user?.nickname}
           avatarColor={user?.avatarColor}
           avatarSrc={user?.profileImageUrl ?? undefined}
+          activeNav={resolveActiveNav(pathname)}
           onLogoClick={() => router.push(isLoggedIn ? "/trips" : "/")}
+          onNavClick={(key) => router.push(NAV_PATHS[key])}
           onLoginClick={() => router.push("/auth")}
           onProfileClick={() => router.push("/mypage")}
           onNotificationClick={() => router.push("/notifications")}

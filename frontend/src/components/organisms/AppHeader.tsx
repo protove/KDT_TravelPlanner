@@ -7,13 +7,28 @@ import { Button } from "@/components/atoms/Button";
 import { Icon } from "@/components/atoms/Icon";
 import { cn } from "@/lib/utils";
 
+export type AppHeaderNavKey = "trips" | "community";
+
+export interface AppHeaderNavItem {
+  key: AppHeaderNavKey;
+  label: string;
+}
+
+const NAV_ITEMS: AppHeaderNavItem[] = [
+  { key: "trips", label: "여행일정" },
+  { key: "community", label: "커뮤니티" },
+];
+
 export interface AppHeaderProps {
   loggedIn: boolean;
   userInitial?: string;
   nickname?: string;
   avatarColor?: string;
   avatarSrc?: string;
+  /** 현재 라우트에 대응하는 nav 항목 — 일치하는 항목에 활성 스타일이 적용된다. */
+  activeNav?: AppHeaderNavKey;
   onLogoClick?: () => void;
+  onNavClick?: (key: AppHeaderNavKey) => void;
   onNotificationClick?: () => void;
   onProfileClick?: () => void;
   onLoginClick?: () => void;
@@ -26,7 +41,9 @@ function AppHeader({
   nickname,
   avatarColor = "var(--brand-500)",
   avatarSrc,
+  activeNav,
   onLogoClick,
+  onNavClick,
   onNotificationClick,
   onProfileClick,
   onLoginClick,
@@ -39,16 +56,34 @@ function AppHeader({
         className
       )}
     >
-      <button
-        type="button"
-        onClick={onLogoClick}
-        className="flex min-w-0 shrink-0 cursor-pointer items-center gap-2.5 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-      >
-        <span className="flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-md bg-primary text-sm font-bold text-primary-foreground">
-          T
-        </span>
-        <span className="hidden text-base font-bold text-foreground min-[340px]:inline">TripPlanner</span>
-      </button>
+      <div className="flex min-w-0 items-center gap-6">
+        <button
+          type="button"
+          onClick={onLogoClick}
+          className="flex min-w-0 shrink-0 cursor-pointer items-center gap-2.5 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          <span className="flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-md bg-primary text-sm font-bold text-primary-foreground">
+            T
+          </span>
+          <span className="hidden text-base font-bold text-foreground min-[340px]:inline">TripPlanner</span>
+        </button>
+
+        <nav className="hidden items-center gap-6 sm:flex">
+          {NAV_ITEMS.map((item) => (
+            <button
+              key={item.key}
+              type="button"
+              onClick={() => onNavClick?.(item.key)}
+              className={cn(
+                "cursor-pointer border-b-2 border-transparent py-1 text-sm font-medium text-fg-muted transition-colors hover:text-foreground",
+                activeNav === item.key && "border-primary text-primary hover:text-primary"
+              )}
+            >
+              {item.label}
+            </button>
+          ))}
+        </nav>
+      </div>
 
       {loggedIn ? (
         <div className="flex min-w-0 items-center gap-1.5 min-[320px]:gap-2 sm:gap-4">

@@ -219,6 +219,7 @@ React.useEffect(() => {
           onInviteClick={() => setShowInvite(true)}
           onManageClick={() => setShowManage(true)}
           onLeaveClick={() => setShowLeaveConfirm(true)}
+          onWriteReviewClick={() => router.push(`/community/write?travelId=${encodeURIComponent(id ?? "")}`)}
           countries={countries}
           selectedCountryId={selectedCountryId}
           onCountryChange={handleCountryChangeDraft}

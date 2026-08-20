@@ -55,6 +55,7 @@ function TripDetailHeaderDemo(props: { isOwner: boolean; canEdit: boolean }) {
       onInviteClick={() => {}}
       onManageClick={() => {}}
       onLeaveClick={() => {}}
+      onWriteReviewClick={() => {}}
       countries={COUNTRIES}
       selectedCountryId={countryId}
       onCountryChange={(v) => {
