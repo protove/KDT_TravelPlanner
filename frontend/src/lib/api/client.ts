@@ -39,10 +39,17 @@ async function parseApiError(res: Response): Promise<ApiError> {
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8080";
 
 /** 인증 헤더 부착, {data: T} 언래핑, 실패 응답의 ApiError 변환을 공통으로 처리하는 fetch wrapper. */
-export async function apiFetch<T>(path: string, accessToken: string, options: RequestInit = {}): Promise<T> {
+export async function apiFetch<T>(
+  path: string,
+  accessToken?: string | null,
+  options: RequestInit = {},
+): Promise<T> {
   const res = await fetch(`${API_BASE_URL}${path}`, {
     ...options,
-    headers: { ...options.headers, Authorization: `Bearer ${accessToken}` },
+    headers: {
+      ...options.headers,
+      ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+    },
     credentials: "include",
   });
   if (!res.ok) throw await parseApiError(res);

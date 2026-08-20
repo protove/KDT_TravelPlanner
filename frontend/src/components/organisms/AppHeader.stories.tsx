@@ -16,6 +16,7 @@ export const LoggedIn: Story = {
     loggedIn: true,
     userInitial: "인",
     nickname: "인서",
+    activeNav: "community",
   },
 };
 

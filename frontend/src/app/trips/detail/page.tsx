@@ -2,25 +2,20 @@
 
 import * as React from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Pencil, Trash2, Check, X } from "lucide-react";
 import { Button } from "@/components/atoms/Button";
-import { Input } from "@/components/atoms/Input";
 import { Textarea } from "@/components/atoms/Textarea";
-import { Icon } from "@/components/atoms/Icon";
-import { Avatar, AvatarImage, AvatarFallback } from "@/components/atoms/Avatar";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/atoms/Select";
-import { CalendarPopover } from "@/components/organisms/CalendarPopover";
 import { MapPanel } from "@/components/organisms/MapPanel";
 import { ScheduleBoard } from "@/components/organisms/ScheduleBoard";
 import { PlaceModal, type PlaceSearchResultOption } from "@/components/organisms/PlaceModal";
 import { InviteDialog } from "@/components/organisms/InviteDialog";
 import { ParticipantManageDialog, type Participant } from "@/components/organisms/ParticipantManageDialog";
-import { DateRangeBadge } from "@/components/molecules/DateRangeBadge";
+import { TripDetailHeader } from "@/components/organisms/TripDetailHeader";
 import { ConfirmDialog } from "@/components/molecules/ConfirmDialog";
 import { DetailLayout } from "@/components/templates/DetailLayout";
 import { TripDetailPageSkeleton } from "@/components/templates/TripDetailPageSkeleton";
 import { useAuthStore } from "@/lib/stores/useAuthStore";
 import { toPermission, type TravelRole } from "@/lib/api/permission";
+import { DESCRIPTION_MAX_LENGTH } from "@/lib/validation/text";
 
 import { COMPANION_OPTIONS, UUID_PATTERN, getDateTabs } from "./utils";
 import { useTripEditor } from "./useTripEditor";
@@ -101,6 +96,8 @@ function TripDetailContent() {
     setAddingPlace,
     placeDraftName,
     setPlaceDraftName,
+    placeNameError,
+    setPlaceNameError,
     placeDraftNote,
     setPlaceDraftNote,
     placeDraftCategory,
@@ -240,171 +237,41 @@ React.useEffect(() => {
     <>
       <DetailLayout
       detailHeader={
-        <div className="flex flex-col gap-5">
-          <button
-            type="button"
-            onClick={() => router.push("/trips")}
-            className="self-start cursor-pointer text-sm font-bold text-primary"
-          >
-            ← 여행일정 목록
-          </button>
-
-          <div className="flex flex-wrap items-start justify-between gap-3">
-            <div>
-              <div className="flex items-center gap-2">
-                {isEditingInfo ? (
-                  <Input
-                    autoFocus
-                    value={titleDraft}
-                    onChange={(e) => setTitleDraft(e.target.value)}
-                    className="h-auto w-auto text-2xl font-bold"
-                  />
-                ) : (
-                  <h1 className="text-2xl font-bold text-foreground">{detail.title}</h1>
-                )}
-                {canEditInfo && (
-                  <>
-                    {isEditingInfo ? (
-                      <>
-                        <button type="button" title="저장" className="cursor-pointer text-primary" onClick={saveEditInfo}>
-                          <Icon icon={Check} size="sm" aria-label="저장" />
-                        </button>
-                        <button type="button" title="취소" className="cursor-pointer text-muted-foreground" onClick={cancelEditInfo}>
-                          <Icon icon={X} size="sm" aria-label="취소" />
-                        </button>
-                      </>
-                    ) : (
-                      <>
-                        <button type="button" title="정보 수정" className="cursor-pointer text-muted-foreground" onClick={startEditInfo}>
-                          <Icon icon={Pencil} size="sm" aria-label="정보 수정" />
-                        </button>
-                        {isOwner && (
-                          <button type="button" title="여행일정 삭제" className="cursor-pointer text-destructive" onClick={() => setShowDeleteConfirm(true)}>
-                            <Icon icon={Trash2} size="sm" aria-label="여행일정 삭제" />
-                          </button>
-                        )}
-                      </>
-                    )}
-                  </>
-                )}
-              </div>
-              {infoSaveError && <p className="mt-1 text-xs text-destructive">{infoSaveError}</p>}
-              <div className="mt-1.5 flex">
-                {travelMembers
-                  .filter((m) => m.status === "ACCEPTED")
-                  .map((m, i) => (
-                  <Avatar
-                    key={m.userId}
-                    className="h-[22px] w-[22px]"
-                    style={i > 0 ? { marginLeft: "-6px" } : undefined}
-                  >
-                    {m.profileImageUrl && <AvatarImage src={m.profileImageUrl} alt={m.nickname ?? ""} />}
-                    <AvatarFallback className="text-[10px]">{(m.nickname ?? "?").slice(0, 1)}</AvatarFallback>
-                  </Avatar>
-                ))}
-              </div>
-            </div>
-
-            {isOwner ? (
-              <div className="flex items-center gap-2">
-                <Button variant="outline" onClick={() => setShowInvite(true)}>
-                  참여자 초대
-                </Button>
-                <Button onClick={() => setShowManage(true)}>참여자 관리</Button>
-              </div>
-            ) : (
-              <Button variant="outline" onClick={() => setShowLeaveConfirm(true)}>
-                나가기
-              </Button>
-            )}
-          </div>
-
-          {isEditingInfo ? (
-            <div className="relative flex w-fit flex-wrap items-center gap-1 rounded-full bg-card p-1.5 shadow-card">
-              <div className="flex items-center gap-1.5 px-2.5 py-1.5">
-                <span>📍</span>
-                <Select
-                  value={selectedCountryId != null ? String(selectedCountryId) : undefined}
-                  onValueChange={handleCountryChangeDraft}
-                >
-                  <SelectTrigger className="h-auto w-auto gap-1 border-none bg-transparent px-0.5 py-0.5 text-sm font-bold shadow-none">
-                    <SelectValue placeholder="나라" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {countries.map((c) => (
-                      <SelectItem key={c.countryId} value={String(c.countryId)}>
-                        {c.nameKo}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                <span className="text-border-strong">·</span>
-                <Select
-                  value={selectedCityId != null ? String(selectedCityId) : undefined}
-                  onValueChange={(v) => setSelectedCityId(Number(v))}
-                  disabled={selectedCountryId == null}
-                >
-                  <SelectTrigger className="h-auto w-auto gap-1 border-none bg-transparent px-0.5 py-0.5 text-sm font-bold shadow-none">
-                    <SelectValue placeholder="도시" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {cities.map((c) => (
-                      <SelectItem key={c.cityId} value={String(c.cityId)}>
-                        {c.nameKo}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="h-5 w-px bg-border" />
-              <button
-                type="button"
-                onClick={() => setShowCalendar((v) => !v)}
-                className="flex cursor-pointer items-center gap-2 rounded-full px-3.5 py-2 text-sm font-bold text-foreground hover:bg-muted"
-              >
-                📅 <DateRangeBadge start={dateRange.start} end={dateRange.end} />
-              </button>
-              <div className="h-5 w-px bg-border" />
-              <Select value={companion} onValueChange={setCompanion}>
-                <SelectTrigger className="h-auto w-auto gap-1.5 border-none px-3 py-1.5 shadow-none">
-                  <span>👥</span>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {COMPANION_OPTIONS.map((opt) => (
-                    <SelectItem key={opt} value={opt}>
-                      {opt}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-
-              {showCalendar && (
-                <div className="absolute left-0 top-[calc(100%+8px)] z-20">
-                  <CalendarPopover
-                    value={dateRange}
-                    onChange={(range) => setDateRange(range)}
-                    onApply={() => setShowCalendar(false)}
-                  />
-                </div>
-              )}
-            </div>
-          ) : (
-            <div className="flex w-fit flex-wrap items-center gap-1 rounded-full bg-card p-1.5 shadow-card">
-              <div className="flex items-center gap-1.5 px-2.5 py-1.5 text-sm font-bold text-foreground">
-                📍 {selectedCountryName} · {selectedCityName}
-              </div>
-              <div className="h-5 w-px bg-border" />
-              <div className="flex items-center gap-2 px-3.5 py-2 text-sm font-bold text-foreground">
-                📅 <DateRangeBadge start={dateRange.start} end={dateRange.end} />
-              </div>
-              <div className="h-5 w-px bg-border" />
-              <div className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-bold text-foreground">
-                👥 {companion}
-              </div>
-            </div>
-          )}
-        </div>
+        <TripDetailHeader
+          onBack={() => router.push("/trips")}
+          title={detail.title}
+          isEditing={isEditingInfo}
+          titleDraft={titleDraft}
+          onTitleDraftChange={setTitleDraft}
+          canEdit={canEditInfo}
+          onStartEdit={startEditInfo}
+          onSaveEdit={saveEditInfo}
+          onCancelEdit={cancelEditInfo}
+          saveError={infoSaveError}
+          isOwner={isOwner}
+          onDeleteClick={() => setShowDeleteConfirm(true)}
+          members={travelMembers}
+          onInviteClick={() => setShowInvite(true)}
+          onManageClick={() => setShowManage(true)}
+          onLeaveClick={() => setShowLeaveConfirm(true)}
+          onWriteReviewClick={() => router.push(`/community/write?travelId=${encodeURIComponent(id ?? "")}`)}
+          countries={countries}
+          selectedCountryId={selectedCountryId}
+          onCountryChange={handleCountryChangeDraft}
+          cities={cities}
+          selectedCityId={selectedCityId}
+          onCityChange={(v) => setSelectedCityId(Number(v))}
+          selectedCountryName={selectedCountryName}
+          selectedCityName={selectedCityName}
+          dateRange={dateRange}
+          onDateRangeChange={setDateRange}
+          showCalendar={showCalendar}
+          onToggleCalendar={() => setShowCalendar((v) => !v)}
+          onApplyCalendar={() => setShowCalendar(false)}
+          companion={companion}
+          onCompanionChange={setCompanion}
+          companionOptions={COMPANION_OPTIONS}
+        />
       }
       schedule={
         <div className="flex flex-col gap-6">
@@ -440,12 +307,18 @@ React.useEffect(() => {
           <div>
             <div className="mb-2 text-sm font-bold text-foreground">여행 설명</div>
             {isEditingInfo ? (
-              <Textarea
-                placeholder="이번 여행에 대해 간단히 소개해보세요"
-                value={description}
-                onChange={(e) => setDescription(e.target.value)}
-                className="h-[90px]"
-              />
+              <div>
+                <Textarea
+                  placeholder="이번 여행에 대해 간단히 소개해보세요"
+                  value={description}
+                  maxLength={DESCRIPTION_MAX_LENGTH}
+                  onChange={(e) => setDescription(e.target.value)}
+                  className="h-[90px]"
+                />
+                <p className="mt-1 text-xs text-muted-foreground">
+                  {description.length}/{DESCRIPTION_MAX_LENGTH}
+                </p>
+              </div>
             ) : (
               <p className="text-sm text-muted-foreground">{description || "이번 여행에 대해 간단히 소개해보세요"}</p>
             )}
@@ -466,7 +339,11 @@ React.useEffect(() => {
         mode={editingPlace ? "edit" : "add"}
         title={editingPlace ? editingPlace.name : "목적지 추가"}
         name={placeDraftName}
-        onNameChange={setPlaceDraftName}
+        onNameChange={(value) => {
+          setPlaceDraftName(value);
+          setPlaceNameError(null);
+        }}
+        nameError={placeNameError}
         note={placeDraftNote}
         onNoteChange={setPlaceDraftNote}
         category={placeDraftCategory}
@@ -487,6 +364,7 @@ React.useEffect(() => {
         )}
         onSelectPlaceResult={(result) => {
           setPlaceDraftName(result.name);
+          setPlaceNameError(null);
           setSelectedGooglePlaceId(result.placeId);
           setSelectedPlaceCoords({ lat: result.latitude, lng: result.longitude });
           clearPlaceSearch();

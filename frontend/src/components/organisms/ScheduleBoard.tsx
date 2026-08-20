@@ -181,19 +181,31 @@ function ScheduleBoard({
                 className="flex items-center gap-3 rounded-lg bg-card p-2.5 px-3.5 shadow-card"
               >
                 {readOnly ? (
-                  <div className="flex-1">
-                    <div className="text-sm font-semibold text-foreground">{place.name}</div>
-                    {place.note && <div className="mt-0.5 text-xs text-muted-foreground">{place.note}</div>}
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate text-sm font-semibold text-foreground" title={place.name}>
+                      {place.name}
+                    </div>
+                    {place.note && (
+                      <div className="mt-0.5 truncate text-xs text-muted-foreground" title={place.note}>
+                        {place.note}
+                      </div>
+                    )}
                   </div>
                 ) : (
                   <>
                     <button
                       type="button"
                       onClick={() => onAssignPlace?.(place.id)}
-                      className="flex flex-1 cursor-pointer text-left"
+                      className="flex min-w-0 flex-1 flex-col cursor-pointer text-left"
                     >
-                      <div className="text-sm font-semibold text-foreground">{place.name}</div>
-                      {place.note && <div className="mt-0.5 text-xs text-muted-foreground">{place.note}</div>}
+                      <div className="truncate text-sm font-semibold text-foreground" title={place.name}>
+                        {place.name}
+                      </div>
+                      {place.note && (
+                        <div className="mt-0.5 truncate text-xs text-muted-foreground" title={place.note}>
+                          {place.note}
+                        </div>
+                      )}
                     </button>
                     <div className="flex shrink-0 gap-1">
                       <button

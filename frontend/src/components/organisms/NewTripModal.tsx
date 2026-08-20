@@ -7,6 +7,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/a
 import { CalendarPopover, type DateRange } from "@/components/organisms/CalendarPopover";
 import { DateRangeBadge } from "@/components/molecules/DateRangeBadge";
 import { createTravel } from "@/lib/api/travel";
+import { hasIncompleteHangul, hasRepeatedCharSpam, TITLE_MAX_LENGTH } from "@/lib/validation/text";
 
 export interface NewTripModalProps {
   open: boolean;
@@ -31,6 +32,14 @@ function NewTripModal({ open, onOpenChange, accessToken, onCreated }: NewTripMod
 
   async function handleSubmit() {
     if (!accessToken || !title.trim() || submitting) return;
+    if (hasIncompleteHangul(title)) {
+      setError("완성되지 않은 한글(자음/모음)은 사용할 수 없어요.");
+      return;
+    }
+    if (hasRepeatedCharSpam(title)) {
+      setError("같은 문자를 5번 이상 반복할 수 없어요.");
+      return;
+    }
     setSubmitting(true);
     setError(null);
     try {
@@ -56,7 +65,17 @@ function NewTripModal({ open, onOpenChange, accessToken, onCreated }: NewTripMod
           <DialogTitle>새 여행 만들기</DialogTitle>
         </DialogHeader>
 
-        <Input placeholder="여행 제목" value={title} onChange={(e) => setTitle(e.target.value)} />
+        <div>
+          <Input
+            placeholder="여행 제목"
+            value={title}
+            maxLength={TITLE_MAX_LENGTH}
+            onChange={(e) => setTitle(e.target.value)}
+          />
+          <p className="mt-1 text-xs text-muted-foreground">
+            {title.length}/{TITLE_MAX_LENGTH}
+          </p>
+        </div>
 
         <div className="relative w-fit">
           <button
