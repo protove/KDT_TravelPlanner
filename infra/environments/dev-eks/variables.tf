@@ -49,19 +49,43 @@ variable "kubernetes_version" {
 
 variable "endpoint_public_access" {
   type        = bool
-  description = "Whether the cluster API server is reachable over the public internet, for kubectl verification convenience."
-  default     = true
+  description = <<-EOT
+    Whether the cluster API server is reachable over the public internet.
+    Private by default (matching every other EC2 workload in this repo);
+    verification goes through the SSM bastion instead. Only set true as a
+    deliberate, temporary opt-in.
+  EOT
+  default     = false
 }
 
 variable "public_access_cidrs" {
   type        = list(string)
-  description = <<-EOT
-    CIDR blocks allowed through the public API endpoint. Temporarily open to
-    the internet (0.0.0.0/0) to unblock kubectl verification before the
-    team's fixed IP/VPN range is confirmed; narrow this once that range is
-    known.
-  EOT
+  description = "CIDR blocks allowed through the public API endpoint. Only meaningful when endpoint_public_access is explicitly enabled."
   default     = ["0.0.0.0/0"]
+}
+
+variable "admin_principal_arns" {
+  type        = list(string)
+  description = <<-EOT
+    IAM principal ARNs granted EKS cluster-admin via Access Entries.
+    Typically the team's shared IAM Identity Center permission-set role
+    already used for EC2 SSM access, so everyone who can SSM into the
+    bastion can also kubectl once this is populated. Empty by default; only
+    the apply-time cluster creator gets the implicit admin grant until
+    then.
+  EOT
+  default     = []
+}
+
+variable "bastion_kubectl_version" {
+  type        = string
+  description = "Pinned kubectl version installed on the SSM verification bastion, matching kubernetes_version."
+  default     = "1.31.0"
+
+  validation {
+    condition     = can(regex("^[0-9]+\\.[0-9]+\\.[0-9]+$", var.bastion_kubectl_version))
+    error_message = "bastion_kubectl_version must be an exact X.Y.Z version."
+  }
 }
 
 variable "node_instance_types" {

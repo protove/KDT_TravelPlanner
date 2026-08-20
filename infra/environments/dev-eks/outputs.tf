@@ -53,6 +53,16 @@ output "secrets_kms_key_arn" {
   value       = module.eks_cluster.secrets_kms_key_arn
 }
 
+output "admin_access_entry_principal_arns" {
+  description = "IAM principal ARNs granted cluster-admin via Access Entries, for operator verification."
+  value       = module.eks_cluster.admin_access_entry_principal_arns
+}
+
+output "bastion_instance_id" {
+  description = "SSM Session Manager target for the SSM-only EKS verification bastion (no public IP, no SSH)."
+  value       = aws_instance.bastion.id
+}
+
 output "target_persistent_state_key" {
   description = "Persistent dev Terraform State key this EKS deployment reads app_subnet_ids from."
   value       = var.persistent_state_key

@@ -66,16 +66,24 @@ variables {
   subnet_ids   = ["subnet-app-a", "subnet-app-c"]
 }
 
-run "control_plane_is_private_first_logged_and_encrypted" {
+run "control_plane_is_private_only_by_default_logged_and_encrypted" {
   command = plan
 
   assert {
     condition = (
       aws_eks_cluster.this.vpc_config[0].endpoint_private_access &&
-      aws_eks_cluster.this.vpc_config[0].endpoint_public_access &&
+      !aws_eks_cluster.this.vpc_config[0].endpoint_public_access &&
       toset(aws_eks_cluster.this.vpc_config[0].subnet_ids) == toset(var.subnet_ids)
     )
-    error_message = "The control plane must always be reachable privately, and must use the exact supplied app subnets."
+    error_message = "The control plane must default to private-only access (bastion-verified), and must use the exact supplied app subnets."
+  }
+
+  assert {
+    condition = (
+      aws_eks_cluster.this.access_config[0].authentication_mode == "API" &&
+      aws_eks_cluster.this.access_config[0].bootstrap_cluster_creator_admin_permissions
+    )
+    error_message = "The cluster must use API-only authentication so Access Entries are the sole source of truth for who can authenticate."
   }
 
   assert {
@@ -156,4 +164,47 @@ run "too_few_subnets_is_rejected" {
   }
 
   expect_failures = [var.subnet_ids]
+}
+
+run "public_access_is_an_explicit_opt_in" {
+  command = plan
+
+  variables {
+    endpoint_public_access = true
+    public_access_cidrs    = ["203.0.113.4/32"]
+  }
+
+  assert {
+    condition = (
+      aws_eks_cluster.this.vpc_config[0].endpoint_public_access &&
+      tolist(aws_eks_cluster.this.vpc_config[0].public_access_cidrs) == tolist(["203.0.113.4/32"])
+    )
+    error_message = "Enabling public access must be a deliberate, self-contained variable change that still narrows the CIDR."
+  }
+}
+
+run "admin_principal_gets_cluster_admin_access_entry" {
+  command = plan
+
+  variables {
+    admin_principal_arns = ["arn:aws:iam::123456789012:role/kdt-travel-terraform"]
+  }
+
+  assert {
+    condition = (
+      aws_eks_access_entry.admin["arn:aws:iam::123456789012:role/kdt-travel-terraform"].type == "STANDARD" &&
+      aws_eks_access_policy_association.admin["arn:aws:iam::123456789012:role/kdt-travel-terraform"].policy_arn == "arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy" &&
+      aws_eks_access_policy_association.admin["arn:aws:iam::123456789012:role/kdt-travel-terraform"].access_scope[0].type == "cluster"
+    )
+    error_message = "Each admin_principal_arns entry must get a STANDARD Access Entry with cluster-scoped AmazonEKSClusterAdminPolicy."
+  }
+}
+
+run "no_admin_principals_means_no_access_entries" {
+  command = plan
+
+  assert {
+    condition     = length(aws_eks_access_entry.admin) == 0
+    error_message = "Without admin_principal_arns, no Access Entries should be created (only the apply-time cluster creator gets implicit admin)."
+  }
 }

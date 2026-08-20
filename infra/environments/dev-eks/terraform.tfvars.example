@@ -6,12 +6,22 @@ state_bucket   = "kdt-travelplanner-tfstate-123456789012-ap-northeast-2"
 # Keep this default while dev-eks only reads the persistent dev VPC/subnets.
 persistent_state_key = "dev/terraform.tfstate"
 
-# Temporary until the team's fixed IP/VPN range is confirmed (see module README).
-endpoint_public_access = true
+# Private by default; verify through the SSM bastion (see README.md). Only
+# flip to true as a deliberate, temporary opt-in, and narrow the CIDR.
+endpoint_public_access = false
 public_access_cidrs    = ["0.0.0.0/0"]
 
-kubernetes_version   = "1.31"
-node_instance_types  = ["t3.medium"]
-node_min_size        = 1
-node_max_size        = 1
-node_desired_size    = 1
+# Same shared IAM Identity Center role the team already uses for EC2 SSM
+# access (e.g. kdt-travel-terraform), so everyone who can SSM into the
+# bastion can also kubectl. Without this, only the identity that ran apply
+# gets implicit cluster-admin.
+admin_principal_arns = [
+  # "arn:aws:iam::123456789012:role/kdt-travel-terraform",
+]
+
+kubernetes_version      = "1.31"
+bastion_kubectl_version = "1.31.0"
+node_instance_types     = ["t3.medium"]
+node_min_size           = 1
+node_max_size           = 1
+node_desired_size       = 1

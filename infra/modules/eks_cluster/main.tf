@@ -53,6 +53,13 @@ resource "aws_eks_cluster" "this" {
     public_access_cidrs     = var.public_access_cidrs
   }
 
+  # API-only mode so admin_principal_arns below (Access Entries) is the sole
+  # source of truth for who can authenticate — no legacy aws-auth ConfigMap.
+  access_config {
+    authentication_mode                         = "API"
+    bootstrap_cluster_creator_admin_permissions = true
+  }
+
   # Trivy AVD-AWS-0038/0040 baseline: every control-plane log stream on, and
   # Secrets encrypted with a dedicated (non-S3-SSE) KMS key.
   enabled_cluster_log_types = [
@@ -155,4 +162,29 @@ resource "aws_eks_node_group" "this" {
     aws_iam_role_policy_attachment.node_cni_policy,
     aws_iam_role_policy_attachment.node_ecr_read_only,
   ]
+}
+
+# Kubernetes RBAC is separate from IAM: an ARN needs an explicit Access Entry
+# here before kubectl works for it, no matter how much AWS-side IAM access it
+# already has. Typically the team's shared SSO permission-set role — the same
+# one already used for EC2 SSM access — so this list stays short.
+resource "aws_eks_access_entry" "admin" {
+  for_each = toset(var.admin_principal_arns)
+
+  cluster_name  = aws_eks_cluster.this.name
+  principal_arn = each.value
+  type          = "STANDARD"
+  tags          = var.tags
+}
+
+resource "aws_eks_access_policy_association" "admin" {
+  for_each = aws_eks_access_entry.admin
+
+  cluster_name  = aws_eks_cluster.this.name
+  principal_arn = each.value.principal_arn
+  policy_arn    = "arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy"
+
+  access_scope {
+    type = "cluster"
+  }
 }

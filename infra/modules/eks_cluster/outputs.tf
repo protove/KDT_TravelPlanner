@@ -62,3 +62,8 @@ output "secrets_kms_key_arn" {
   description = "Dedicated KMS key ARN used for EKS Kubernetes Secrets envelope encryption."
   value       = aws_kms_key.eks_secrets.arn
 }
+
+output "admin_access_entry_principal_arns" {
+  description = "IAM principal ARNs granted cluster-admin via Access Entries, for operator verification."
+  value       = [for entry in aws_eks_access_entry.admin : entry.principal_arn]
+}

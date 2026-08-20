@@ -37,17 +37,22 @@ variable "endpoint_private_access" {
 
 variable "endpoint_public_access" {
   type        = bool
-  description = "Whether the cluster API server is reachable over the public internet, for kubectl verification convenience."
-  default     = true
+  description = <<-EOT
+    Whether the cluster API server is reachable over the public internet.
+    Private by default, matching every other EC2 workload in this repo
+    (SSM-only, no public port). Verification instead goes through the
+    dev-eks SSM bastion, which reaches the private endpoint from inside the
+    VPC. Only flip this on as a deliberate, temporary opt-in (e.g. an
+    operator without bastion access debugging from their laptop).
+  EOT
+  default     = false
 }
 
 variable "public_access_cidrs" {
   type        = list(string)
   description = <<-EOT
-    CIDR blocks allowed through the public API endpoint. Temporarily open to
-    the internet (0.0.0.0/0) to unblock kubectl verification before the
-    team's fixed IP/VPN range is confirmed; narrow this once that range is
-    known. No other exception mechanism is used for this constraint.
+    CIDR blocks allowed through the public API endpoint. Only meaningful
+    when endpoint_public_access is explicitly enabled; unused by default.
   EOT
   default     = ["0.0.0.0/0"]
 
@@ -55,6 +60,20 @@ variable "public_access_cidrs" {
     condition     = length(var.public_access_cidrs) > 0
     error_message = "public_access_cidrs must contain at least one CIDR block when endpoint_public_access is enabled."
   }
+}
+
+variable "admin_principal_arns" {
+  type        = list(string)
+  description = <<-EOT
+    IAM principal ARNs (typically the team's shared IAM Identity Center
+    permission set role, the same one already used for EC2 SSM access)
+    granted EKS cluster-admin via Access Entries. Kubernetes RBAC is
+    separate from IAM: without an explicit entry here, an ARN with full
+    AWS admin rights still gets "Unauthorized" from kubectl. Empty by
+    default; only the identity that ran apply gets the implicit
+    cluster-creator admin grant until this is populated.
+  EOT
+  default     = []
 }
 
 variable "node_instance_types" {

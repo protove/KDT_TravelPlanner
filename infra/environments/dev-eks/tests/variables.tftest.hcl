@@ -48,6 +48,18 @@ mock_provider "aws" {
       status = "ACTIVE"
     }
   }
+
+  mock_data "aws_ssm_parameter" {
+    defaults = {
+      value = "ami-0123456789abcdef0"
+    }
+  }
+
+  mock_resource "aws_instance" {
+    defaults = {
+      id = "i-0123456789abcdef0"
+    }
+  }
 }
 
 mock_provider "tls" {
@@ -66,6 +78,7 @@ override_data {
     outputs = {
       app_subnet_ids = ["subnet-app-a", "subnet-app-b"]
       vpc_id         = "vpc-12345678"
+      vpc_cidr       = "10.20.0.0/16"
     }
   }
 }
@@ -107,4 +120,39 @@ run "invalid_kubernetes_version_is_rejected" {
   }
 
   expect_failures = [var.kubernetes_version]
+}
+
+run "cluster_is_private_by_default_with_no_admin_entries" {
+  command = plan
+
+  assert {
+    condition     = !var.endpoint_public_access
+    error_message = "dev-eks must default to a private-only control plane; public access is an explicit, temporary opt-in."
+  }
+
+  assert {
+    condition     = length(module.eks_cluster.admin_access_entry_principal_arns) == 0
+    error_message = "Without admin_principal_arns set, no Access Entries should exist."
+  }
+
+  assert {
+    condition     = aws_instance.bastion.id != null
+    error_message = "The SSM verification bastion must be planned so operators can kubectl in without a public endpoint."
+  }
+}
+
+run "admin_principal_arns_flow_into_access_entries" {
+  command = plan
+
+  variables {
+    admin_principal_arns = ["arn:aws:iam::123456789012:role/kdt-travel-terraform"]
+  }
+
+  assert {
+    condition = (
+      length(module.eks_cluster.admin_access_entry_principal_arns) == 1 &&
+      module.eks_cluster.admin_access_entry_principal_arns[0] == "arn:aws:iam::123456789012:role/kdt-travel-terraform"
+    )
+    error_message = "admin_principal_arns must flow through to the eks_cluster module's Access Entries."
+  }
 }
