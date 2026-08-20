@@ -7,13 +7,28 @@ import { Button } from "@/components/atoms/Button";
 import { Icon } from "@/components/atoms/Icon";
 import { cn } from "@/lib/utils";
 
+export type AppHeaderNavKey = "trips" | "community";
+
+export interface AppHeaderNavItem {
+  key: AppHeaderNavKey;
+  label: string;
+}
+
+const NAV_ITEMS: AppHeaderNavItem[] = [
+  { key: "trips", label: "여행일정" },
+  { key: "community", label: "커뮤니티" },
+];
+
 export interface AppHeaderProps {
   loggedIn: boolean;
   userInitial?: string;
   nickname?: string;
   avatarColor?: string;
   avatarSrc?: string;
+  /** 현재 라우트에 대응하는 nav 항목 — 일치하는 항목에 활성 스타일이 적용된다. */
+  activeNav?: AppHeaderNavKey;
   onLogoClick?: () => void;
+  onNavClick?: (key: AppHeaderNavKey) => void;
   onNotificationClick?: () => void;
   onProfileClick?: () => void;
   onLoginClick?: () => void;
@@ -26,7 +41,9 @@ function AppHeader({
   nickname,
   avatarColor = "var(--brand-500)",
   avatarSrc,
+  activeNav,
   onLogoClick,
+  onNavClick,
   onNotificationClick,
   onProfileClick,
   onLoginClick,
@@ -35,34 +52,52 @@ function AppHeader({
   return (
     <header
       className={cn(
-        "flex w-full items-center justify-between border-b border-border bg-background px-7 py-3",
+        "flex w-full min-w-0 items-center justify-between border-b border-border bg-background px-3 py-3 min-[320px]:px-4 sm:px-7",
         className
       )}
     >
-      <button
-        type="button"
-        onClick={onLogoClick}
-        className="flex cursor-pointer items-center gap-2.5 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-      >
-        <span className="flex h-[30px] w-[30px] items-center justify-center rounded-md bg-primary text-sm font-bold text-primary-foreground">
-          T
-        </span>
-        <span className="text-base font-bold text-foreground">TripPlanner</span>
-      </button>
+      <div className="flex min-w-0 items-center gap-6">
+        <button
+          type="button"
+          onClick={onLogoClick}
+          className="flex min-w-0 shrink-0 cursor-pointer items-center gap-2.5 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          <span className="flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-md bg-primary text-sm font-bold text-primary-foreground">
+            T
+          </span>
+          <span className="hidden text-base font-bold text-foreground min-[340px]:inline">TripPlanner</span>
+        </button>
+
+        <nav className="hidden items-center gap-6 sm:flex">
+          {NAV_ITEMS.map((item) => (
+            <button
+              key={item.key}
+              type="button"
+              onClick={() => onNavClick?.(item.key)}
+              className={cn(
+                "cursor-pointer border-b-2 border-transparent py-1 text-sm font-medium text-fg-muted transition-colors hover:text-foreground",
+                activeNav === item.key && "border-primary text-primary hover:text-primary"
+              )}
+            >
+              {item.label}
+            </button>
+          ))}
+        </nav>
+      </div>
 
       {loggedIn ? (
-        <div className="flex items-center gap-4">
+        <div className="flex min-w-0 items-center gap-1.5 min-[320px]:gap-2 sm:gap-4">
           <button
             type="button"
             onClick={onNotificationClick}
             title="알림"
-            className="flex h-[34px] w-[34px] cursor-pointer items-center justify-center rounded-md text-fg-secondary hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            className="flex h-[34px] w-[34px] shrink-0 cursor-pointer items-center justify-center rounded-md text-fg-secondary hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
             <Icon icon={Bell} size="sm" aria-label="알림" />
           </button>
           {nickname && (
             <span
-             className="max-w-[120px] truncate text-sm font-medium text-foreground"
+             className="hidden max-w-[120px] truncate text-sm font-medium text-foreground min-[420px]:inline"
              title={nickname}
             >
               {nickname}
@@ -72,7 +107,7 @@ function AppHeader({
           <button
             type="button"
             onClick={onProfileClick}
-            className="cursor-pointer rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            className="shrink-0 cursor-pointer rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
             <Avatar className="h-8 w-8">
               {avatarSrc && <AvatarImage src={avatarSrc} alt={`${userInitial} 프로필`} />}

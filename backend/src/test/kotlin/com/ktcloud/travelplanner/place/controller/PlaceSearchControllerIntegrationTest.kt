@@ -54,6 +54,24 @@ class PlaceSearchControllerIntegrationTest(
 	}
 
 	@Test
+	fun `authenticated user searches nearby places through Google adapter`() {
+		val user = saveUser("nearby-search-user")
+
+		mockMvc.get("/api/v1/places/nearby") {
+			header(HttpHeaders.AUTHORIZATION, bearer(user))
+			param("latitude", "35.681236")
+			param("longitude", "139.767125")
+			param("radiusMeters", "1500")
+		}.andExpect {
+			status { isOk() }
+			header { string(HttpHeaders.CACHE_CONTROL, "no-store") }
+			jsonPath("$.data[0].placeId", equalTo("nearby-success"))
+			jsonPath("$.data[0].name", equalTo("주변 카페"))
+			jsonPath("$.data[0].rating", equalTo(4.6))
+		}
+	}
+
+	@Test
 	fun `invalid input and Google failures use common error responses`() {
 		val user = saveUser("place-error-user")
 		listOf(
@@ -85,6 +103,7 @@ class PlaceSearchControllerIntegrationTest(
 	companion object {
 		private val googleServer = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0).apply {
 			createContext("/v1/places:searchText", ::handleSearch)
+			createContext("/v1/places:searchNearby", ::handleNearbySearch)
 			start()
 		}
 
@@ -120,6 +139,14 @@ class PlaceSearchControllerIntegrationTest(
 					"""{"places":[{"id":"place-success","displayName":{"text":"도쿄 타워"},"location":{"latitude":35.658581,"longitude":139.745433},"rating":4.5}]}""",
 				)
 			}
+		}
+
+		private fun handleNearbySearch(exchange: HttpExchange) {
+			respond(
+				exchange,
+				200,
+				"""{"places":[{"id":"nearby-success","displayName":{"text":"주변 카페"},"location":{"latitude":35.682000,"longitude":139.768000},"rating":4.6}]}""",
+			)
 		}
 
 		private fun respond(exchange: HttpExchange, status: Int, body: String) {

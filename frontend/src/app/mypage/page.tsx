@@ -16,6 +16,7 @@ import {
   requestLogout,
 } from "@/lib/api/auth";
 import { ApiError } from "@/lib/api/client";
+import { getNicknameFormatError } from "@/lib/validation/text";
 import {
   deleteAccount,
   getProfile,
@@ -203,11 +204,15 @@ export default function MypagePage() {
 
     setNicknameError(undefined);
     setAgeError(undefined);
+    const formatError = nickname ? getNicknameFormatError(nickname) : undefined;
     if (!nickname) {
       setNicknameError("닉네임을 입력해 주세요.");
       isValid = false;
     } else if (nickname.length > 30) {
       setNicknameError("닉네임은 30자 이하여야 해요.");
+      isValid = false;
+    } else if (formatError) {
+      setNicknameError(formatError);
       isValid = false;
     }
 
@@ -340,7 +345,12 @@ export default function MypagePage() {
               nickname={draft.nickname}
               onNicknameChange={(nickname) => {
                 setDraft((current) => ({ ...current, nickname }));
-                setNicknameError(undefined);
+                const trimmed = nickname.trim();
+                if (trimmed.length > 30) {
+                  setNicknameError("닉네임은 30자 이하여야 해요.");
+                } else {
+                  setNicknameError(trimmed ? getNicknameFormatError(trimmed) : undefined);
+                }
                 setStatusMessage(undefined);
               }}
               gender={draft.gender}

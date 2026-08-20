@@ -13,6 +13,7 @@ import { createInvitation, cancelInvitation } from "@/lib/api/invitations";
 import { toTravelRole } from "@/lib/api/permission";
 import { createTimelineItem, updateTimelineItem, deleteTimelineItem, updateTimelineItemOrder } from "@/lib/api/timelineItems";
 import { ApiError } from "@/lib/api/client";
+import { hasIncompleteHangul, hasRepeatedCharSpam } from "@/lib/validation/text";
 import type { Permission } from "@/components/molecules/PermissionSelect";
 import {
   COMPANION_OPTIONS,
@@ -351,6 +352,22 @@ export function useTripEditor(id: string | undefined, accessToken: string | null
 
   async function saveEditInfo() {
     if (!accessToken || !detail) return;
+    if (hasIncompleteHangul(titleDraft)) {
+      setInfoSaveError("완성되지 않은 한글(자음/모음)은 사용할 수 없어요.");
+      return;
+    }
+    if (hasRepeatedCharSpam(titleDraft)) {
+      setInfoSaveError("같은 문자를 5번 이상 반복할 수 없어요.");
+      return;
+    }
+    if (hasIncompleteHangul(description)) {
+      setInfoSaveError("여행 설명에 완성되지 않은 한글(자음/모음)은 사용할 수 없어요.");
+      return;
+    }
+    if (hasRepeatedCharSpam(description)) {
+      setInfoSaveError("여행 설명에 같은 문자를 5번 이상 반복할 수 없어요.");
+      return;
+    }
     setInfoSaveError(null);
     const patch: Parameters<typeof updateTravel>[2] = {
       title: titleDraft.trim() || detail.title,

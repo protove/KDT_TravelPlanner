@@ -21,7 +21,7 @@ export interface TripListProps {
 
 const gridClassName = "grid gap-4";
 const gridStyle = {
-  gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))",
+  gridTemplateColumns: "repeat(auto-fill, minmax(min(100%, 260px), 1fr))",
 };
 
 function TripList({
