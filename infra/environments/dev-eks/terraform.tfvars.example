@@ -1,0 +1,17 @@
+aws_account_id = "123456789012"
+aws_region     = "ap-northeast-2"
+project_name   = "kdt-travelplanner"
+state_bucket   = "kdt-travelplanner-tfstate-123456789012-ap-northeast-2"
+
+# Keep this default while dev-eks only reads the persistent dev VPC/subnets.
+persistent_state_key = "dev/terraform.tfstate"
+
+# Temporary until the team's fixed IP/VPN range is confirmed (see module README).
+endpoint_public_access = true
+public_access_cidrs    = ["0.0.0.0/0"]
+
+kubernetes_version   = "1.31"
+node_instance_types  = ["t3.medium"]
+node_min_size        = 1
+node_max_size        = 1
+node_desired_size    = 1

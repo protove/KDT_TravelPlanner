@@ -18,6 +18,7 @@ infra/
 │   ├── dev/                           # 개발 환경 Root
 │   ├── dev-runtime/                   # EC2 Runtime Root (현재 리소스 없음)
 │   ├── dev-load-test/                 # EC2 Runtime 대상 Load Runner Root (현재 미적용)
+│   ├── dev-eks/                       # EKS 클러스터 Root, dev에만 의존 (SCRUM-10, 현재 미적용)
 │   └── prod/                          # 운영 환경 Root
 └── modules/
     ├── terraform_state_backend/       # State S3와 최소 State 접근 정책
@@ -30,7 +31,8 @@ infra/
     ├── runtime_security/              # ALB/backend/data Security Group
     ├── load_test_security/            # Load Runner와 data 간 Security Group 경계
     ├── backend_data/                  # RDS PostgreSQL과 Redis
-    └── backend_service/               # ALB, Launch Template와 EC2 ASG
+    ├── backend_service/               # ALB, Launch Template와 EC2 ASG
+    └── eks_cluster/                   # EKS 컨트롤 플레인, 관리형 노드그룹, 클러스터 OIDC provider
 ```
 
 모듈은 AWS Provider를 설정하지 않는다. 각 Root의 `providers.tf`가 Region, 허용 AWS Account ID와 공통 태그를 설정한다.
