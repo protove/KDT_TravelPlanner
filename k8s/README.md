@@ -101,6 +101,18 @@ kubectl config get-contexts      # kind-travel-planner-local context 제거 확�
 
 `minReplicas: 2` / `maxReplicas: 4` / CPU 목표 60%는 임의로 정한 값이 아니라, 지금 dev EC2 ASG(`infra/environments/dev-runtime/main.tf`)의 `asg_min_size=2` / `asg_desired_capacity=2` / `asg_max_size=4` / `target_cpu_utilization=60`을 그대로 맞춘 것이다 — HPA로 넘어가도 스케일링 동작 범위가 지금 운영 중인 것과 동일하게 유지되도록.
 
+### ASG ↔ HPA 메커니즘 대조표
+
+EC2 ASG(`infra/modules/backend_service/main.tf`)와 최대한 같은 메커니즘으로 비교 가능하게 맞춘 결과다. min/max/desired 외의 항목도 전수 확인했다.
+
+| 항목 | ASG (dev-runtime 실제값) | kind HPA/Deployment | 상태 |
+|---|---|---|---|
+| min / desired / max | 2 / 2 / 4 | `minReplicas: 2` / `replicas: 2` / `maxReplicas: 4` | 매칭 |
+| 스케일링 지표 | CPU 60% (`ASGAverageCPUUtilization`, TargetTrackingScaling) | CPU 60% (`averageUtilization: 60`) | 매칭 |
+| 헬스체크 대상 | ALB target group: `GET /actuator/health/readiness`, 포트 9091, HTTP, matcher 200 | `readinessProbe`: 동일 경로·포트 | 매칭 (1단계 PR부터 이미 동일) |
+| 헬스체크 주기/임계치 | interval 15s, healthy_threshold 2, unhealthy_threshold 3, timeout 5s | periodSeconds 10, timeoutSeconds 5, failureThreshold 10 | **의도적으로 다름** — Flyway 마이그레이션이 최대 180초 걸릴 수 있어 readinessProbe를 더 관대하게 잡음. ALB 숫자에 맞추면(예: failureThreshold 3) 정상 기동 중에도 NotReady로 튕길 위험이 있어 그대로 둠. "같은 엔드포인트를 본다"는 정합성이 숫자 일치보다 중요하다고 판단 |
+| 신규 인스턴스 워밍업 | `health_check_grace_period=300s`, `default_instance_warmup=180s` | 대응 필드 없음 | HPA 컨트롤러의 전역 옵션(`--horizontal-pod-autoscaler-cpu-initialization-period`, 기본 300s로 ASG와 동일)이 개념적으로 대응하지만, 개별 `HorizontalPodAutoscaler` 리소스가 아니라 `kube-controller-manager` 클러스터 전역 플래그라 `hpa.yaml`에서 조정 불가. EKS는 관리형 컨트롤 플레인이라 이 플래그 자체를 사용자가 바꿀 수 없음 — kind/EKS 둘 다 우리가 손댈 수 있는 영역이 아님 |
+
 ### 사용법
 
 `setup.sh`로 기본 클러스터를 띄운 뒤, 추가로 실행한다:
