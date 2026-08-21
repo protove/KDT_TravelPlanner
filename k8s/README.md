@@ -30,8 +30,11 @@ k8s/
 ├── backend-secret.example.yaml   실제 값 없는 키 목록 (문서 목적)
 ├── backend-deployment.yaml       backend Dockerfile의 runner 타겟 이미지, probe 포함
 ├── backend-service.yaml          ClusterIP, 8080(app) + 9091(actuator)
+├── metrics-server.yaml           kind 전용 패치 포함 (하단 HPA 섹션 참고)
+├── hpa.yaml                      backend HorizontalPodAutoscaler
 └── scripts/
     ├── setup.sh                  클러스터 생성 → 이미지 빌드/로드 → apply 전체 자동화
+    ├── setup-hpa.sh               setup.sh 이후 추가로 실행하는 HPA 애드온 스크립트
     └── teardown.sh               kind delete cluster
 ```
 
@@ -91,6 +94,63 @@ kubectl config get-contexts      # kind-travel-planner-local context 제거 확�
 - **이미지 로딩은 `kind load docker-image`만 쓴다.** 로컬 레지스트리는 안 쓴다 — backend 이미지 하나뿐이고 반복 재빌드가 잦은 단계가 아니다.
 - **접속은 `kubectl port-forward`만 쓴다.** Ingress는 이번 범위에서 제외.
 - **노드는 control-plane 단일 노드다.** 지금 검증 대상(env 설정, probe, DB/Redis 연결)은 노드가 여러 개인지와 무관하다.
+
+## HPA 메커니즘 검증
+
+**이건 메커니즘 검증이지 실제 규모/성능 테스트가 아니다.** 목적은 HPA 설정 문법과 실제 스케일 업/다운 동작을 EKS(유료) 대신 kind(무료)에서 먼저 확인하는 것이다. 검증된 `hpa.yaml`은 SCRUM-11(EKS 이전)에서 거의 그대로 옮기되, `metrics-server.yaml`은 EKS에서 애드온으로 재설치한다 — 이 파일의 kind 전용 인자(`--kubelet-insecure-tls` 등)는 EKS에는 필요 없다. CI(`k8s-verify.yml`)에는 포함하지 않는다(탐색적 작업, 매 PR 자동화 대상 아님).
+
+`minReplicas: 2` / `maxReplicas: 4` / CPU 목표 60%는 임의로 정한 값이 아니라, 지금 dev EC2 ASG(`infra/environments/dev-runtime/main.tf`)의 `asg_min_size=2` / `asg_desired_capacity=2` / `asg_max_size=4` / `target_cpu_utilization=60`을 그대로 맞춘 것이다 — HPA로 넘어가도 스케일링 동작 범위가 지금 운영 중인 것과 동일하게 유지되도록.
+
+### ASG ↔ HPA 메커니즘 대조표
+
+EC2 ASG(`infra/modules/backend_service/main.tf`)와 최대한 같은 메커니즘으로 비교 가능하게 맞춘 결과다. min/max/desired 외의 항목도 전수 확인했다.
+
+| 항목 | ASG (dev-runtime 실제값) | kind HPA/Deployment | 상태 |
+|---|---|---|---|
+| min / desired / max | 2 / 2 / 4 | `minReplicas: 2` / `replicas: 2` / `maxReplicas: 4` | 매칭 |
+| 스케일링 지표 | CPU 60% (`ASGAverageCPUUtilization`, TargetTrackingScaling) | CPU 60% (`averageUtilization: 60`) | 매칭 |
+| 헬스체크 대상 | ALB target group: `GET /actuator/health/readiness`, 포트 9091, HTTP, matcher 200 | `readinessProbe`: 동일 경로·포트 | 매칭 (1단계 PR부터 이미 동일) |
+| 헬스체크 주기/임계치 | interval 15s, healthy_threshold 2, unhealthy_threshold 3, timeout 5s | periodSeconds 10, timeoutSeconds 5, failureThreshold 10 | **의도적으로 다름** — Flyway 마이그레이션이 최대 180초 걸릴 수 있어 readinessProbe를 더 관대하게 잡음. ALB 숫자에 맞추면(예: failureThreshold 3) 정상 기동 중에도 NotReady로 튕길 위험이 있어 그대로 둠. "같은 엔드포인트를 본다"는 정합성이 숫자 일치보다 중요하다고 판단 |
+| 신규 인스턴스 워밍업 | `health_check_grace_period=300s`, `default_instance_warmup=180s` | 대응 필드 없음 | HPA 컨트롤러의 전역 옵션(`--horizontal-pod-autoscaler-cpu-initialization-period`, 기본 300s로 ASG와 동일)이 개념적으로 대응하지만, 개별 `HorizontalPodAutoscaler` 리소스가 아니라 `kube-controller-manager` 클러스터 전역 플래그라 `hpa.yaml`에서 조정 불가. EKS는 관리형 컨트롤 플레인이라 이 플래그 자체를 사용자가 바꿀 수 없음 — kind/EKS 둘 다 우리가 손댈 수 있는 영역이 아님 |
+
+### 사용법
+
+`setup.sh`로 기본 클러스터를 띄운 뒤, 추가로 실행한다:
+
+```bash
+./k8s/scripts/setup.sh
+./k8s/scripts/setup-hpa.sh
+```
+
+`setup-hpa.sh`는 `metrics-server.yaml` → `hpa.yaml` 순서로 apply하고, metrics-server 첫 메트릭 수집(최대 1분 정도 걸리는 알려진 지연)까지 대기한다.
+
+### 관찰
+
+```bash
+kubectl top pods -n travel-planner        # <unknown>이면 metrics-server 문제
+kubectl get hpa -n travel-planner -w      # TARGETS/REPLICAS 실시간 관찰
+```
+
+### 부하 생성
+
+클러스터 안에서 backend Service를 직접 때리는 임시 Pod를 여러 개 띄운다 (host→port-forward 경유보다 안정적이고 CPU 부하도 더 잘 준다):
+
+```bash
+kubectl run load-gen-1 --image=busybox --restart=Never -n travel-planner -- \
+  /bin/sh -c "while true; do wget -q -O- http://backend:8080/api/ping; done"
+kubectl run load-gen-2 --image=busybox --restart=Never -n travel-planner -- \
+  /bin/sh -c "while true; do wget -q -O- http://backend:8080/api/ping; done"
+```
+
+CPU 사용률이 60% 이상으로 올라가면 `kubectl get hpa -n travel-planner -w`에서 REPLICAS가 2→3→4로 늘어나는 걸 몇 분 안에 볼 수 있다.
+
+### 부하 Pod 정리
+
+```bash
+kubectl delete pod load-gen-1 load-gen-2 -n travel-planner
+```
+
+정리 후 기본 down-scale stabilization window(5분)가 지나면 REPLICAS가 다시 `minReplicas`(2)로 줄어든다.
 
 ## 다음 단계로 넘어가는 조건
 
