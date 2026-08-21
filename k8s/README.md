@@ -99,6 +99,8 @@ kubectl config get-contexts      # kind-travel-planner-local context 제거 확�
 
 **이건 메커니즘 검증이지 실제 규모/성능 테스트가 아니다.** 목적은 HPA 설정 문법과 실제 스케일 업/다운 동작을 EKS(유료) 대신 kind(무료)에서 먼저 확인하는 것이다. 검증된 `hpa.yaml`은 SCRUM-11(EKS 이전)에서 거의 그대로 옮기되, `metrics-server.yaml`은 EKS에서 애드온으로 재설치한다 — 이 파일의 kind 전용 인자(`--kubelet-insecure-tls` 등)는 EKS에는 필요 없다. CI(`k8s-verify.yml`)에는 포함하지 않는다(탐색적 작업, 매 PR 자동화 대상 아님).
 
+`minReplicas: 2` / `maxReplicas: 4` / CPU 목표 60%는 임의로 정한 값이 아니라, 지금 dev EC2 ASG(`infra/environments/dev-runtime/main.tf`)의 `asg_min_size=2` / `asg_desired_capacity=2` / `asg_max_size=4` / `target_cpu_utilization=60`을 그대로 맞춘 것이다 — HPA로 넘어가도 스케일링 동작 범위가 지금 운영 중인 것과 동일하게 유지되도록.
+
 ### 사용법
 
 `setup.sh`로 기본 클러스터를 띄운 뒤, 추가로 실행한다:
@@ -128,7 +130,7 @@ kubectl run load-gen-2 --image=busybox --restart=Never -n travel-planner -- \
   /bin/sh -c "while true; do wget -q -O- http://backend:8080/api/ping; done"
 ```
 
-CPU 사용률이 60% 이상으로 올라가면 `kubectl get hpa -n travel-planner -w`에서 REPLICAS가 1→2→3으로 늘어나는 걸 몇 분 안에 볼 수 있다.
+CPU 사용률이 60% 이상으로 올라가면 `kubectl get hpa -n travel-planner -w`에서 REPLICAS가 2→3→4로 늘어나는 걸 몇 분 안에 볼 수 있다.
 
 ### 부하 Pod 정리
 
@@ -136,7 +138,7 @@ CPU 사용률이 60% 이상으로 올라가면 `kubectl get hpa -n travel-planne
 kubectl delete pod load-gen-1 load-gen-2 -n travel-planner
 ```
 
-정리 후 기본 down-scale stabilization window(5분)가 지나면 REPLICAS가 다시 1로 줄어든다.
+정리 후 기본 down-scale stabilization window(5분)가 지나면 REPLICAS가 다시 `minReplicas`(2)로 줄어든다.
 
 ## 다음 단계로 넘어가는 조건
 
