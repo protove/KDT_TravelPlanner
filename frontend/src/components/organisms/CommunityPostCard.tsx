@@ -4,20 +4,8 @@ import { Badge } from "@/components/atoms/Badge";
 import { Icon } from "@/components/atoms/Icon";
 import { Skeleton } from "@/components/atoms/Skeleton";
 import type { CommunityPostSummary } from "@/lib/types/community";
+import { formatRelativeTime } from "@/lib/utils/formatRelativeTime";
 import { cn } from "@/lib/utils";
-
-function formatRelativeTime(iso: string): string {
-  const diffMs = Date.now() - new Date(iso).getTime();
-  const diffMin = Math.floor(diffMs / 60_000);
-  if (diffMin < 1) return "방금 전";
-  if (diffMin < 60) return `${diffMin}분 전`;
-  const diffHour = Math.floor(diffMin / 60);
-  if (diffHour < 24) return `${diffHour}시간 전`;
-  const diffDay = Math.floor(diffHour / 24);
-  if (diffDay < 7) return `${diffDay}일 전`;
-  const d = new Date(iso);
-  return `${d.getFullYear()}.${String(d.getMonth() + 1).padStart(2, "0")}.${String(d.getDate()).padStart(2, "0")}`;
-}
 
 export interface CommunityPostCardProps {
   post: CommunityPostSummary;

@@ -1,5 +1,7 @@
 import { apiFetch } from "@/lib/api/client";
 import type {
+  CommentCreateRequest,
+  CommentResponse,
   CommunityCategory,
   CommunityPostCreateRequest,
   CommunityPostDetail,
@@ -68,4 +70,32 @@ export async function listPosts(
     `/api/v1/community/posts${qs ? `?${qs}` : ""}`,
     accessToken,
   );
+}
+
+/** 게시글의 댓글 목록을 조회한다(단일 depth, 페이지네이션 없음, 인증 불필요 — 로그인 상태면 isMine이 채워진다). */
+export async function getComments(
+  accessToken: string | null | undefined,
+  postId: string,
+): Promise<CommentResponse[]> {
+  return apiFetch<CommentResponse[]>(`/api/v1/community/posts/${postId}/comments`, accessToken);
+}
+
+/** 댓글을 작성한다. 로그인 필요. */
+export async function createComment(
+  accessToken: string,
+  postId: string,
+  request: CommentCreateRequest,
+): Promise<CommentResponse> {
+  return apiFetch<CommentResponse>(`/api/v1/community/posts/${postId}/comments`, accessToken, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(request),
+  });
+}
+
+/** 댓글을 삭제한다(soft delete). 작성자 본인만 가능. */
+export async function deleteComment(accessToken: string, commentId: string): Promise<void> {
+  await apiFetch<unknown>(`/api/v1/community/comments/${commentId}`, accessToken, {
+    method: "DELETE",
+  });
 }

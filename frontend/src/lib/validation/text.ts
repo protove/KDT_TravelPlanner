@@ -7,6 +7,8 @@ export const FOOD_SUBCATEGORY_MAX_LENGTH = 30;
 export const PLACE_NOTE_MAX_LENGTH = 200;
 // 여행 설명(소개)도 백엔드에 길이 제한이 없어 프론트 UX 기준으로만 정한 값.
 export const DESCRIPTION_MAX_LENGTH = 500;
+// 커뮤니티 댓글은 백엔드 CommentCreateRequest.kt의 @Size(max = 1000)과 동일하게 맞춘다.
+export const COMMENT_MAX_LENGTH = 1000;
 
 // 같은 문자(기호·영문·숫자·한글 문단 전부 포함)가 5회 이상 연속되면 도배로 간주한다.
 // "!!!!!", "-----", "ㄱㄱㄱㄱㄱ" 처럼 종류를 가리지 않고 반복 자체를 잡아낸다.
