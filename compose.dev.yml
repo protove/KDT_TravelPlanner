@@ -52,6 +52,13 @@ services:
       - backend_build:/app/build
       - ~/.aws:/root/.aws:ro
 
+  # 로컬 GUI 툴(TablePlus/DBeaver 등)에서 붙기 위한 dev 전용 포트 공개.
+  # postgres는 compose.yml에서 app-network 내부에만 열려 있어서, 이 override 없이는
+  # 호스트(맥)에서 접속할 방법이 없음.
+  postgres:
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+
 volumes:
   frontend_node_modules:
   frontend_next:
