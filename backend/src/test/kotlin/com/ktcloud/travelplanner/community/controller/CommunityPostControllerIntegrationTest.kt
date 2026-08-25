@@ -21,6 +21,7 @@ import com.ktcloud.travelplanner.user.repository.UserRepository
 import jakarta.persistence.EntityManager
 import org.hamcrest.Matchers.equalTo
 import org.hamcrest.Matchers.notNullValue
+import org.hamcrest.Matchers.nullValue
 import org.junit.jupiter.api.Test
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc
@@ -202,6 +203,66 @@ class CommunityPostControllerIntegrationTest(
 	}
 
 	@Test
+	fun `post created with an itinerary snapshot returns it unchanged on detail lookup`() {
+		// itinerarySnapshotJson은 bodyJson과 달리 Tiptap 문서가 아니라, 일정 자체의 원래 모양
+		// (day별 장소 목록 + 좌표)을 프론트가 작성 시점에 조립해서 보내는 불변 값이다 — 백엔드는
+		// 화이트리스트 검증 없이 그대로 저장/반환만 한다([[project_community_itinerary_snapshot]]).
+		val author = saveUser("snapshot-author")
+		val accessToken = jwtTokenService.issueAccessToken(requireNotNull(author.id)).value
+		val travel = saveTravel(author)
+
+		val result = mockMvc.post("/api/v1/community/posts") {
+			header(HttpHeaders.AUTHORIZATION, "Bearer $accessToken")
+			contentType = MediaType.APPLICATION_JSON
+			content = """
+				{
+					"categoryCode": "TRAVEL_REVIEW",
+					"title": "스냅샷 포함 후기",
+					"bodyJson": {"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"자유 작성"}]}]},
+					"sourceTravelId": "${travel.id}",
+					"itinerarySnapshotJson": {
+						"title": "제주도 여행",
+						"startDate": "2026-01-01",
+						"endDate": "2026-01-03",
+						"days": [
+							{
+								"dayNumber": 1,
+								"visitDate": "2026-01-01",
+								"items": [
+									{
+										"timelineItemId": "11111111-1111-1111-1111-111111111111",
+										"name": "제주공항 도착",
+										"category": "교통",
+										"visitOrder": 1,
+										"lat": 33.5066,
+										"lng": 126.4930
+									}
+								]
+							}
+						]
+					}
+				}
+			""".trimIndent()
+		}
+			.andExpect { status { isOk() } }
+			.andReturn()
+
+		val postId = UUID.fromString(
+			Regex("\"postId\":\"([^\"]+)\"").find(result.response.contentAsString)!!.groupValues[1],
+		)
+
+		mockMvc.get("/api/v1/community/posts/$postId")
+			.andExpect {
+				status { isOk() }
+				jsonPath("$.data.bodyJson.content[0].content[0].text", equalTo("자유 작성"))
+				jsonPath("$.data.itinerarySnapshotJson.title", equalTo("제주도 여행"))
+				jsonPath("$.data.itinerarySnapshotJson.days[0].dayNumber", equalTo(1))
+				jsonPath("$.data.itinerarySnapshotJson.days[0].items[0].name", equalTo("제주공항 도착"))
+				jsonPath("$.data.itinerarySnapshotJson.days[0].items[0].lat", equalTo(33.5066))
+			}
+	}
+
+	@Test
 	fun `anonymous request returns post detail with isMine false and increments view count`() {
 		val author = saveUser("detail-author")
 		val post = savePost(author, tags = setOf("부산"))
@@ -218,6 +279,7 @@ class CommunityPostControllerIntegrationTest(
 				jsonPath("$.data.commentCount", equalTo(0))
 				jsonPath("$.data.reactionCount", equalTo(0))
 				jsonPath("$.data.bodyJson.type", equalTo("doc"))
+				jsonPath("$.data.itinerarySnapshotJson", nullValue())
 				jsonPath("$.data.isMine", equalTo(false))
 			}
 
@@ -346,6 +408,7 @@ class CommunityPostControllerIntegrationTest(
 			bodyJson = bodyJson.toString(),
 			bodyPreview = "본문",
 			sourceTravelId = null,
+			itinerarySnapshotJson = null,
 		)
 		post.assignTags(tags.map { name -> communityTagRepository.findByName(name) ?: saveTag(name) }.toSet())
 		return communityPostRepository.saveAndFlush(post)

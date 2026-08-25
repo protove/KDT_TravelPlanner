@@ -65,6 +65,37 @@ export interface TiptapDocument {
   content: TiptapBlockNode[];
 }
 
+/**
+ * 여행후기 작성 시점에 고정하는 일정 스냅샷. Tiptap 문서가 아니라 일정 자체의 원래 모양
+ * (day별 장소 목록 + 좌표)을 그대로 담는다 — bodyJson과는 완전히 다른, 독립된 데이터.
+ * ItinerarySnapshotCard가 이 값을 ScheduleBoard/MapPanel에 그대로 흘려보내 그린다.
+ */
+export interface ItinerarySnapshotItem {
+  timelineItemId: string;
+  name: string;
+  category: string;
+  foodSubcategory?: string | null;
+  visitOrder: number;
+  /** /map-points에서 조회된 좌표. 없으면(구글 place 매핑 실패 등) 지도에 마커로 안 찍힌다. */
+  lat?: number;
+  lng?: number;
+}
+
+export interface ItinerarySnapshotDay {
+  dayNumber: number;
+  visitDate: string | null;
+  items: ItinerarySnapshotItem[];
+}
+
+export interface ItinerarySnapshot {
+  title: string;
+  startDate: string;
+  endDate: string;
+  days: ItinerarySnapshotDay[];
+  /** dayNumber가 배정되지 않은 항목. day가 없어 좌표 조회(/map-points)가 불가해 lat/lng는 항상 없다. */
+  unassigned: ItinerarySnapshotItem[];
+}
+
 /** 목록 카드(community-board / PostCard)용 요약. */
 export interface CommunityPostSummary {
   postId: string;
@@ -84,6 +115,11 @@ export interface CommunityPostSummary {
 /** 상세(community-detail) 응답. 목록 요약 필드 + 본문 + 내 글 여부. */
 export interface CommunityPostDetail extends CommunityPostSummary {
   bodyJson: TiptapDocument;
+  /**
+   * 후기 작성 시점에 고정된 일정 스냅샷. sourceTravelId로 일정을 불러와 쓴 후기에만 존재하고,
+   * 이후 원본 여행이 바뀌어도 이 값은 그대로 유지된다(불변, 수정 API 없음). 없으면 null.
+   */
+  itinerarySnapshotJson: ItinerarySnapshot | null;
   isMine: boolean;
 }
 
@@ -96,6 +132,8 @@ export interface CommunityPostCreateRequest {
   tags?: string[];
   /** 여행후기이고 일정 기반으로 썼을 때만 */
   sourceTravelId?: string;
+  /** sourceTravelId로 일정을 불러와 후기를 쓸 때만 함께 보낸다. 저장 후에는 불변. */
+  itinerarySnapshotJson?: ItinerarySnapshot;
 }
 
 /** 수정 요청. PatchField 방식 — 보낸 필드만 반영, version은 낙관적 락이라 항상 필수. */

@@ -18,4 +18,7 @@ data class CommunityPostCreateRequest(
 	val bodyJson: JsonNode,
 	val tags: List<String>? = null,
 	val sourceTravelId: UUID? = null,
+	// 후기 작성 시점 일정 스냅샷. sourceTravelId로 일정을 불러와 후기를 쓸 때만 채워지는 값이고,
+	// 저장되면 이후 수정 API가 없는 불변 값이다(bodyJson과 동일한 화이트리스트로 검증한다).
+	val itinerarySnapshotJson: JsonNode? = null,
 )

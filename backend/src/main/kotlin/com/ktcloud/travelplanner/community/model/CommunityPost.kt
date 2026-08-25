@@ -34,6 +34,7 @@ class CommunityPost(
 	bodyJson: String,
 	bodyPreview: String?,
 	sourceTravelId: UUID?,
+	itinerarySnapshotJson: String?,
 ) : BaseTimeEntity() {
 	@Column(nullable = false, length = 200)
 	var title: String = title
@@ -51,6 +52,14 @@ class CommunityPost(
 
 	@Column(name = "source_travel_id")
 	var sourceTravelId: UUID? = sourceTravelId
+		protected set
+
+	// 여행후기 작성 시점의 일정 스냅샷(TiptapDocument, bodyJson과 동일 스키마). 작성 시 한 번만
+	// 채워지고 이후 수정 API가 없는 불변 값이다 — source_travel_id가 가리키는 원본 여행이
+	// 나중에 바뀌어도 이 값은 그대로 유지된다.
+	@JdbcTypeCode(SqlTypes.JSON)
+	@Column(name = "itinerary_snapshot_json", columnDefinition = "jsonb")
+	var itinerarySnapshotJson: String? = itinerarySnapshotJson
 		protected set
 
 	@Column(name = "view_count", nullable = false)

@@ -20,12 +20,14 @@ data class CommunityPostDetailResponse(
 	val sourceTravelId: UUID?,
 	val createdAt: Instant,
 	val bodyJson: JsonNode,
+	val itinerarySnapshotJson: JsonNode?,
 	val isMine: Boolean,
 ) {
 	companion object {
 		fun from(
 			post: CommunityPost,
 			bodyJson: JsonNode,
+			itinerarySnapshotJson: JsonNode?,
 			viewCount: Int,
 			commentCount: Long,
 			reactionCount: Long,
@@ -44,6 +46,7 @@ data class CommunityPostDetailResponse(
 			sourceTravelId = post.sourceTravelId,
 			createdAt = post.createdAt,
 			bodyJson = bodyJson,
+			itinerarySnapshotJson = itinerarySnapshotJson,
 			isMine = isMine,
 		)
 	}
