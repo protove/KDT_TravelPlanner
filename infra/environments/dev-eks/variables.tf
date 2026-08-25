@@ -39,7 +39,7 @@ variable "persistent_state_key" {
 variable "kubernetes_version" {
   type        = string
   description = "EKS control plane Kubernetes minor version."
-  default     = "1.31"
+  default     = "1.35"
 
   validation {
     condition     = can(regex("^1\\.[0-9]{2}$", var.kubernetes_version))
@@ -80,7 +80,7 @@ variable "admin_principal_arns" {
 variable "bastion_kubectl_version" {
   type        = string
   description = "Pinned kubectl version installed on the SSM verification bastion, matching kubernetes_version."
-  default     = "1.31.0"
+  default     = "1.35.0"
 
   validation {
     condition     = can(regex("^[0-9]+\\.[0-9]+\\.[0-9]+$", var.bastion_kubectl_version))
