@@ -2,6 +2,7 @@ import { apiFetch } from "@/lib/api/client";
 import type {
   CommentCreateRequest,
   CommentResponse,
+  CommentUpdateRequest,
   CommunityCategory,
   CommunityPostCreateRequest,
   CommunityPostDetail,
@@ -93,9 +94,29 @@ export async function createComment(
   });
 }
 
+/** 댓글 내용을 수정한다. 작성자 본인만 가능. */
+export async function updateComment(
+  accessToken: string,
+  commentId: string,
+  request: CommentUpdateRequest,
+): Promise<CommentResponse> {
+  return apiFetch<CommentResponse>(`/api/v1/community/comments/${commentId}`, accessToken, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(request),
+  });
+}
+
 /** 댓글을 삭제한다(soft delete). 작성자 본인만 가능. */
 export async function deleteComment(accessToken: string, commentId: string): Promise<void> {
   await apiFetch<unknown>(`/api/v1/community/comments/${commentId}`, accessToken, {
     method: "DELETE",
+  });
+}
+
+/** 댓글 좋아요를 토글한다(이미 눌렀으면 취소). 로그인 필요. */
+export async function toggleCommentReaction(accessToken: string, commentId: string): Promise<CommentResponse> {
+  return apiFetch<CommentResponse>(`/api/v1/community/comments/${commentId}/reactions/LIKE`, accessToken, {
+    method: "PUT",
   });
 }

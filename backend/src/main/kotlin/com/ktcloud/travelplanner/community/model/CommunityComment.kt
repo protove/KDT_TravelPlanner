@@ -12,10 +12,12 @@ import org.hibernate.annotations.SQLRestriction
 import java.time.Instant
 import java.util.UUID
 
-// community_comment는 수정 없이 작성/소프트삭제만 지원한다 (V17 — updated_at 컬럼이 없고,
-// community-api-contract.md 1절 CommentResponse에도 수정 시각이 없다). BaseTimeEntity
-// (createdAt+updatedAt 쌍 + auditing listener)를 상속하지 않고, id처럼 생성자 기본값으로
-// createdAt을 직접 채운다 — 이렇게 하면 순수 Mockito 단위 테스트에서도 값이 바로 채워진다.
+// community_comment는 작성/수정/소프트삭제를 지원한다. updated_at은 V21에서 추가된 nullable
+// 컬럼 — null이면 "한 번도 수정 안 됨"을 뜻한다(수정 시에만 채워짐, CommentResponse의
+// "(수정됨)" 표시에 그대로 쓰인다). BaseTimeEntity(auditing listener 기반)를 상속하지 않고,
+// id처럼 생성자 기본값으로 createdAt을 직접 채운다 — 순수 Mockito 단위 테스트에서도 값이
+// 바로 채워지게 하기 위함(auditing listener는 실제 persist 시점에만 동작해서 mock 환경에서
+// lateinit 미초기화로 터진다).
 @Entity
 @Table(name = "community_comment")
 @SQLRestriction("deleted_at IS NULL")
@@ -28,15 +30,30 @@ class CommunityComment(
 	@ManyToOne(fetch = FetchType.LAZY, optional = false)
 	@JoinColumn(name = "author_id", nullable = false)
 	val author: User,
-	@Column(nullable = false, columnDefinition = "TEXT")
-	val content: String,
+	content: String,
 ) {
+	@Column(nullable = false, columnDefinition = "TEXT")
+	var content: String = content
+		protected set
+
 	@Column(name = "created_at", nullable = false, updatable = false)
 	val createdAt: Instant = Instant.now()
+
+	@Column(name = "updated_at")
+	var updatedAt: Instant? = null
+		protected set
 
 	@Column(name = "deleted_at")
 	var deletedAt: Instant? = null
 		protected set
+
+	fun edit(
+		content: String,
+		updatedAt: Instant,
+	) {
+		this.content = content
+		this.updatedAt = updatedAt
+	}
 
 	fun softDelete(deletedAt: Instant) {
 		require(this.deletedAt == null) { "Comment is already deleted." }

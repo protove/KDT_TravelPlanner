@@ -21,7 +21,9 @@ import org.springframework.test.context.ActiveProfiles
 import org.springframework.test.web.servlet.MockMvc
 import org.springframework.test.web.servlet.delete
 import org.springframework.test.web.servlet.get
+import org.springframework.test.web.servlet.patch
 import org.springframework.test.web.servlet.post
+import org.springframework.test.web.servlet.put
 import org.springframework.transaction.annotation.Transactional
 import java.util.UUID
 
@@ -169,6 +171,146 @@ class CommunityCommentControllerIntegrationTest(
 		val author = saveUser("delete-404-author")
 
 		mockMvc.delete("/api/v1/community/comments/${UUID.randomUUID()}") {
+			header(HttpHeaders.AUTHORIZATION, bearer(author))
+		}.andExpect {
+			status { isNotFound() }
+			jsonPath("$.code", equalTo("RESOURCE_NOT_FOUND"))
+		}
+	}
+
+	@Test
+	fun `comment author can update their own comment and updatedAt is set`() {
+		val author = saveUser("edit-author")
+		val post = savePost(author)
+		val commentId = createCommentViaApi(post.id, author, "원래 댓글")
+
+		mockMvc.patch("/api/v1/community/comments/$commentId") {
+			header(HttpHeaders.AUTHORIZATION, bearer(author))
+			contentType = MediaType.APPLICATION_JSON
+			content = """{"content": "고친 댓글"}"""
+		}.andExpect {
+			status { isOk() }
+			jsonPath("$.data.content", equalTo("고친 댓글"))
+			jsonPath("$.data.updatedAt", org.hamcrest.Matchers.notNullValue())
+		}
+
+		mockMvc.get("/api/v1/community/posts/${post.id}/comments")
+			.andExpect {
+				jsonPath("$.data[0].content", equalTo("고친 댓글"))
+				jsonPath("$.data[0].updatedAt", org.hamcrest.Matchers.notNullValue())
+			}
+	}
+
+	@Test
+	fun `updating another user's comment is forbidden`() {
+		val author = saveUser("edit-forbid-author")
+		val other = saveUser("edit-forbid-other")
+		val post = savePost(author)
+		val commentId = createCommentViaApi(post.id, author, "원래 댓글")
+
+		mockMvc.patch("/api/v1/community/comments/$commentId") {
+			header(HttpHeaders.AUTHORIZATION, bearer(other))
+			contentType = MediaType.APPLICATION_JSON
+			content = """{"content": "남이 고침"}"""
+		}.andExpect {
+			status { isForbidden() }
+			jsonPath("$.code", equalTo("ACCESS_DENIED"))
+		}
+	}
+
+	@Test
+	fun `updating a nonexistent comment returns 404`() {
+		val author = saveUser("edit-404-author")
+
+		mockMvc.patch("/api/v1/community/comments/${UUID.randomUUID()}") {
+			header(HttpHeaders.AUTHORIZATION, bearer(author))
+			contentType = MediaType.APPLICATION_JSON
+			content = """{"content": "고친 댓글"}"""
+		}.andExpect {
+			status { isNotFound() }
+			jsonPath("$.code", equalTo("RESOURCE_NOT_FOUND"))
+		}
+	}
+
+	@Test
+	fun `blank content on update is rejected with 400`() {
+		val author = saveUser("edit-blank-author")
+		val post = savePost(author)
+		val commentId = createCommentViaApi(post.id, author, "원래 댓글")
+
+		mockMvc.patch("/api/v1/community/comments/$commentId") {
+			header(HttpHeaders.AUTHORIZATION, bearer(author))
+			contentType = MediaType.APPLICATION_JSON
+			content = """{"content": "   "}"""
+		}.andExpect {
+			status { isBadRequest() }
+			jsonPath("$.code", equalTo("VALIDATION_ERROR"))
+		}
+	}
+
+	@Test
+	fun `liking a comment toggles reactionCount and isReacted, liking again removes it`() {
+		val author = saveUser("like-author")
+		val liker = saveUser("liker")
+		val post = savePost(author)
+		val commentId = createCommentViaApi(post.id, author, "좋아요 테스트")
+
+		mockMvc.put("/api/v1/community/comments/$commentId/reactions/LIKE") {
+			header(HttpHeaders.AUTHORIZATION, bearer(liker))
+		}.andExpect {
+			status { isOk() }
+			jsonPath("$.data.reactionCount", equalTo(1))
+			jsonPath("$.data.isReacted", equalTo(true))
+		}
+
+		mockMvc.get("/api/v1/community/posts/${post.id}/comments") {
+			header(HttpHeaders.AUTHORIZATION, bearer(liker))
+		}.andExpect {
+			jsonPath("$.data[0].reactionCount", equalTo(1))
+			jsonPath("$.data[0].isReacted", equalTo(true))
+		}
+
+		mockMvc.put("/api/v1/community/comments/$commentId/reactions/LIKE") {
+			header(HttpHeaders.AUTHORIZATION, bearer(liker))
+		}.andExpect {
+			status { isOk() }
+			jsonPath("$.data.reactionCount", equalTo(0))
+			jsonPath("$.data.isReacted", equalTo(false))
+		}
+	}
+
+	@Test
+	fun `liking a comment without authentication returns 401`() {
+		val author = saveUser("like-401-author")
+		val post = savePost(author)
+		val commentId = createCommentViaApi(post.id, author, "좋아요 테스트")
+
+		mockMvc.put("/api/v1/community/comments/$commentId/reactions/LIKE")
+			.andExpect {
+				status { isUnauthorized() }
+				jsonPath("$.code", equalTo("UNAUTHORIZED"))
+			}
+	}
+
+	@Test
+	fun `an unsupported reaction type is rejected with 400`() {
+		val author = saveUser("like-unsupported-author")
+		val post = savePost(author)
+		val commentId = createCommentViaApi(post.id, author, "좋아요 테스트")
+
+		mockMvc.put("/api/v1/community/comments/$commentId/reactions/DISLIKE") {
+			header(HttpHeaders.AUTHORIZATION, bearer(author))
+		}.andExpect {
+			status { isBadRequest() }
+			jsonPath("$.code", equalTo("VALIDATION_ERROR"))
+		}
+	}
+
+	@Test
+	fun `reacting to a nonexistent comment returns 404`() {
+		val author = saveUser("like-404-author")
+
+		mockMvc.put("/api/v1/community/comments/${UUID.randomUUID()}/reactions/LIKE") {
 			header(HttpHeaders.AUTHORIZATION, bearer(author))
 		}.andExpect {
 			status { isNotFound() }

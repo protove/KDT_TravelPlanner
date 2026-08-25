@@ -7,6 +7,7 @@ import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.dao.DataIntegrityViolationException
 import org.springframework.jdbc.core.JdbcTemplate
 import kotlin.test.assertEquals
+import kotlin.test.assertNull
 
 class CommunityMigrationIntegrationTest : ContainerIntegrationTestSupport() {
 	@Autowired
@@ -14,11 +15,12 @@ class CommunityMigrationIntegrationTest : ContainerIntegrationTestSupport() {
 
 	@Test
 	fun `empty database applies community schema migrations`() {
+		// V19는 커뮤니티와 무관한 타임라인 마이그레이션이라 의도적으로 제외한다(원래도 그랬음).
 		assertEquals(
-			6,
+			8,
 			jdbcTemplate.queryForObject(
 				"SELECT COUNT(*) FROM flyway_schema_history " +
-					"WHERE version IN ('13', '14', '15', '16', '17', '18') AND success = TRUE",
+					"WHERE version IN ('13', '14', '15', '16', '17', '18', '20', '21') AND success = TRUE",
 				Int::class.java,
 			),
 		)
@@ -70,7 +72,7 @@ class CommunityMigrationIntegrationTest : ContainerIntegrationTestSupport() {
 	}
 
 	@Test
-	fun `deleting a post cascades to its tags, comments and reactions`() {
+	fun `deleting a post cascades to its tags, comments, reactions and comment reactions`() {
 		val authorId = insertUser()
 		val postId = java.util.UUID.randomUUID()
 		jdbcTemplate.update(
@@ -88,15 +90,21 @@ class CommunityMigrationIntegrationTest : ContainerIntegrationTestSupport() {
 			postId,
 			tagId,
 		)
+		val commentId = java.util.UUID.randomUUID()
 		jdbcTemplate.update(
 			"INSERT INTO community_comment (id, post_id, author_id, content, created_at) VALUES (?, ?, ?, '댓글', now())",
-			java.util.UUID.randomUUID(),
+			commentId,
 			postId,
 			authorId,
 		)
 		jdbcTemplate.update(
 			"INSERT INTO community_reaction (post_id, user_id, type) VALUES (?, ?, 'LIKE')",
 			postId,
+			authorId,
+		)
+		jdbcTemplate.update(
+			"INSERT INTO community_comment_reaction (comment_id, user_id, type) VALUES (?, ?, 'LIKE')",
+			commentId,
 			authorId,
 		)
 
@@ -126,6 +134,67 @@ class CommunityMigrationIntegrationTest : ContainerIntegrationTestSupport() {
 				postId,
 			),
 		)
+		// post -> comment -> comment_reaction으로 체이닝되는 ON DELETE CASCADE(V17 -> V20) 확인.
+		assertEquals(
+			0,
+			jdbcTemplate.queryForObject(
+				"SELECT COUNT(*) FROM community_comment_reaction WHERE comment_id = ?",
+				Int::class.java,
+				commentId,
+			),
+		)
+	}
+
+	@Test
+	fun `comment reaction type is constrained to LIKE and rejects duplicate likes from the same user`() {
+		val authorId = insertUser()
+		val commentId = insertComment(insertPost(authorId), authorId)
+
+		assertThrows<DataIntegrityViolationException> {
+			jdbcTemplate.update(
+				"INSERT INTO community_comment_reaction (comment_id, user_id, type) VALUES (?, ?, 'DISLIKE')",
+				commentId,
+				authorId,
+			)
+		}
+
+		jdbcTemplate.update(
+			"INSERT INTO community_comment_reaction (comment_id, user_id, type) VALUES (?, ?, 'LIKE')",
+			commentId,
+			authorId,
+		)
+		assertThrows<DataIntegrityViolationException> {
+			jdbcTemplate.update(
+				"INSERT INTO community_comment_reaction (comment_id, user_id, type) VALUES (?, ?, 'LIKE')",
+				commentId,
+				authorId,
+			)
+		}
+	}
+
+	@Test
+	fun `community_comment updated_at defaults to null and can be set on edit`() {
+		val authorId = insertUser()
+		val commentId = insertComment(insertPost(authorId), authorId)
+
+		assertNull(
+			jdbcTemplate.queryForObject(
+				"SELECT updated_at FROM community_comment WHERE id = ?",
+				java.sql.Timestamp::class.java,
+				commentId,
+			),
+		)
+
+		jdbcTemplate.update("UPDATE community_comment SET content = '수정됨', updated_at = now() WHERE id = ?", commentId)
+
+		assertEquals(
+			1,
+			jdbcTemplate.queryForObject(
+				"SELECT COUNT(*) FROM community_comment WHERE id = ? AND updated_at IS NOT NULL",
+				Int::class.java,
+				commentId,
+			),
+		)
 	}
 
 	private fun insertUser(): java.util.UUID {
@@ -137,5 +206,30 @@ class CommunityMigrationIntegrationTest : ContainerIntegrationTestSupport() {
 			userId.toString(),
 		)
 		return userId
+	}
+
+	private fun insertPost(authorId: java.util.UUID): java.util.UUID {
+		val postId = java.util.UUID.randomUUID()
+		jdbcTemplate.update(
+			"INSERT INTO community_post (id, author_id, category_id, title, body_json, created_at, updated_at) " +
+				"VALUES (?, ?, 1, '제목', '{}'::jsonb, now(), now())",
+			postId,
+			authorId,
+		)
+		return postId
+	}
+
+	private fun insertComment(
+		postId: java.util.UUID,
+		authorId: java.util.UUID,
+	): java.util.UUID {
+		val commentId = java.util.UUID.randomUUID()
+		jdbcTemplate.update(
+			"INSERT INTO community_comment (id, post_id, author_id, content, created_at) VALUES (?, ?, ?, '댓글', now())",
+			commentId,
+			postId,
+			authorId,
+		)
+		return commentId
 	}
 }

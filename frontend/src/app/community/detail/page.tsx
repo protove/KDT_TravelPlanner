@@ -12,7 +12,15 @@ import { ConfirmDialog } from "@/components/molecules/ConfirmDialog";
 import { RichTextEditor } from "@/components/organisms/RichTextEditor";
 import { DetailLayout } from "@/components/templates/DetailLayout";
 import { useAuthStore } from "@/lib/stores/useAuthStore";
-import { createComment, deleteComment, getCategories, getComments, getPost } from "@/lib/api/community";
+import {
+  createComment,
+  deleteComment,
+  getCategories,
+  getComments,
+  getPost,
+  toggleCommentReaction,
+  updateComment,
+} from "@/lib/api/community";
 import type { CommentResponse, CommunityCategory, CommunityPostDetail } from "@/lib/types/community";
 import { formatRelativeTime } from "@/lib/utils/formatRelativeTime";
 import { COMMENT_MAX_LENGTH } from "@/lib/validation/text";
@@ -30,9 +38,19 @@ function noop() {}
 export default function CommunityDetailPage() {
   return (
     <React.Suspense fallback={null}>
-      <CommunityDetailContent />
+      <CommunityDetailRoute />
     </React.Suspense>
   );
+}
+
+// id(게시글)가 바뀌면 화면 상태를 통째로 초기화하기 위해 key로 리마운트시킨다. 이 덕분에
+// 댓글을 새로 불러올 때 "로딩 상태를 다시 true로 되돌리는" 처리를, effect 본문에서 동기적으로
+// setState하지 않고도(react-hooks/set-state-in-effect) 자연스럽게 해결할 수 있다 — 아래
+// CommunityDetailContent의 댓글 목록 effect 주석 참고.
+function CommunityDetailRoute() {
+  const searchParams = useSearchParams();
+  const id = searchParams.get("id") ?? undefined;
+  return <CommunityDetailContent key={id} />;
 }
 
 function CommunityDetailContent() {
@@ -57,6 +75,8 @@ function CommunityDetailContent() {
   const [commentActionError, setCommentActionError] = React.useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = React.useState<CommentResponse | null>(null);
   const [deletingCommentId, setDeletingCommentId] = React.useState<string | null>(null);
+  const [reactionPendingId, setReactionPendingId] = React.useState<string | null>(null);
+  const [editSubmittingId, setEditSubmittingId] = React.useState<string | null>(null);
 
   React.useEffect(() => {
     if (!id) return;
@@ -70,10 +90,12 @@ function CommunityDetailContent() {
   }, [accessToken]);
 
   // 댓글 목록 — 로그인 상태가 바뀌면 각 댓글의 isMine이 달라지므로 accessToken도 의존성에 둔다.
+  // id가 바뀌는 경우는 위 CommunityDetailRoute의 key로 컴포넌트 자체가 새로 마운트되므로
+  // commentsLoading 초기값(true)이 자동으로 다시 적용된다 — accessToken만 바뀌어 이 effect가
+  // 재실행되는 경우엔 이미 보이는 댓글을 유지한 채 조용히 새로고침한다(재로딩 표시로 깜빡이지 않음).
   React.useEffect(() => {
     if (!id) return;
     let isCurrentRequest = true;
-    setCommentsLoading(true);
     getComments(accessToken, id)
       .then((res) => {
         if (!isCurrentRequest) return;
@@ -120,6 +142,36 @@ function CommunityDetailContent() {
       setCommentActionError("댓글을 삭제하지 못했습니다. 잠시 후 다시 시도해주세요.");
     } finally {
       setDeletingCommentId(null);
+    }
+  }
+
+  async function handleToggleReaction(commentId: string) {
+    if (!accessToken || reactionPendingId) return;
+    setReactionPendingId(commentId);
+    setCommentActionError(null);
+    try {
+      const updated = await toggleCommentReaction(accessToken, commentId);
+      setComments((prev) => prev.map((c) => (c.commentId === commentId ? updated : c)));
+    } catch {
+      setCommentActionError("좋아요 처리에 실패했습니다. 잠시 후 다시 시도해주세요.");
+    } finally {
+      setReactionPendingId(null);
+    }
+  }
+
+  async function handleEditComment(commentId: string, content: string): Promise<boolean> {
+    if (!accessToken) return false;
+    setEditSubmittingId(commentId);
+    setCommentActionError(null);
+    try {
+      const updated = await updateComment(accessToken, commentId, { content });
+      setComments((prev) => prev.map((c) => (c.commentId === commentId ? updated : c)));
+      return true;
+    } catch {
+      setCommentActionError("댓글을 수정하지 못했습니다. 잠시 후 다시 시도해주세요.");
+      return false;
+    } finally {
+      setEditSubmittingId(null);
     }
   }
 
@@ -225,8 +277,16 @@ function CommunityDetailContent() {
                     avatarImageUrl={comment.authorProfileImageUrl}
                     timeLabel={formatRelativeTime(comment.createdAt)}
                     text={comment.content}
+                    edited={comment.updatedAt != null}
+                    reactionCount={comment.reactionCount}
+                    isReacted={comment.isReacted}
+                    onToggleReaction={isLoggedIn ? () => handleToggleReaction(comment.commentId) : undefined}
+                    reactionPending={reactionPendingId === comment.commentId}
                     onDelete={comment.isMine ? () => setDeleteTarget(comment) : undefined}
                     deleting={deletingCommentId === comment.commentId}
+                    onEdit={comment.isMine ? (content) => handleEditComment(comment.commentId, content) : undefined}
+                    editSubmitting={editSubmittingId === comment.commentId}
+                    maxLength={COMMENT_MAX_LENGTH}
                   />
                 ))
               )}
