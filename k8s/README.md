@@ -252,6 +252,52 @@ CPU 사용률 153%(목표 60% 대비 과부하 유지)인 상태에서도 Pod �
 kubectl delete pod load-gen-1 load-gen-2 load-gen-3 rollout-probe -n travel-planner
 ```
 
+### 추가 검증: livenessProbe 실패 시 자가치유 (컨테이너 레벨)
+
+**자가치유는 사실 두 층으로 나뉜다.** `kubectl delete pod`로 한 검증(위 "결과" 참고)은 Pod 자체가 통째로 사라졌을 때 ReplicaSet 컨트롤러가 **새 이름의 새 Pod**를 만드는 층이다. 이번엔 그보다 더 가벼운 층 — Pod는 그대로인데 앱이 응답만 안 하는(hang) 상황에서 kubelet이 `livenessProbe` 실패를 감지해 **같은 Pod 안에서 컨테이너만 재시작**하는 걸 검증했다.
+
+앱 프로세스 자체는 안 건드리고, kind 노드에 직접 들어가서(`docker exec` → `nsenter`) 대상 Pod의 네트워크 네임스페이스 안에만 iptables 규칙을 걸어 actuator 포트(9091, readiness/liveness가 같이 쓰는 포트)만 순수 네트워크 레벨에서 차단했다 — "프로세스는 살아있는데 헬스체크에만 응답을 못 하는" 상태를 재현한 것이다.
+
+#### 사용법
+
+```bash
+NODE=travel-planner-local-control-plane
+POD=$(kubectl get pods -n travel-planner -l app=backend -o jsonpath='{.items[0].metadata.name}')
+
+# 대상 Pod의 네트워크 네임스페이스 PID 확인
+SANDBOX_ID=$(docker exec $NODE crictl pods --name "$POD" -q)
+NETNS_PID=$(docker exec $NODE crictl inspectp "$SANDBOX_ID" | jq -r '.info.pid')
+
+# actuator 포트(9091)만 그 Pod 안에서 차단 — 앱은 안 죽음, 응답만 못 함
+docker exec $NODE nsenter -t "$NETNS_PID" -n iptables -A INPUT -p tcp --dport 9091 -j DROP
+
+# RESTARTS가 증가할 때까지 관찰 (readinessProbe·livenessProbe 둘 다 failureThreshold 10 × periodSeconds 10 = 약 100초 뒤 발동)
+kubectl get pod $POD -n travel-planner -w
+
+# RESTARTS가 1로 올라간 걸 확인했으면 즉시 차단 해제 (안 그러면 같은 이유로 재시작이 계속 반복됨 —
+# 네트워크 네임스페이스는 컨테이너 재시작과 무관하게 Pod 수명 동안 유지되기 때문)
+docker exec $NODE nsenter -t "$NETNS_PID" -n iptables -D INPUT -p tcp --dport 9091 -j DROP
+```
+
+#### 관찰
+
+```bash
+kubectl get events -n travel-planner --field-selector involvedObject.name=$POD --sort-by='.lastTimestamp'
+```
+
+#### 결과
+
+| 시간 | 사건 |
+|---|---|
+| T+0s | 포트 9091 차단 |
+| T+~100s | `readinessProbe` 실패 → `READY 0/1`, Service 트래픽 대상에서 제외 |
+| T+~105s | `livenessProbe` 실패 → 이벤트 `Liveness probe failed: ... context deadline exceeded` |
+| 곧바로 | 이벤트 `Killing — Container backend failed liveness probe, will be restarted` |
+| 직후 | **같은 Pod 이름·같은 IP**로 컨테이너만 재생성, `RESTARTS: 1` |
+| 차단 해제 후 | `READY 1/1` 복귀, `RESTARTS`는 1에서 더 안 늘어남 (재발 없음) |
+
+`kubectl delete pod` 검증과 비교하면: 그때는 Pod 자체가 사라져서 ReplicaSet 컨트롤러가 새 이름의 새 Pod를 만드는 데 9초가 걸렸는데, 이번엔 Pod 이름·IP 변경 없이 kubelet이 컨테이너만 즉석에서 재시작했다 — **자가치유가 문제 종류에 따라 서로 다른 두 층에서 각자 처리된다**는 걸 실측으로 확인했다.
+
 ## 다음 단계로 넘어가는 조건
 
 이 단계가 안정적으로 재현 가능해야 한다 — `setup.sh` → `teardown.sh` → `setup.sh`를 몇 번 반복해도 매번 성공해야 frontend 컨테이너화(2단계)로 넘어간다. 한 번 됐다고 바로 다음 단계로 가지 않는다.
