@@ -152,6 +152,106 @@ kubectl delete pod load-gen-1 load-gen-2 -n travel-planner
 
 정리 후 기본 down-scale stabilization window(5분)가 지나면 REPLICAS가 다시 `minReplicas`(2)로 줄어든다.
 
+## Rolling Update / 자가치유 검증
+
+**이것도 메커니즘 검증이지 실제 이미지 교체 시나리오는 아니다.** AWS와 무관한 순수 쿠버네티스 메커니즘이라 kind에서 완전히 검증 가능하고, 새 인프라가 필요 없어 HPA보다 가볍다. HPA(PR #367)로 `replicas: 2`가 이미 적용되어 있어서 여러 Pod 상황을 자연스럽게 다룰 수 있다. `backend-deployment.yaml`에 `strategy`(`maxSurge: 1`, `maxUnavailable: 0`)를 명시적으로 고정해, 복제본 수가 바뀌어도 항상 무중단이 보장되도록 했다 — `maxUnavailable: 0`은 "기존 Pod는 새 Pod가 Ready 될 때까지 절대 안 내림"이라는 뜻이다. CI(`k8s-verify.yml`)에는 포함하지 않는다(HPA와 마찬가지로 탐색적 검증, 매 PR 자동화 대상 아님). 새 이미지 빌드/배포 시나리오도 다루지 않는다 — 실제 이미지 교체는 CI가 이미 매 PR마다 `setup.sh`로 하고 있어 `rollout restart`로 메커니즘만 확인하면 충분하다.
+
+**`strategy`만으로는 실제로 무중단이 아니었다 — `lifecycle.preStop`이 추가로 필요했다.** 처음 `strategy`만 넣고 검증했을 때 `rollout-probe`에 `FAIL`이 2건(connection refused, download timed out) 나왔다. 원인은 레이스 컨디션이다: Pod가 삭제되면 (1) 컨테이너에 SIGTERM이 가고 (2) Service 엔드포인트 목록에서 빠지는 것(kube-proxy 반영)이 동시에 시작되는데, 이 둘은 서로 순서 보장이 없다. 이 프로젝트 백엔드는 `server.shutdown: graceful`(`application.yml`)이 켜져 있어 SIGTERM을 받자마자 새 연결을 거부하기 시작하는데, 그 시점에 아직 일부 노드의 kube-proxy가 이 Pod를 엔드포인트에서 못 뺐다면 그쪽으로 라우팅된 요청이 실패한다. `maxUnavailable: 0`은 "새 Pod가 Ready 되기 전엔 기존 Pod 개수를 안 줄인다"만 보장할 뿐, 종료 중인 Pod로 향하는 개별 요청의 성공을 보장하지 않는다. 해결: `preStop` 훅으로 SIGTERM 전에 짧게 sleep을 둬서, 엔드포인트 목록이 갱신될 시간을 벌어준다:
+```yaml
+lifecycle:
+  preStop:
+    exec:
+      command: ["sh", "-c", "sleep 5"]
+```
+이 훅을 추가한 뒤 동일한 `rollout-probe` 검증을 다시 돌리자 `FAIL` 0건이 됐다.
+
+### 사용법
+
+`setup.sh`로 기본 클러스터를 띄운 뒤(`strategy`/`preStop` 필드가 반영된 채로), Rolling Update는 새 이미지 빌드 없이 `rollout restart`로 메커니즘만 검증한다. 무중단인지 증명하려면 재시작 도중 계속 요청을 보내면서 실패가 없는지 봐야 한다 — in-cluster에서 반복 요청을 걸어두는 Pod를 하나 띄우고, 그 동안 `rollout restart`를 실행한다:
+
+```bash
+# 터미널 1: 재시작 도중 계속 요청 (in-cluster, port-forward보다 안정적)
+kubectl run rollout-probe --image=busybox --restart=Never -n travel-planner -- \
+  /bin/sh -c "while true; do wget -q -O- -T 2 http://backend:9091/actuator/health/readiness || echo FAIL; sleep 0.5; done"
+
+# 터미널 2: 롤링 재시작 실행 + 관찰
+kubectl rollout restart deployment/backend -n travel-planner
+kubectl rollout status deployment/backend -n travel-planner
+```
+
+자가치유는 Pod를 강제로 지우고 Deployment가 다시 살리는지 확인한다:
+
+```bash
+kubectl get pods -n travel-planner -l app=backend   # Pod 이름 확인
+kubectl delete pod <backend-pod-이름> -n travel-planner
+kubectl get pods -n travel-planner -l app=backend -w   # 즉시 새 Pod가 만들어지는지 관찰
+```
+
+### 관찰
+
+```bash
+kubectl logs rollout-probe -n travel-planner   # FAIL 없어야 무중단 확인 완료
+kubectl get pods -n travel-planner -l app=backend   # 자가치유 후 새 Pod가 Running/READY 1/1, replicas: 2 유지
+```
+
+### 결과
+
+`strategy` + `preStop` 반영 후 재검증 결과: Rolling Update 도중 `rollout-probe` 로그에 `FAIL` 0건 — 무중단 확인 완료. Pod 삭제 후 새 Pod(`backend-8cf6d475f-h9wzv`)가 9초 만에 생성되어 `Running`/`READY 1/1`이 됐고 `replicas: 2`가 그대로 유지됨 — 자가치유 확인 완료.
+
+### 검증용 리소스 정리
+
+```bash
+kubectl delete pod rollout-probe -n travel-planner
+```
+
+### 추가 검증: HPA `maxReplicas`에 다 찬 상태에서 Rolling Update
+
+**`maxReplicas`는 HPA 전용 상한선이라 Rolling Update의 surge를 막지 않는다.** `strategy.maxSurge: 1`은 "그 순간의 `spec.replicas`보다 최대 1개 더 만들 수 있다"는 뜻이지 "HPA의 `maxReplicas`를 넘으면 안 된다"는 뜻이 아니다 — 그래서 HPA가 이미 `replicas`를 4(max)로 올려둔 상태에서 배포해도 순간적으로 5대까지 올라갔다가 4대로 내려오는 걸 반복하며 무중단을 유지할 수 있는지 확인했다.
+
+EC2 ASG와 대조되는 지점이기도 하다: `asg_max_size`는 ASG 자체의 하드 캡이라, desired_capacity가 이미 max_size에 찬 상태에서 Instance Refresh를 돌리면 surge용 여유 자리가 없어 헌 인스턴스를 먼저 종료해야 하는 경우가 생긴다(AWS 공식 문서에 명시된 제약) — 그 순간 목표 용량 미달이 발생할 수 있다. k8s는 `maxReplicas`가 Deployment의 surge를 제한하지 않으므로 이 문제가 구조적으로 없다.
+
+#### 사용법
+
+`setup.sh` → `setup-hpa.sh`로 HPA를 켠 뒤, HPA 검증과 같은 방식으로 부하를 걸어 `replicas`를 4(max)까지 올린다:
+
+```bash
+kubectl run load-gen-1 --image=busybox --restart=Never -n travel-planner -- \
+  /bin/sh -c "while true; do wget -q -O- http://backend:8080/api/ping; done"
+kubectl run load-gen-2 --image=busybox --restart=Never -n travel-planner -- \
+  /bin/sh -c "while true; do wget -q -O- http://backend:8080/api/ping; done"
+kubectl run load-gen-3 --image=busybox --restart=Never -n travel-planner -- \
+  /bin/sh -c "while true; do wget -q -O- http://backend:8080/api/ping; done"
+
+kubectl get hpa backend -n travel-planner -w   # REPLICAS가 4가 될 때까지 대기
+```
+
+4대 모두 `Running`/`READY 1/1`이 된 뒤, 부하가 걸린 채로(load-gen 유지) `rollout-probe`를 띄우고 롤링 재시작:
+
+```bash
+kubectl run rollout-probe --image=busybox --restart=Never -n travel-planner -- \
+  /bin/sh -c "while true; do wget -q -O- -T 2 http://backend:9091/actuator/health/readiness || echo FAIL; sleep 0.5; done"
+
+kubectl rollout restart deployment/backend -n travel-planner
+kubectl rollout status deployment/backend -n travel-planner
+```
+
+#### 관찰
+
+```bash
+kubectl logs rollout-probe -n travel-planner   # FAIL 없어야 무중단 확인 완료
+kubectl get pods -n travel-planner -l app=backend   # 롤아웃 도중 4→5(surge)→4 반복 관찰
+```
+
+#### 결과
+
+CPU 사용률 153%(목표 60% 대비 과부하 유지)인 상태에서도 Pod 개수가 4 → 5(surge) → 4를 반복했고, **Ready 상태 Pod는 전체 과정에서 한 번도 4 밑으로 떨어지지 않았다.** `rollout-probe` 로그 `FAIL` 0건 — HPA가 상한까지 찬 상태에서도 `strategy` + `preStop` 조합이 무중단을 유지함을 확인. (Pod 목록이 순간적으로 6개까지 보이는 경우가 있었는데, 이는 실제 초과가 아니라 `preStop`의 5초 유예 동안 `Terminating` 상태로 남아있는 헌 Pod와 다음 surge Pod가 겹쳐 `kubectl get pods` 목록에 동시에 잡힌 것 — 트래픽은 받지 않는다.)
+
+#### 검증용 리소스 정리
+
+```bash
+kubectl delete pod load-gen-1 load-gen-2 load-gen-3 rollout-probe -n travel-planner
+```
+
 ## 다음 단계로 넘어가는 조건
 
 이 단계가 안정적으로 재현 가능해야 한다 — `setup.sh` → `teardown.sh` → `setup.sh`를 몇 번 반복해도 매번 성공해야 frontend 컨테이너화(2단계)로 넘어간다. 한 번 됐다고 바로 다음 단계로 가지 않는다.
