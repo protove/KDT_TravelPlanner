@@ -8,6 +8,7 @@ run_terraform=false
 run_k8s=false
 run_compose=false
 run_backend_dev_image=false
+run_load_test=false
 classification_error=false
 source_policy_error=false
 verification_mode=invalid
@@ -22,6 +23,7 @@ mark_all() {
   run_k8s=true
   run_compose=true
   run_backend_dev_image=true
+  run_load_test=true
 }
 
 apply_pr_policy() {
@@ -66,6 +68,7 @@ suppress_specialists() {
   run_k8s=false
   run_compose=false
   run_backend_dev_image=false
+  run_load_test=false
 }
 
 classify_path() {
@@ -143,6 +146,9 @@ classify_path() {
     .github/workflows/backend-dev-image.yml)
       run_backend_dev_image=true
       ;;
+    .github/workflows/load-test-verification.yml)
+      run_load_test=true
+      ;;
     .github/workflows/frontend-deploy-dev.yml)
       run_frontend=true
       ;;
@@ -163,7 +169,10 @@ classify_path() {
       run_backend=true
       run_compose=true
       ;;
-    README.md|AGENTS.md|.gitignore|.gitattributes|.DS_Store|docs/*|reference/*|presentation/*|evidence/*|output/*|recovery-control/*|load-tests/*|scripts/loadtest/*|.agents/*|.codex/*|.github/pull_request_template.md|.github/PULL_REQUEST_TEMPLATE/*)
+    load-tests/*|scripts/loadtest/*)
+      run_load_test=true
+      ;;
+    README.md|AGENTS.md|.gitignore|.gitattributes|.DS_Store|docs/*|reference/*|presentation/*|evidence/*|output/*|recovery-control/*|.agents/*|.codex/*|.github/pull_request_template.md|.github/PULL_REQUEST_TEMPLATE/*)
       ;;
     *)
       mark_all
@@ -183,6 +192,7 @@ print_classification() {
   printf 'run_k8s=%s\n' "${run_k8s}"
   printf 'run_compose=%s\n' "${run_compose}"
   printf 'run_backend_dev_image=%s\n' "${run_backend_dev_image}"
+  printf 'run_load_test=%s\n' "${run_load_test}"
   printf 'classification_error=%s\n' "${classification_error}"
   printf 'changed_count=%s\n' "${changed_count}"
 }

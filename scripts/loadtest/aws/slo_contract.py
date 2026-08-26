@@ -52,8 +52,13 @@ def _require(condition: bool, message: str) -> None:
         raise SloContractError(message)
 
 
-def load_contract(path: Path | None = None) -> dict[str, Any]:
-    """Load and validate the frozen contract JSON."""
+def load_contract(path: Path | None = None, *, expected_version: str | None = None) -> dict[str, Any]:
+    """Load and validate a supported frozen or comparison candidate contract.
+
+    The default remains the historical v1.0 contract so existing recovery and
+    Compose consumers are byte-for-byte compatible.  Comparison runs pass an
+    explicit v1.1 candidate/frozen path at action time.
+    """
 
     contract_path = (path or CONTRACT_PATH).resolve()
     try:
@@ -65,8 +70,18 @@ def load_contract(path: Path | None = None) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise SloContractError("SLO contract must be a JSON object")
 
-    _require(payload.get("contractVersion") == "v1.0", "SLO contractVersion must be v1.0")
-    _require(payload.get("sloVersion") == "v1.0-frozen", "SLO sloVersion must be v1.0-frozen")
+    contract_version = payload.get("contractVersion")
+    slo_version = payload.get("sloVersion")
+    _require(
+        (contract_version, slo_version) in {
+            ("v1.0", "v1.0-frozen"),
+            ("v1.1", "v1.1-candidate"),
+            ("v1.1", "v1.1-frozen"),
+        },
+        "SLO contract must be v1.0-frozen or v1.1 candidate/frozen",
+    )
+    if expected_version is not None:
+        _require(slo_version == expected_version, f"SLO sloVersion must be {expected_version}")
     comparators = payload.get("comparators")
     _require(isinstance(comparators, dict), "SLO comparators must be an object")
     for name in (
@@ -110,6 +125,13 @@ def load_contract(path: Path | None = None) -> dict[str, Any]:
     _require(payload.get("spike", {}).get("sloPassRequired") is False, "Spike cannot be an SLO pass gate")
     _require(payload.get("r01", {}).get("unexpectedErrorCount") == 0, "R-01 unexpected error count must be zero")
     _require(payload.get("r01", {}).get("contractFailureCount") == 0, "R-01 contract failure count must be zero")
+    if contract_version == "v1.1":
+        comparison = payload.get("comparison")
+        _require(isinstance(comparison, dict), "v1.1 comparison section is missing")
+        _require(comparison.get("platforms") == ["ec2-asg", "eks"], "v1.1 comparison platforms must be EC2 ASG and EKS")
+        _require(comparison.get("sameInstanceFamily") == "t3.medium", "v1.1 comparison instance family must be t3.medium")
+        capacity_shape = comparison.get("sameCapacityShape")
+        _require(capacity_shape == {"min": 2, "desired": 2, "max": 4}, "v1.1 comparison capacity shape must be 2/2/4")
     return payload
 
 

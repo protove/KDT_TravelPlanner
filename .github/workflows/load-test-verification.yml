@@ -1,0 +1,52 @@
+name: Load Test Verification
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: load-test-verification-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Offline comparison contracts
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Validate JSON contracts and profiles
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          for path in [
+              Path('load-tests/aws/contracts/slo-v1.0.json'),
+              Path('load-tests/aws/contracts/slo-v1.1-candidate.json'),
+              Path('load-tests/aws/contracts/slo-v1.1-frozen.json'),
+              Path('load-tests/aws/profiles/ec2-eks-comparison-v1.1.json'),
+              Path('load-tests/aws/profiles/ec2-eks-recovery-v1.1.json'),
+          ]:
+              json.loads(path.read_text(encoding='utf-8'))
+              print(path)
+          PY
+
+      - name: Run AWS load-test contract tests
+        run: |
+          python3 -m unittest \
+            load-tests.tests.test_aws_slo_contract \
+            load-tests.tests.test_aws_load_profile \
+            load-tests.tests.test_aws_eks_target_adapter \
+            load-tests.tests.test_aws_recovery_coordinator
+
+      - name: Check shell and Python syntax
+        run: |
+          bash -n scripts/loadtest/aws/run-k6-aws-scenario.sh
+          bash -n scripts/loadtest/aws/run-aws-b01.sh
+          bash -n scripts/loadtest/aws/orchestrate-aws-b01.sh
+          python3 -m py_compile -q scripts/loadtest/aws/eks_target_adapter.py scripts/loadtest/aws/slo_contract.py
+          git diff --check

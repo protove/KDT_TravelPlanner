@@ -95,6 +95,15 @@ def validate(profile):
     _validate_mix_sums_to_100(request_mix["baseline"], "requestMix.baseline")
     if "spike" in request_mix:
         _validate_mix_sums_to_100(request_mix["spike"], "requestMix.spike")
+    if profile.get("profileVersion") == "aws-ec2-eks-comparison-v1.1":
+        _require(profile.get("sloVersion") in {"v1.1-candidate", "v1.1-frozen"}, "comparison profile must use the v1.1 contract")
+        for name in ("soak", "scale-step"):
+            _require(name in scenarios, f"scenarios.{name} is missing")
+            _require(scenarios[name].get("maxVUs", 0) <= max_vus, f"scenarios.{name}.maxVUs exceeds limits.maxVUs")
+        _require("normal" in request_mix, "requestMix.normal is missing")
+        _validate_mix_sums_to_100(request_mix["normal"], "requestMix.normal")
+        _require("soak" in request_mix, "requestMix.soak is missing")
+        _validate_mix_sums_to_100(request_mix["soak"], "requestMix.soak")
 
     return True
 
