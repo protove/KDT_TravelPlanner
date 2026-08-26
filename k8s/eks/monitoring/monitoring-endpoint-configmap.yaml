@@ -1,0 +1,9 @@
+# Deprecated compatibility sample. The canonical overlay uses private DNS
+# directly in Alloy and does not require an endpoint ConfigMap.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: monitoring-endpoint
+  namespace: travel-planner-monitoring
+data:
+  prometheusRemoteWriteUrl: "http://monitoring.dev-eks.kdt-travelplanner.internal:9090/api/v1/write"

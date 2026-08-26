@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: monitoring-endpoint
+  namespace: travel-planner-monitoring
+  labels:
+    app.kubernetes.io/name: monitoring-endpoint
+    app.kubernetes.io/part-of: travel-planner-monitoring
+  annotations:
+    travel-planner/ssm-parameter: "${monitoring_endpoint_parameter_name}"
+data:
+  prometheusRemoteWriteUrl: "http://monitoring.dev-eks.kdt-travelplanner.internal:9090/api/v1/write"

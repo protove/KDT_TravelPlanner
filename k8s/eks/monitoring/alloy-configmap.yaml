@@ -1,0 +1,32 @@
+# Local kustomize smoke sample. Terraform uploads the rendered equivalent
+# generated from alloy-configmap.yaml.tftpl and config.eks.alloy.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: alloy-config
+  namespace: travel-planner-monitoring
+data:
+  config.alloy: |
+    logging {
+      level = "info"
+    }
+    prometheus.remote_write "monitoring" {
+      endpoint {
+        url = "http://monitoring.dev-eks.kdt-travelplanner.internal:9090/api/v1/write"
+      }
+    }
+    discovery.kubernetes "pods" {
+      role = "pod"
+    }
+    discovery.relabel "annotated_pods" {
+      targets = discovery.kubernetes.pods.targets
+      rule {
+        source_labels = ["__meta_kubernetes_pod_annotation_prometheus_io_scrape"]
+        regex = "true"
+        action = "keep"
+      }
+    }
+    prometheus.scrape "annotated_pods" {
+      targets = discovery.relabel.annotated_pods.output
+      forward_to = [prometheus.remote_write.monitoring.receiver]
+    }
