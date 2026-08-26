@@ -13,7 +13,7 @@
   "googleApi": { "enabled": false },
   "k6Image": "REPLACE_WITH_DIGEST_PINNED_K6_IMAGE",
   "limits": {
-    "maxRate": 30,
+    "maxRate": 60,
     "maxVUs": 100,
     "maxDurationSeconds": 28800
   },
