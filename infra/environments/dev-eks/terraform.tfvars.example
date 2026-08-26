@@ -22,8 +22,8 @@ admin_principal_arns = [
   # "arn:aws:iam::123456789012:role/aws-reserved/sso.amazonaws.com/ap-northeast-2/AWSReservedSSO_<PermissionSetName>_<hash>",
 ]
 
-kubernetes_version      = "1.31"
-bastion_kubectl_version = "1.31.0"
+kubernetes_version      = "1.35"
+bastion_kubectl_version = "1.35.0"
 node_instance_types     = ["t3.medium"]
 node_min_size           = 1
 node_max_size           = 1
