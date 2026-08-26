@@ -115,6 +115,10 @@ function CommunityWriteContent() {
         setBodyJson(post.bodyJson);
         setTags(post.tags);
         setEditVersion(post.version);
+        // itinerarySnapshotJson은 PATCH 대상이 아닌 불변 값이라 서버로 다시 보내지는 않지만,
+        // 원래 붙어있던 일정 스냅샷 카드가 수정 화면에서 사라진 것처럼 보이면 안 되니 읽기전용으로
+        // 그대로 띄워둔다(작성 화면의 "이 일정으로 후기 쓰기" 흐름과 동일한 카드 재사용).
+        setItinerarySnapshot(post.itinerarySnapshotJson);
       })
       .catch(() => {
         if (!isCurrentRequest) return;
