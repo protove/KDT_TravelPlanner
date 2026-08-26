@@ -480,6 +480,7 @@ class Coordinator:
         self.detector_timeout_seconds = int(timing.get("detectorTimeoutSeconds", 900))
         self.run_end_timeout_seconds = int(timing.get("runEndTimeoutSeconds", 2400))
         self.minimum_window_ratio = float(timing.get("minimumWindowSuccessRatio", 0.9))
+        self._operator_recovery_event: dict[str, Any] | None = None
 
     # ----- runner helpers ---------------------------------------------------
 
@@ -521,6 +522,56 @@ class Coordinator:
         except (json.JSONDecodeError, IndexError) as error:
             raise CoordinatorError(f"live stats output is not JSON: {error}") from error
         return payload
+
+    def _read_operator_recovery_event(self) -> dict[str, Any] | None:
+        """Read the operator's post-T3 recovery marker without mutating it.
+
+        Recovery is intentionally a human decision.  A healthy target by
+        itself is not enough to advance T4 because an ASG/EKS controller can
+        become healthy again without the operator having cancelled the bad
+        refresh or restored the known-good image.  The separate
+        ``OPERATOR_RECOVERY`` event is therefore the explicit hand-off from
+        the operator to this coordinator.
+        """
+
+        if self._operator_recovery_event is not None:
+            return dict(self._operator_recovery_event)
+        _require(self.state.is_done("t3"), "manual operator recovery requires a recorded T3")
+        run_dir = self.config["runner"]["runDir"]
+        output = self._runner_shell(
+            [
+                "sh",
+                "-c",
+                "if [ -f {path} ]; then tail -n 200 {path}; fi".format(
+                    path=shlex.quote(run_dir + "/operations.jsonl")
+                ),
+            ],
+            timeout_seconds=90,
+            comment="operator-recovery-event",
+        )
+        t3_epoch = self.state.step_epoch("t3")
+        for raw_line in output.splitlines():
+            try:
+                entry = json.loads(raw_line)
+                if not isinstance(entry, dict):
+                    continue
+                event_time = datetime.fromisoformat(
+                    str(entry.get("ts", "")).replace("Z", "+00:00")
+                ).timestamp()
+            except (TypeError, ValueError, json.JSONDecodeError):
+                continue
+            if (
+                entry.get("event") == "OPERATOR_RECOVERY"
+                and entry.get("actor") == "operator"
+                and event_time >= t3_epoch
+            ):
+                self._operator_recovery_event = {
+                    "event": "OPERATOR_RECOVERY",
+                    "actor": "operator",
+                    "recordedAtUtc": utc_iso(event_time),
+                }
+                return dict(self._operator_recovery_event)
+        return None
 
     # ----- AWS detectors ----------------------------------------------------
 
@@ -833,6 +884,9 @@ class Coordinator:
             self.state.record_observation("operator-recovery", "not_observed", {"mode": "manual"})
 
             def probe() -> str | None:
+                operator_event = self._read_operator_recovery_event()
+                if operator_event is None:
+                    return None
                 health = self._target_health()
                 healthy = sum(state == "healthy" for state in health.values())
                 if self.platform == "eks":
@@ -841,7 +895,14 @@ class Coordinator:
                 else:
                     ready = healthy >= int(self.config.get("expectedHealthyTargets", 2))
                 if healthy >= int(self.config.get("expectedHealthyTargets", 2)) and ready:
-                    self.state.record_observation("operator-recovery", "observed", {"healthyTargets": healthy})
+                    self.state.record_observation(
+                        "operator-recovery",
+                        "observed",
+                        {
+                            "healthyTargets": healthy,
+                            "event": operator_event,
+                        },
+                    )
                     return "human operator recovery observed; automation issued no restore mutation"
                 return None
 

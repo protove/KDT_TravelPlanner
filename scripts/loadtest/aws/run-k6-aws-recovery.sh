@@ -12,13 +12,17 @@ RUN_DIR="${1:?usage: run-k6-aws-recovery.sh <run-dir>}"
 : "${RATE:?RATE is required}"
 : "${DATA_FILE:?DATA_FILE is required}"
 : "${EFFECTIVE_MAX_VUS:?EFFECTIVE_MAX_VUS is required}"
+TARGET_PLATFORM="${TARGET_PLATFORM:-ec2}"
 
 K6_DIR="$REPOSITORY_ROOT/load-tests/k6"
+CONTRACT_DIR="$REPOSITORY_ROOT/load-tests/aws/contracts"
 if [[ ! "$K6_IMAGE_DIGEST" =~ @sha256:[0-9a-fA-F]{64}$ ]]; then
   echo "K6_IMAGE_DIGEST must be digest-pinned" >&2
   exit 2
 fi
 [[ -f "$AWS_RECOVERY_PROFILE_FILE" ]] || { echo "missing Recovery profile: $AWS_RECOVERY_PROFILE_FILE" >&2; exit 2; }
+AWS_SLO_CONTRACT_FILE="${AWS_SLO_CONTRACT_FILE:-$CONTRACT_DIR/slo-v1.0.json}"
+[[ -f "$AWS_SLO_CONTRACT_FILE" ]] || { echo "missing SLO contract: $AWS_SLO_CONTRACT_FILE" >&2; exit 2; }
 [[ -f "$DATA_FILE" ]] || { echo "missing seeded credential file: $DATA_FILE" >&2; exit 2; }
 python3 - "$DATA_FILE" "$EFFECTIVE_MAX_VUS" <<'PY'
 import json
@@ -41,23 +45,24 @@ started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 git_sha="$(git -C "$REPOSITORY_ROOT" rev-parse HEAD)"
 measurement_sha="${MEASUREMENT_SOURCE_COMMIT_SHA:-$git_sha}"
 lineage_sha="${SOURCE_LINEAGE_SHA256:-}"
-python3 - "$RUN_DIR/metadata.json" "$RUN_ID" "$started_at" "$git_sha" "$measurement_sha" "$lineage_sha" "$K6_IMAGE_DIGEST" "$RATE" "$REGION" "$ENVIRONMENT" "$AWS_RECOVERY_PROFILE_FILE" <<'PY'
+python3 - "$RUN_DIR/metadata.json" "$RUN_ID" "$started_at" "$git_sha" "$measurement_sha" "$lineage_sha" "$K6_IMAGE_DIGEST" "$RATE" "$REGION" "$ENVIRONMENT" "$TARGET_PLATFORM" "$AWS_RECOVERY_PROFILE_FILE" <<'PY'
 import hashlib
 import json
 import sys
 from pathlib import Path
 
-output, run_id, started_at, commit_sha, measurement_sha, lineage_sha, image, rate, region, environment, profile_path = sys.argv[1:]
+output, run_id, started_at, commit_sha, measurement_sha, lineage_sha, image, rate, region, environment, platform, profile_path = sys.argv[1:]
 profile = json.loads(Path(profile_path).read_text(encoding="utf-8"))
 output_path = Path(output)
 metadata = {}
 if output_path.exists():
     metadata = json.loads(output_path.read_text(encoding="utf-8"))
+scenario_id = "AWS-RECOVERY-COMPARISON" if str(profile.get("sloVersion", "")).startswith("v1.1") else "AWS-RECOVERY"
 metadata.update({
     "runId": run_id,
-    "scenarioId": "AWS-RECOVERY",
+    "scenarioId": scenario_id,
     "scenario": "recovery-steady",
-    "platform": "ec2",
+    "platform": platform,
     "startedAtUtc": started_at,
     "target": "sanitized-approved-runtime-input",
     "region": region,
@@ -91,16 +96,21 @@ docker run -i --name "$container_name" \
   --cap-drop ALL \
   --security-opt no-new-privileges \
   -v "$K6_DIR:/scripts:ro" \
+  -v "$CONTRACT_DIR:/contracts:ro" \
   -v "$(dirname "$AWS_RECOVERY_PROFILE_FILE"):/profiles:ro" \
   -v "$DATA_FILE:/data/data.json:ro" \
   -v "$RUN_DIR:/out" \
   -e BASE_URL="$BASE_URL" \
   -e AWS_RECOVERY_PROFILE_FILE="/profiles/$(basename "$AWS_RECOVERY_PROFILE_FILE")" \
+  -e AWS_SLO_CONTRACT_FILE="/contracts/$(basename "$AWS_SLO_CONTRACT_FILE")" \
   -e DATA_FILE=/data/data.json \
   -e K6_IMAGE_DIGEST="$K6_IMAGE_DIGEST" \
   -e RATE="$RATE" \
+  -e TARGET_REGION="$REGION" \
+  -e TARGET_ENVIRONMENT="$ENVIRONMENT" \
   -e RUN_ID="$RUN_ID" \
   -e RUN_STARTED_AT="$started_at" \
+  -e TARGET_PLATFORM="$TARGET_PLATFORM" \
   -e OUT_DIR=/out \
   -e REQUIRED_UNIQUE_CREDENTIAL_COUNT="$EFFECTIVE_MAX_VUS" \
   -e REQUIRE_UNIQUE_CREDENTIALS=1 \

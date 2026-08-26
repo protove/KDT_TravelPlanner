@@ -54,7 +54,7 @@ locals {
     aws_region                     = var.aws_region
     cluster_name                   = module.eks_cluster.cluster_name
     alb_security_group_id          = aws_security_group.alb.id
-    bastion_instance_id            = data.aws_instance.bastion.id
+    bastion_instance_id            = aws_instance.bastion.id
     bundle_revision_sha256         = local.monitoring_bundle_revision
     vpc_id                         = data.terraform_remote_state.persistent.outputs.vpc_id
     public_subnet_ids              = data.terraform_remote_state.persistent.outputs.public_subnet_ids
@@ -78,27 +78,6 @@ data "terraform_remote_state" "persistent" {
     region       = var.aws_region
     use_lockfile = true
     encrypt      = true
-  }
-}
-
-# The retained Bastion may intentionally carry a user-data drift while an
-# artifact-only repair is staged. Resolve its current identity for the
-# non-secret deployment contract without making a bundle upload depend on a
-# Bastion replacement.
-data "aws_instance" "bastion" {
-  filter {
-    name   = "tag:Name"
-    values = ["${local.name}-eks-bastion"]
-  }
-
-  filter {
-    name   = "tag:Stack"
-    values = ["dev-eks"]
-  }
-
-  filter {
-    name   = "instance-state-name"
-    values = ["running"]
   }
 }
 

@@ -11,14 +11,19 @@ set -euo pipefail
 MODE="preflight"
 REPOSITORY_ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
 PROFILE="$REPOSITORY_ROOT/load-tests/aws/profiles/ec2-recovery.json"
+TARGET_PLATFORM=""
 RUN_ID=""
 REGION=""
 ENVIRONMENT=""
 EXPECTED_ACCOUNT_ID=""
 ALB_ARN=""
+TARGET_GROUP_ARN=""
 ASG_NAME=""
 LAUNCH_TEMPLATE_ID=""
 LAUNCH_TEMPLATE_VERSION=""
+CLUSTER_NAME=""
+NODE_GROUP_NAME=""
+EKS_BASTION_ID=""
 RUNNER_ID=""
 RUNNER_INSTANCE_TYPE="t3.small"
 BASE_URL=""
@@ -32,6 +37,7 @@ SOURCE_LINEAGE=""
 PROTECTED_EVIDENCE_MANIFEST=""
 B01_PROFILE=""
 BASELINE_CANDIDATE=""
+SLO_CONTRACT=""
 OBSERVABILITY_STATUS=""
 DRY_RUN=0
 EVENT=""
@@ -62,6 +68,14 @@ Required for every mode:
   --source-lineage PATH     split measurement/controller source contract
   --protected-evidence-manifest PATH  manifest of pre-existing evidence files
 
+Comparison v1.1 mode (selected with --target-platform or a v1.1 profile):
+  --target-platform PLATFORM  ec2 or eks
+  --target-group-arn ARN      exact approved ALB target-group ARN
+  --cluster-name NAME         required for EKS
+  --node-group-name NAME      required for EKS
+  --eks-bastion-id INSTANCE_ID required for EKS
+  --slo-contract PATH         v1.1 candidate/frozen contract (optional)
+
 Required for run:
   --k6-image IMAGE@sha256:DIGEST
   --data-file PATH          seeded credential file
@@ -69,7 +83,7 @@ Required for run:
 Optional:
   --runner-instance-type TYPE  default: t3.small
   --observability-status PATH   defaults to <run-dir>/monitoring/required-metrics.json
-  --event EVENT                 event mode: T0/T1/T2/T3/T4/T5
+  --event EVENT                 event mode: T0/T1/T2/T3/T4/T5 or OPERATOR_RECOVERY (v1.1)
   --detail TEXT                 sanitized event detail (max 200 chars)
   --dry-run                     print AWS read-only calls; never contact AWS
 USAGE
@@ -79,14 +93,19 @@ while [[ "$#" -gt 0 ]]; do
   case "$1" in
     preflight|run|event|evaluate) MODE="$1"; shift ;;
     --profile) PROFILE="$2"; shift 2 ;;
+    --target-platform) TARGET_PLATFORM="$2"; shift 2 ;;
     --run-id) RUN_ID="$2"; shift 2 ;;
     --region) REGION="$2"; shift 2 ;;
     --environment) ENVIRONMENT="$2"; shift 2 ;;
     --expected-account-id) EXPECTED_ACCOUNT_ID="$2"; shift 2 ;;
     --alb-arn) ALB_ARN="$2"; shift 2 ;;
+    --target-group-arn) TARGET_GROUP_ARN="$2"; shift 2 ;;
     --asg-name) ASG_NAME="$2"; shift 2 ;;
     --launch-template-id) LAUNCH_TEMPLATE_ID="$2"; shift 2 ;;
     --launch-template-version) LAUNCH_TEMPLATE_VERSION="$2"; shift 2 ;;
+    --cluster-name) CLUSTER_NAME="$2"; shift 2 ;;
+    --node-group-name) NODE_GROUP_NAME="$2"; shift 2 ;;
+    --eks-bastion-id) EKS_BASTION_ID="$2"; shift 2 ;;
     --runner-id) RUNNER_ID="$2"; shift 2 ;;
     --runner-instance-type) RUNNER_INSTANCE_TYPE="$2"; shift 2 ;;
     --base-url) BASE_URL="$2"; shift 2 ;;
@@ -97,6 +116,7 @@ while [[ "$#" -gt 0 ]]; do
     --d005-rate-file) D005_RATE_FILE="$2"; shift 2 ;;
     --b01-profile) B01_PROFILE="$2"; shift 2 ;;
     --baseline-candidate) BASELINE_CANDIDATE="$2"; shift 2 ;;
+    --slo-contract) SLO_CONTRACT="$2"; shift 2 ;;
     --source-sha) SOURCE_SHA="$2"; shift 2 ;;
     --source-lineage) SOURCE_LINEAGE="$2"; shift 2 ;;
     --protected-evidence-manifest) PROTECTED_EVIDENCE_MANIFEST="$2"; shift 2 ;;
@@ -108,6 +128,349 @@ while [[ "$#" -gt 0 ]]; do
     *) echo "unknown option: $1" >&2; usage >&2; exit 2 ;;
   esac
 done
+
+modern_profile=0
+if [[ -n "$TARGET_PLATFORM" || "$PROFILE" == *ec2-eks-recovery-v1.1.json* || "$PROFILE" == *ec2-eks-comparison-v1.1.json* ]]; then
+  modern_profile=1
+fi
+
+modern_usage_error() {
+  echo "v1.1 comparison mode requires --target-platform ec2|eks, --target-group-arn and action-time target inputs" >&2
+  exit 2
+}
+
+modern_aws_json() {
+  if [[ "$DRY_RUN" == "1" ]]; then
+    echo '{}'
+    return 0
+  fi
+  aws "$@" --region "$REGION" --output json
+}
+
+write_modern_immutable() {
+  local path="$1"
+  local content="$2"
+  if [[ -e "$path" ]]; then
+    local existing
+    existing="$(<"$path")"
+    [[ "$existing" == "$content" ]] || {
+      echo "refusing to overwrite immutable comparison evidence: $path" >&2
+      exit 2
+    }
+    return 0
+  fi
+  printf '%s\n' "$content" > "$path"
+}
+
+record_modern_operator_event() {
+  local run_dir="$1"
+  local detail="$2"
+  python3 - "$run_dir" "$detail" <<'PY'
+import json
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+run_dir, detail = sys.argv[1:]
+entry = {
+    "ts": datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z"),
+    "event": "OPERATOR_RECOVERY",
+    "detail": " ".join(detail.split())[:200],
+    "actor": "operator",
+}
+with (Path(run_dir) / "operations.jsonl").open("a", encoding="utf-8") as output:
+    output.write(json.dumps(entry, ensure_ascii=False) + "\n")
+print(f"[event] {entry['ts']} OPERATOR_RECOVERY")
+PY
+}
+
+modern_validate_inputs() {
+  [[ -n "$RUN_ID" && -n "$REGION" && -n "$ENVIRONMENT" && -n "$EXPECTED_ACCOUNT_ID" \
+    && -n "$ALB_ARN" && -n "$TARGET_GROUP_ARN" && -n "$RUNNER_ID" \
+    && -n "$BASE_URL" && -n "$RATE" && -n "$SOURCE_SHA" ]] || modern_usage_error
+  [[ "$TARGET_PLATFORM" == "ec2" || "$TARGET_PLATFORM" == "eks" ]] || modern_usage_error
+  [[ "$RUN_ID" =~ ^scrum43-(r01|r03|r05|r07)-[A-Za-z0-9._-]+$ ]] || {
+    echo "comparison --run-id must use scrum43-r01/r03/r05/r07 prefix" >&2
+    exit 2
+  }
+  [[ "$EXPECTED_ACCOUNT_ID" =~ ^[0-9]{12}$ ]] || { echo "--expected-account-id must be exactly 12 digits" >&2; exit 2; }
+  [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "--source-sha must be a 40-character lowercase commit SHA" >&2; exit 2; }
+  [[ "$RUNNER_ID" =~ ^i-[0-9a-f]{8,32}$ ]] || { echo "--runner-id must be an EC2 instance ID" >&2; exit 2; }
+  [[ "$BASE_URL" =~ ^https://[^/]+$ && "$BASE_URL" != *amazonaws.com* ]] || {
+    echo "--base-url must be a custom HTTPS origin, not an AWS DNS name" >&2
+    exit 2
+  }
+  [[ "$TARGET_GROUP_ARN" =~ ^arn:aws:elasticloadbalancing:[a-z0-9-]+:[0-9]{12}:targetgroup/.+/.+$ ]] || {
+    echo "--target-group-arn must be an exact ALB target-group ARN" >&2
+    exit 2
+  }
+  if [[ "$TARGET_PLATFORM" == "ec2" ]]; then
+    [[ -n "$ASG_NAME" && -n "$LAUNCH_TEMPLATE_ID" && -n "$LAUNCH_TEMPLATE_VERSION" ]] || modern_usage_error
+    [[ "$LAUNCH_TEMPLATE_ID" =~ ^lt-[0-9a-f]+$ && "$LAUNCH_TEMPLATE_VERSION" =~ ^[0-9]+$ ]] || {
+      echo "EC2 Launch Template ID/version is invalid" >&2
+      exit 2
+    }
+  else
+    [[ -n "$CLUSTER_NAME" && -n "$NODE_GROUP_NAME" && -n "$EKS_BASTION_ID" ]] || modern_usage_error
+    [[ "$EKS_BASTION_ID" =~ ^i-[0-9a-f]{8,32}$ ]] || { echo "--eks-bastion-id must be an EC2 instance ID" >&2; exit 2; }
+  fi
+  [[ -f "$PROFILE" ]] || { echo "comparison Recovery profile does not exist: $PROFILE" >&2; exit 2; }
+  python3 "$REPOSITORY_ROOT/scripts/loadtest/aws/validate-aws-recovery-profile.py" "$PROFILE"
+  python3 - "$PROFILE" "$RATE" "$SLO_CONTRACT" <<'PY'
+import json
+import math
+import sys
+from pathlib import Path
+
+profile_path, rate_raw, contract_path = sys.argv[1:]
+profile = json.loads(Path(profile_path).read_text(encoding="utf-8"))
+if profile.get("sloVersion") not in {"v1.1-candidate", "v1.1-frozen"}:
+    raise SystemExit("comparison Recovery profile must use the v1.1 candidate/frozen contract")
+try:
+    rate = float(rate_raw)
+except ValueError as error:
+    raise SystemExit("--rate must be a finite positive number") from error
+if not math.isfinite(rate) or rate <= 0 or rate > float(profile["limits"]["maxRate"]):
+    raise SystemExit("--rate must be positive and within comparison profile limits.maxRate")
+if contract_path:
+    contract = json.loads(Path(contract_path).read_text(encoding="utf-8"))
+    if contract.get("sloVersion") not in {"v1.1-candidate", "v1.1-frozen"}:
+        raise SystemExit("--slo-contract must be a v1.1 candidate/frozen contract")
+PY
+  if [[ "$(git -C "$REPOSITORY_ROOT" rev-parse HEAD)" != "$SOURCE_SHA" ]]; then
+    echo "repository HEAD does not match --source-sha" >&2
+    exit 2
+  fi
+}
+
+modern_target_preflight() {
+  local account alb tags target_groups target_health runner runner_tags platform_payload
+  local nodegroup='{}' bastion='{}'
+  mkdir -p "$RUN_DIR"
+  account="dry-run"
+  if [[ "$DRY_RUN" != "1" ]]; then
+    account="$(aws sts get-caller-identity --region "$REGION" --query Account --output text)"
+    [[ "$account" == "$EXPECTED_ACCOUNT_ID" ]] || { echo "observed AWS account does not match --expected-account-id" >&2; exit 1; }
+  fi
+  alb="$(modern_aws_json elbv2 describe-load-balancers --load-balancer-arns "$ALB_ARN")"
+  tags="$(modern_aws_json elbv2 describe-tags --resource-arns "$ALB_ARN")"
+  target_groups="$(modern_aws_json elbv2 describe-target-groups --load-balancer-arn "$ALB_ARN")"
+  runner="$(modern_aws_json ec2 describe-instances --instance-ids "$RUNNER_ID")"
+  runner_tags="$(modern_aws_json ec2 describe-tags --filters "Name=resource-id,Values=$RUNNER_ID" "Name=resource-type,Values=instance")"
+  if [[ "$DRY_RUN" == "1" ]]; then
+    target_health='{"status":"dry-run"}'
+  else
+    target_health="$(aws elbv2 describe-target-health --target-group-arn "$TARGET_GROUP_ARN" --region "$REGION" --output json)"
+  fi
+  if [[ "$TARGET_PLATFORM" == "ec2" ]]; then
+    platform_payload="$(modern_aws_json autoscaling describe-auto-scaling-groups --auto-scaling-group-names "$ASG_NAME")"
+  else
+    nodegroup="$(modern_aws_json eks describe-nodegroup --cluster-name "$CLUSTER_NAME" --nodegroup-name "$NODE_GROUP_NAME")"
+    bastion="$(modern_aws_json ec2 describe-instances --instance-ids "$EKS_BASTION_ID")"
+    platform_payload="$nodegroup"
+  fi
+  python3 - "$alb" "$tags" "$target_groups" "$target_health" "$runner" "$runner_tags" "$platform_payload" "$bastion" \
+    "$PROFILE" "$TARGET_PLATFORM" "$ALB_ARN" "$TARGET_GROUP_ARN" "$ASG_NAME" "$LAUNCH_TEMPLATE_ID" "$LAUNCH_TEMPLATE_VERSION" \
+    "$RUNNER_ID" "$RUNNER_INSTANCE_TYPE" "$CLUSTER_NAME" "$NODE_GROUP_NAME" "$EKS_BASTION_ID" "$DRY_RUN" <<'PY'
+import ipaddress
+import json
+import sys
+from pathlib import Path
+
+(alb_raw, tags_raw, groups_raw, health_raw, runner_raw, runner_tags_raw, platform_raw, bastion_raw,
+ profile_path, platform, alb_arn, target_group_arn, asg_name, lt_id, lt_version, runner_id,
+ runner_type, cluster_name, node_group_name, bastion_id, dry_run) = sys.argv[1:]
+if dry_run == "1":
+    raise SystemExit(0)
+def load(raw, label):
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError as error:
+        raise SystemExit(f"{label} is not JSON") from error
+    if not isinstance(value, dict):
+        raise SystemExit(f"{label} must be an object")
+    return value
+profile = load(Path(profile_path).read_text(encoding="utf-8"), "profile")
+alb = load(alb_raw, "ALB")
+lbs = alb.get("LoadBalancers", [])
+if len(lbs) != 1 or lbs[0].get("LoadBalancerArn") != alb_arn:
+    raise SystemExit("ALB did not resolve to the exact approved ARN")
+tag_items = load(tags_raw, "ALB tags").get("TagDescriptions", [])
+alb_tags = {item.get("Key"): item.get("Value") for item in (tag_items[0].get("Tags", []) if tag_items else [])}
+for key, value in profile["target"].get("expectedTags", {}).items():
+    if alb_tags.get(key) != value:
+        raise SystemExit(f"ALB tag {key} does not match the comparison contract")
+groups = load(groups_raw, "target groups").get("TargetGroups", [])
+matches = [item for item in groups if item.get("TargetGroupArn") == target_group_arn]
+expected_target_type = "ip" if platform == "eks" else "instance"
+if len(matches) != 1 or matches[0].get("TargetType") != expected_target_type:
+    raise SystemExit("target group ARN/type does not match the exact approved ALB target")
+health = load(health_raw, "target health").get("TargetHealthDescriptions", [])
+if not any(item.get("TargetHealth", {}).get("State") == "healthy" for item in health):
+    raise SystemExit("approved target group has no healthy target")
+runner = load(runner_raw, "runner")
+instances = [instance for reservation in runner.get("Reservations", []) for instance in reservation.get("Instances", [])]
+if len(instances) != 1 or instances[0].get("InstanceId") != runner_id or instances[0].get("State", {}).get("Name") != "running":
+    raise SystemExit("Runner did not resolve to one running approved instance")
+if instances[0].get("InstanceType") != runner_type:
+    raise SystemExit("Runner instance type does not match --runner-instance-type")
+runner_expected = profile["runner"].get("expectedTags", {})
+runner_tags = {item.get("Key"): item.get("Value") for item in load(runner_tags_raw, "runner tags").get("Tags", [])}
+for key, value in runner_expected.items():
+    if runner_tags.get(key) != value:
+        raise SystemExit(f"Runner tag {key} does not match the comparison contract")
+if platform == "ec2":
+    group_items = load(platform_raw, "ASG").get("AutoScalingGroups", [])
+    if len(group_items) != 1 or group_items[0].get("AutoScalingGroupName") != asg_name:
+        raise SystemExit("ASG did not resolve to the exact approved name")
+    group = group_items[0]
+    if (group.get("MinSize"), group.get("DesiredCapacity"), group.get("MaxSize")) != (2, 2, 4):
+        raise SystemExit("EC2 ASG capacity must be 2/2/4")
+    template = group.get("LaunchTemplate") or {}
+    if template.get("LaunchTemplateId") != lt_id or str(template.get("Version")) != lt_version:
+        raise SystemExit("ASG Launch Template ID/version does not match approved inputs")
+    asg_tags = {item.get("Key"): item.get("Value") for item in group.get("Tags", [])}
+    for key, value in profile["backend"].get("expectedTags", {}).items():
+        if asg_tags.get(key) != value:
+            raise SystemExit(f"ASG tag {key} does not match the comparison contract")
+    asg_instances = {item.get("InstanceId") for item in group.get("Instances", [])}
+    healthy = {item.get("Target", {}).get("Id") for item in health if item.get("TargetHealth", {}).get("State") == "healthy"}
+    if not healthy.issubset(asg_instances):
+        raise SystemExit("healthy ALB targets are not all members of the approved ASG")
+else:
+    node = load(platform_raw, "EKS node group").get("nodegroup", {})
+    if node.get("clusterName") != cluster_name or node.get("nodegroupName") != node_group_name or node.get("status") != "ACTIVE":
+        raise SystemExit("EKS node group identity/status does not match the approved target")
+    scaling = node.get("scalingConfig", {})
+    if (scaling.get("minSize"), scaling.get("desiredSize"), scaling.get("maxSize")) != (2, 2, 4):
+        raise SystemExit("EKS node group capacity must be 2/2/4")
+    backing = (node.get("resources") or {}).get("autoScalingGroups") or []
+    if len(backing) != 1 or not backing[0].get("name"):
+        raise SystemExit("EKS node group must expose exactly one backing ASG")
+    for item in health:
+        target = (item.get("Target") or {}).get("Id")
+        if not isinstance(target, str):
+            raise SystemExit("EKS target health contains a missing target ID")
+        try:
+            address = ipaddress.ip_address(target)
+        except ValueError as error:
+            raise SystemExit("EKS ALB targets must be Pod IPs, never EC2 IDs") from error
+        if address.is_loopback or address.is_unspecified:
+            raise SystemExit("EKS target IP is not routable")
+    bastion = load(bastion_raw, "EKS bastion")
+    bastion_instances = [instance for reservation in bastion.get("Reservations", []) for instance in reservation.get("Instances", [])]
+    if len(bastion_instances) != 1 or bastion_instances[0].get("InstanceId") != bastion_id or bastion_instances[0].get("State", {}).get("Name") != "running":
+        raise SystemExit("EKS bastion did not resolve to one running approved instance")
+PY
+  write_modern_immutable "$RUN_DIR/aws-alb.json" "$alb"
+  write_modern_immutable "$RUN_DIR/aws-target-groups.json" "$target_groups"
+  write_modern_immutable "$RUN_DIR/aws-target-health.json" "$target_health"
+  write_modern_immutable "$RUN_DIR/aws-runner.json" "$runner"
+  write_modern_immutable "$RUN_DIR/aws-runner-tags.json" "$runner_tags"
+  write_modern_immutable "$RUN_DIR/aws-platform.json" "$platform_payload"
+  if [[ "$TARGET_PLATFORM" == "eks" ]]; then
+    write_modern_immutable "$RUN_DIR/aws-bastion.json" "$bastion"
+  fi
+  python3 - "$RUN_DIR/metadata.json" "$RUN_ID" "$PROFILE" "$SLO_CONTRACT" "$REGION" "$ENVIRONMENT" "$TARGET_PLATFORM" "$RATE" "$BASE_URL" "$EXPECTED_ACCOUNT_ID" "$SOURCE_SHA" "$ALB_ARN" "$TARGET_GROUP_ARN" "$ASG_NAME" "$LAUNCH_TEMPLATE_ID" "$LAUNCH_TEMPLATE_VERSION" "$RUNNER_ID" "$CLUSTER_NAME" "$NODE_GROUP_NAME" "$EKS_BASTION_ID" <<'PY'
+import hashlib
+import json
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+(output, run_id, profile_path, contract_path, region, environment, platform, rate, base_url, account,
+ source_sha, alb_arn, target_group_arn, asg_name, lt_id, lt_version, runner_id, cluster_name,
+ node_group_name, bastion_id) = sys.argv[1:]
+profile_sha = hashlib.sha256(Path(profile_path).read_bytes()).hexdigest()
+contract_sha = hashlib.sha256(Path(contract_path).read_bytes()).hexdigest() if contract_path else None
+metadata = {
+    "runId": run_id,
+    "scenarioId": "AWS-RECOVERY-COMPARISON",
+    "platform": platform,
+    "environment": environment,
+    "region": region,
+    "baseUrl": base_url,
+    "rate": float(rate),
+    "sloVersion": "v1.1-candidate",
+    "profileSha256": profile_sha,
+    "sourceCommitSha": source_sha,
+    "controllerSourceCommitSha": source_sha,
+    "measurementSourceCommitSha": source_sha,
+    "aws": {
+        "accountIdLast4": account[-4:],
+        "accountIdSha256": hashlib.sha256(account.encode()).hexdigest(),
+        "albArnSha256": hashlib.sha256(alb_arn.encode()).hexdigest(),
+        "targetGroupArnSha256": hashlib.sha256(target_group_arn.encode()).hexdigest(),
+        "runnerInstanceId": runner_id,
+    },
+}
+if contract_sha:
+    metadata["sloContractSha256"] = contract_sha
+if platform == "ec2":
+    metadata["aws"].update({"autoScalingGroupName": asg_name, "launchTemplateId": lt_id, "launchTemplateVersion": lt_version})
+else:
+    metadata["aws"].update({"clusterName": cluster_name, "nodeGroupName": node_group_name, "bastionInstanceId": bastion_id})
+path = Path(output)
+if path.exists():
+    existing = json.loads(path.read_text(encoding="utf-8"))
+    for key, value in metadata.items():
+        if existing.get(key) != value:
+            raise SystemExit(f"refusing to overwrite immutable comparison metadata: {key}")
+    if not existing.get("startedAtUtc"):
+        raise SystemExit("comparison metadata has no startedAtUtc")
+else:
+    metadata["startedAtUtc"] = datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+    path.write_text(json.dumps(metadata, indent=2) + chr(10), encoding="utf-8")
+PY
+  if [[ "$DRY_RUN" != "1" && ! -f "$RUN_DIR/operations.jsonl" ]]; then
+    python3 "$REPOSITORY_ROOT/scripts/loadtest/record-rehearsal-event.py" "$RUN_DIR" RUN_START "comparison Recovery preflight passed; workload may start" --actor automation
+  fi
+  echo "[recovery] comparison preflight passed: platform=$TARGET_PLATFORM run=$RUN_ID evidence=$RUN_DIR"
+}
+
+modern_main() {
+  modern_validate_inputs
+  RUN_DIR="${AWS_RECOVERY_EVIDENCE_BASE:-$REPOSITORY_ROOT/evidence/aws-recovery}/$RUN_ID"
+  case "$MODE" in
+    preflight)
+      modern_target_preflight
+      ;;
+    run)
+      [[ -n "$K6_IMAGE" && -f "$DATA_FILE" ]] || { echo "--k6-image and --data-file are required for comparison run" >&2; exit 2; }
+      [[ "$K6_IMAGE" =~ @sha256:[0-9a-fA-F]{64}$ ]] || { echo "--k6-image must be digest-pinned" >&2; exit 2; }
+      modern_target_preflight
+      export REPOSITORY_ROOT BASE_URL RUN_ID REGION ENVIRONMENT RATE DATA_FILE TARGET_PLATFORM
+      export K6_IMAGE_DIGEST="$K6_IMAGE" AWS_RECOVERY_PROFILE_FILE="$PROFILE"
+      export AWS_SLO_CONTRACT_FILE="${SLO_CONTRACT:-$REPOSITORY_ROOT/load-tests/aws/contracts/slo-v1.1-candidate.json}"
+      EFFECTIVE_MAX_VUS="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["recovery"]["maxVUs"])' "$PROFILE")"
+      export EFFECTIVE_MAX_VUS
+      export RUN_DIR
+      "$REPOSITORY_ROOT/scripts/loadtest/aws/run-aws-recovery-workload.sh" "$RUN_DIR"
+      ;;
+    event)
+      [[ "$EVENT" == "OPERATOR_RECOVERY" ]] || { echo "comparison event mode accepts only --event OPERATOR_RECOVERY" >&2; exit 2; }
+      [[ -f "$RUN_DIR/metadata.json" ]] || { echo "comparison run has not passed preflight" >&2; exit 2; }
+      local newline detail
+      newline=$'\n'
+      [[ "${#EVENT_DETAIL}" -le 200 && "$EVENT_DETAIL" != *"$newline"* ]] || { echo "--detail must be one line of at most 200 characters" >&2; exit 2; }
+      detail="${EVENT_DETAIL:-manual cancel/restore completed}"
+      record_modern_operator_event "$RUN_DIR" "$detail"
+      ;;
+    evaluate)
+      echo "comparison v1.1 does not use the v1.0 Recovery evaluator; run the per-phase validator instead" >&2
+      exit 2
+      ;;
+    *)
+      echo "unsupported comparison mode: $MODE" >&2
+      exit 2
+      ;;
+  esac
+}
+
+if [[ "$modern_profile" == "1" ]]; then
+  modern_main
+  exit $?
+fi
 
 for required in RUN_ID REGION ENVIRONMENT EXPECTED_ACCOUNT_ID ALB_ARN ASG_NAME LAUNCH_TEMPLATE_ID LAUNCH_TEMPLATE_VERSION RUNNER_ID BASE_URL RATE FREEZE_METADATA D005_RATE_FILE SOURCE_SHA B01_PROFILE BASELINE_CANDIDATE; do
   if [[ -z "${!required}" ]]; then
@@ -568,14 +931,15 @@ case "$MODE" in
     export REPOSITORY_ROOT BASE_URL RUN_ID REGION ENVIRONMENT RATE DATA_FILE
     export MEASUREMENT_SOURCE_COMMIT_SHA="$MEASUREMENT_SOURCE_SHA" SOURCE_LINEAGE_SHA256
     export K6_IMAGE_DIGEST="$K6_IMAGE" AWS_RECOVERY_PROFILE_FILE="$PROFILE"
-    export EFFECTIVE_MAX_VUS="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["recovery"]["maxVUs"])' "$PROFILE")"
+    EFFECTIVE_MAX_VUS="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["recovery"]["maxVUs"])' "$PROFILE")"
+    export EFFECTIVE_MAX_VUS
     export RUN_DIR
     "$REPOSITORY_ROOT/scripts/loadtest/aws/run-aws-recovery-workload.sh" "$RUN_DIR"
     ;;
   event)
     [[ "$EVENT" =~ ^(T0|T1|T2|T3|T4|T5)$ ]] || { echo "--event must be one of T0/T1/T2/T3/T4/T5" >&2; exit 2; }
     [[ -f "$RUN_DIR/metadata.json" ]] || { echo "run has not passed preflight" >&2; exit 2; }
-    newline="$(printf '\012')"
+    newline=$'\n'
     if [[ "${#EVENT_DETAIL}" -gt 200 || "$EVENT_DETAIL" == *"$newline"* ]]; then
       echo "--detail must be a single line of at most 200 characters" >&2
       exit 2

@@ -22,7 +22,7 @@ function loadProfile() {
 }
 
 function loadSloContract() {
-  const contractPath = '../../aws/contracts/slo-v1.0.json';
+  const contractPath = __ENV.AWS_SLO_CONTRACT_FILE || '../../aws/contracts/slo-v1.0.json';
   let raw;
   try {
     raw = open(contractPath);
@@ -35,8 +35,11 @@ function loadSloContract() {
   } catch (error) {
     fail(`SLO contract file is not valid JSON: ${contractPath}`);
   }
-  if (contract.contractVersion !== 'v1.0' || contract.sloVersion !== 'v1.0-frozen') {
-    fail('SLO contract must be contractVersion=v1.0 and sloVersion=v1.0-frozen');
+  const supported = (contract.contractVersion === 'v1.0' && contract.sloVersion === 'v1.0-frozen')
+    || (contract.contractVersion === 'v1.1'
+      && ['v1.1-candidate', 'v1.1-frozen'].includes(contract.sloVersion));
+  if (!supported) {
+    fail('SLO contract must be v1.0-frozen or v1.1 candidate/frozen');
   }
   return contract;
 }
@@ -74,8 +77,9 @@ function positiveNumber(value, label) {
 export const BASE_URL = baseUrl;
 export const API = `${BASE_URL}/api/v1`;
 export const K6_IMAGE_DIGEST = image;
-export const ENVIRONMENT = LOADED_PROFILE.environment || fail('environment is missing');
-export const REGION = LOADED_PROFILE.region || fail('region is missing');
+export const ENVIRONMENT = __ENV.TARGET_ENVIRONMENT || LOADED_PROFILE.environment || fail('environment is missing');
+export const REGION = __ENV.TARGET_REGION || LOADED_PROFILE.region || fail('region is missing');
+export const PLATFORM = __ENV.TARGET_PLATFORM || LOADED_PROFILE.platform || 'ec2';
 export const SLO_VERSION = LOADED_PROFILE.sloVersion || fail('sloVersion is missing');
 export const SLO_CONTRACT_VERSION = SLO_CONTRACT.sloVersion;
 export const SEED_VERSION = LOADED_PROFILE.seedVersion || fail('seedVersion is missing');

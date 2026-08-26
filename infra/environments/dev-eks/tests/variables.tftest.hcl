@@ -393,6 +393,18 @@ run "cluster_is_private_by_default_with_no_admin_entries" {
   }
 }
 
+run "fresh_plan_uses_the_planned_bastion_identity" {
+  command = plan
+
+  assert {
+    condition = (
+      aws_instance.bastion.id != null &&
+      jsondecode(local.deployment_contract_json).bastion_instance_id == aws_instance.bastion.id
+    )
+    error_message = "A fresh empty-State dev-eks plan must derive the deployment contract from the Bastion it creates, not from a pre-existing data lookup."
+  }
+}
+
 run "monitoring_sg_is_private_and_cluster_scoped" {
   command = plan
 

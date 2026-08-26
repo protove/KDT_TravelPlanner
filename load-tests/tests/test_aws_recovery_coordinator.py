@@ -47,6 +47,8 @@ class FakeSsm:
         self.comments: list[str] = []
         self.stats_queue: list[dict] = []
         self.run_end_queue: list[str] = ["present"]
+        self.operator_event: dict | None = None
+        self.eks_snapshot_queue: list[dict[str, dict]] = []
         self.fail_comments: set[str] = set()
 
     def run(self, command: str, *, timeout_seconds: int = 120, comment: str = "") -> str:
@@ -72,6 +74,20 @@ class FakeSsm:
             detail = command.split(" ")[-3] if event else ""
             self.events.append((event, command))
             return f"[event] {event}"
+        if comment == "operator-recovery-event":
+            if not self.operator_event:
+                return ""
+            return json.dumps(self.operator_event)
+        if comment == "eks-platform-snapshot":
+            snapshot = self.eks_snapshot_queue.pop(0) if self.eks_snapshot_queue else {}
+            sections = []
+            for key, payload in snapshot.items():
+                sections.extend([
+                    f"__SCRUM53_{key.upper()}_BEGIN__",
+                    json.dumps(payload),
+                    f"__SCRUM53_{key.upper()}_END__",
+                ])
+            return "\n".join(sections)
         if comment == "run-end-check":
             return self.run_end_queue.pop(0) if self.run_end_queue else "present"
         raise AssertionError(f"unrouted SSM comment: {comment}")
@@ -103,6 +119,15 @@ class FakeAws:
             return {"InstanceRefreshes": refreshes}
         if tuple(args[:2]) == ("autoscaling", "describe-auto-scaling-groups"):
             return {"AutoScalingGroups": [dict(self.asg_capacity)]}
+        if tuple(args[:2]) == ("eks", "describe-nodegroup"):
+            return {
+                "nodegroup": {
+                    "clusterName": "kdt-travelplanner-dev-eks",
+                    "nodegroupName": "kdt-travelplanner-dev-eks-nodes",
+                    "status": "ACTIVE",
+                    "scalingConfig": {"minSize": 2, "desiredSize": 2, "maxSize": 4},
+                }
+            }
         raise AssertionError(f"unrouted AWS call: {args[:2]}")
 
 
@@ -359,6 +384,20 @@ class StateMachineTests(unittest.TestCase):
             with self.assertRaisesRegex(MODULE.CoordinatorError, "runId"):
                 MODULE.CoordinatorState(path, "aws-b02-test-2", "B-02", FakeClock())
 
+    def test_observation_can_record_skipped_platform_state_without_a_step_gap(self) -> None:
+        with TemporaryDirectory() as raw:
+            directory = Path(raw)
+            state = MODULE.CoordinatorState(
+                directory / "state.json", "aws-b02-test-1", "B-02", FakeClock()
+            )
+            state.record_observation("asg-activities", "not_observed", {"reason": "poll interval"})
+            state.record_observation("asg-activities", "observed", {"terminal": "replacement-healthy"})
+            state.record("preflight")
+            self.assertEqual(
+                [item["status"] for item in state.observations], ["not_observed", "observed"]
+            )
+            self.assertTrue(state.is_done("preflight"))
+
 
 class MutationGateTests(unittest.TestCase):
     def test_t1_refuses_without_pre_t1_window(self) -> None:
@@ -498,12 +537,82 @@ class ScenarioDetectorTests(unittest.TestCase):
             directory = Path(raw)
             config = base_config(directory, scenario="R-03", run_id="aws-r03-test-1")
             coordinator, aws, ssm, mutations, clock, state = build_coordinator(directory, config)
+            state.record("preflight")
+            state.record("workload-start")
+            state.record("warmup")
+            state.record("t0")
+            state.record("pre-t1-window")
+            state.record("t1")
+            state.record("t2")
+            state.record("t3")
+            ssm.operator_event = {
+                "ts": utc(clock),
+                "event": "OPERATOR_RECOVERY",
+                "detail": "refresh cancelled and known-good image restored",
+                "actor": "operator",
+            }
             aws.target_health_queue = [{
                 "i-0bbbbbbbbbbbbbbb2": "healthy",
                 "i-0ccccccccccccccc3": "healthy",
             }]
             detail = coordinator._detect_t4()
             self.assertIn("human operator recovery", detail)
+            self.assertEqual(mutations.executed, [])
+
+    def test_r03_t4_does_not_advance_on_health_without_operator_event(self) -> None:
+        with TemporaryDirectory() as raw:
+            directory = Path(raw)
+            config = base_config(directory, scenario="R-03", run_id="aws-r03-test-2")
+            coordinator, aws, ssm, mutations, clock, state = build_coordinator(directory, config)
+            for step in ("preflight", "workload-start", "warmup", "t0", "pre-t1-window", "t1", "t2", "t3"):
+                state.record(step)
+            aws.target_health_queue = [{
+                "i-0bbbbbbbbbbbbbbb2": "healthy",
+                "i-0ccccccccccccccc3": "healthy",
+            }]
+            coordinator.detector_timeout_seconds = 0
+            with self.assertRaisesRegex(MODULE.CoordinatorError, "detector timed out"):
+                coordinator._detect_t4()
+            self.assertEqual(mutations.executed, [])
+
+    def test_r03_t4_rejects_automation_actor_even_when_targets_are_healthy(self) -> None:
+        with TemporaryDirectory() as raw:
+            directory = Path(raw)
+            config = base_config(directory, scenario="R-03", run_id="aws-r03-test-3")
+            coordinator, aws, ssm, mutations, clock, state = build_coordinator(directory, config)
+            for step in ("preflight", "workload-start", "warmup", "t0", "pre-t1-window", "t1", "t2", "t3"):
+                state.record(step)
+            ssm.operator_event = {"ts": utc(clock), "event": "OPERATOR_RECOVERY", "actor": "automation"}
+            aws.target_health_queue = [{
+                "i-0bbbbbbbbbbbbbbb2": "healthy",
+                "i-0ccccccccccccccc3": "healthy",
+            }]
+            coordinator.detector_timeout_seconds = 0
+            with self.assertRaisesRegex(MODULE.CoordinatorError, "detector timed out"):
+                coordinator._detect_t4()
+            self.assertEqual(mutations.executed, [])
+
+    def test_eks_readiness_uses_platform_snapshot_and_never_issues_restore(self) -> None:
+        with TemporaryDirectory() as raw:
+            directory = Path(raw)
+            config = base_config(directory, scenario="R-03", run_id="aws-r03-eks-test-1")
+            config["platform"] = "eks"
+            config["target"] = {
+                "clusterName": "kdt-travelplanner-dev-eks",
+                "nodeGroupName": "kdt-travelplanner-dev-eks-nodes",
+                "targetGroupArn": config["target"]["targetGroupArn"],
+            }
+            coordinator, aws, ssm, mutations, clock, state = build_coordinator(directory, config)
+            for step in ("preflight", "workload-start", "warmup", "t0", "pre-t1-window", "t1", "t2"):
+                state.record(step)
+            ssm.eks_snapshot_queue = [{
+                "deployment": {"status": {"replicas": 2, "updatedReplicas": 2, "availableReplicas": 1, "readyReplicas": 1}},
+                "pods": {"items": []},
+                "hpa": {"status": {}},
+            }]
+            aws.target_health_queue = [{"10.20.1.11": "healthy", "10.20.2.11": "healthy"}]
+            detail = coordinator._detect_t3()
+            self.assertIn("readiness failure", detail)
             self.assertEqual(mutations.executed, [])
 
     def test_b02_t5_rejects_terminated_instance_as_recovery(self) -> None:
