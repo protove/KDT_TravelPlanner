@@ -481,7 +481,8 @@ PY
 }
 
 stage_is_complete() {
-  local stage="$1" marker="$STAGE_DIR/$stage.json"
+  local stage="$1"
+  local marker="$STAGE_DIR/$stage.json"
   [[ "$DRY_RUN" == "1" ]] && return 1
   [[ -f "$marker" ]] || return 1
   local stage_rate stage_digest
