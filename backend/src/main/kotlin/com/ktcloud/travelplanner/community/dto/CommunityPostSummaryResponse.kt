@@ -20,12 +20,11 @@ data class CommunityPostSummaryResponse(
 	val createdAt: Instant,
 ) {
 	companion object {
-		// community-api-contract.md 3절/8절 — 댓글/리액션 API가 아직 붙지 않아 목록 조회에서는 0으로 고정한다.
-		// sort=popular 정렬식(CommunityPostRepository.findPostsOrderByPopularity)은 이 값들이 채워지는
-		// 시점에 자연히 맞아떨어지도록 이미 (reactionCount*2 + commentCount) 형태로 맞춰 두었다.
 		fun from(
 			row: CommunityPostListRow,
 			tags: List<String>,
+			commentCount: Long,
+			reactionCount: Long,
 		): CommunityPostSummaryResponse = CommunityPostSummaryResponse(
 			postId = row.postId,
 			categoryCode = row.categoryCode,
@@ -35,8 +34,8 @@ data class CommunityPostSummaryResponse(
 			authorNickname = row.authorNickname,
 			authorProfileImageUrl = row.authorProfileImageUrl,
 			viewCount = row.viewCount,
-			commentCount = 0,
-			reactionCount = 0,
+			commentCount = commentCount,
+			reactionCount = reactionCount,
 			sourceTravelId = row.sourceTravelId,
 			createdAt = row.createdAt,
 		)

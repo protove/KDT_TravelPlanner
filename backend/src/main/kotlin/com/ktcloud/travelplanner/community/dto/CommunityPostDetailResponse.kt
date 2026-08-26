@@ -22,6 +22,10 @@ data class CommunityPostDetailResponse(
 	val bodyJson: JsonNode,
 	val itinerarySnapshotJson: JsonNode?,
 	val isMine: Boolean,
+	/** 로그인한 요청자가 이 게시글에 좋아요를 눌렀는지. 비로그인 조회 시 항상 false. */
+	val isReacted: Boolean,
+	// PATCH /posts/{postId}의 낙관적 락(version)에 그대로 되돌려 보내야 해서 상세 응답에 노출한다.
+	val version: Int,
 ) {
 	companion object {
 		fun from(
@@ -32,6 +36,7 @@ data class CommunityPostDetailResponse(
 			commentCount: Long,
 			reactionCount: Long,
 			isMine: Boolean,
+			isReacted: Boolean,
 		): CommunityPostDetailResponse = CommunityPostDetailResponse(
 			postId = post.id,
 			categoryCode = post.category.code,
@@ -48,6 +53,8 @@ data class CommunityPostDetailResponse(
 			bodyJson = bodyJson,
 			itinerarySnapshotJson = itinerarySnapshotJson,
 			isMine = isMine,
+			isReacted = isReacted,
+			version = post.version,
 		)
 	}
 }

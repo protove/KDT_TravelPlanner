@@ -16,11 +16,19 @@ object TiptapBodyJsonValidator {
 	private val ALLOWED_TEXT_ALIGN_VALUES = setOf("left", "center", "right")
 	private val ALLOWED_HEADING_LEVELS = setOf(1, 2, 3)
 
+	// community-api-contract.md에는 본문 길이 제한이 명시되어 있지 않다 — 어뷰징 방지를 위해
+	// 서버에서 새로 추가한 제약. text 노드의 글자 수만 합산한다(마크업 구조는 카운트에 안 들어감).
+	const val MAX_TEXT_LENGTH = 10_000
+
 	fun validate(bodyJson: JsonNode) {
-		validateNode(bodyJson)
+		val totalTextLength = validateNode(bodyJson)
+		if (totalTextLength > MAX_TEXT_LENGTH) {
+			throw InvalidBodyJsonException("본문은 최대 ${MAX_TEXT_LENGTH}자까지 작성할 수 있습니다.")
+		}
 	}
 
-	private fun validateNode(node: JsonNode) {
+	// 구조 검증과 같은 트리 순회 한 번으로 text 노드 글자 수까지 누적해서 반환한다.
+	private fun validateNode(node: JsonNode): Int {
 		val typeNode = node.get("type")
 		if (typeNode == null || !typeNode.isTextual) {
 			throw InvalidBodyJsonException("노드에 type이 없습니다.")
@@ -34,10 +42,13 @@ object TiptapBodyJsonValidator {
 		validateAttrs(type, node.get("attrs"))
 		validateMarks(node.get("marks"))
 
+		var textLength = if (type == "text") node.get("text")?.asText()?.length ?: 0 else 0
+
 		val content = node.get("content")
 		if (content != null && content.isArray) {
-			content.forEach(::validateNode)
+			content.forEach { textLength += validateNode(it) }
 		}
+		return textLength
 	}
 
 	private fun validateAttrs(type: String, attrs: JsonNode?) {

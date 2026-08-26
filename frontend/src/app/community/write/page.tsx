@@ -19,13 +19,16 @@ import { FormField } from "@/components/molecules/FormField";
 import { ItinerarySnapshotCard } from "@/components/organisms/ItinerarySnapshotCard";
 import { RichTextEditor } from "@/components/organisms/RichTextEditor";
 import { ListLayout } from "@/components/templates/ListLayout";
-import { createPost, getCategories } from "@/lib/api/community";
+import { ApiError } from "@/lib/api/client";
+import { createPost, getCategories, getPost, updatePost } from "@/lib/api/community";
 import { fetchTravelDetail, type TravelDetail } from "@/lib/api/travel";
 import { useAuthStore } from "@/lib/stores/useAuthStore";
 import type { CommunityCategory, ItinerarySnapshot, TiptapDocument } from "@/lib/types/community";
+import { getTiptapTextLength } from "@/lib/utils/tiptapTextLength";
 import { travelToBodyJson } from "@/lib/utils/travelToBodyJson";
 import { travelToItinerarySnapshot } from "@/lib/utils/travelToItinerarySnapshot";
-import { TITLE_MAX_LENGTH } from "@/lib/validation/text";
+import { cn } from "@/lib/utils";
+import { BODY_MAX_LENGTH, TITLE_MAX_LENGTH } from "@/lib/validation/text";
 
 const EMPTY_BODY_JSON: TiptapDocument = { type: "doc", content: [{ type: "paragraph" }] };
 const TRAVEL_REVIEW_CATEGORY_CODE = "TRAVEL_REVIEW";
@@ -44,6 +47,8 @@ function CommunityWriteContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const travelId = searchParams.get("travelId") ?? undefined;
+  const editPostId = searchParams.get("postId") ?? undefined;
+  const isEditMode = Boolean(editPostId);
 
   const isLoggedIn = useAuthStore((s) => s.isLoggedIn);
   const isInitializing = useAuthStore((s) => s.isInitializing);
@@ -54,6 +59,11 @@ function CommunityWriteContent() {
   const [title, setTitle] = React.useState("");
   const [tags, setTags] = React.useState<string[]>([]);
   const [tagInput, setTagInput] = React.useState("");
+  // 수정 모드 전용 상태 — categoryCode/sourceTravelId/itinerarySnapshotJson은 계약상 PATCH
+  // 대상이 아니라(불변) 카테고리는 읽기전용으로만 보여주고, 일정 스냅샷 연동 섹션 자체를 건너뛴다.
+  const [editVersion, setEditVersion] = React.useState<number | null>(null);
+  const [loadingEditPost, setLoadingEditPost] = React.useState(isEditMode);
+  const [editLoadError, setEditLoadError] = React.useState<string | null>(null);
   // bodyJson은 자유 작성 영역 상태. "이 일정으로 후기 쓰기" 클릭 시 travelToBodyJson으로
   // 일정 내용(제목/날짜별 목록)이 편집 가능한 시작 텍스트로 한 번 프리필된다 — 위의 읽기전용
   // 스냅샷 카드와 내용은 같지만, 여긴 그 이후로 사용자가 자유롭게 고쳐 쓸 수 있는 영역이다.
@@ -88,6 +98,36 @@ function CommunityWriteContent() {
       })
       .catch(() => {});
   }, [accessToken]);
+
+  React.useEffect(() => {
+    if (!isEditMode || !editPostId || !accessToken) return;
+    let isCurrentRequest = true;
+
+    getPost(accessToken, editPostId)
+      .then((post) => {
+        if (!isCurrentRequest) return;
+        if (!post.isMine) {
+          setEditLoadError("본인 게시글만 수정할 수 있어요.");
+          return;
+        }
+        setCategoryCode(post.categoryCode);
+        setTitle(post.title);
+        setBodyJson(post.bodyJson);
+        setTags(post.tags);
+        setEditVersion(post.version);
+      })
+      .catch(() => {
+        if (!isCurrentRequest) return;
+        setEditLoadError("게시글을 불러오지 못했습니다.");
+      })
+      .finally(() => {
+        if (isCurrentRequest) setLoadingEditPost(false);
+      });
+
+    return () => {
+      isCurrentRequest = false;
+    };
+  }, [isEditMode, editPostId, accessToken]);
 
   React.useEffect(() => {
     if (!accessToken || !travelId) return;
@@ -147,6 +187,17 @@ function CommunityWriteContent() {
     setSubmitting(true);
     setSubmitError(null);
     try {
+      if (isEditMode && editPostId) {
+        if (editVersion == null) return;
+        await updatePost(accessToken, editPostId, {
+          title: title.trim(),
+          bodyJson,
+          tags,
+          version: editVersion,
+        });
+        router.push(`/community/detail?id=${editPostId}`);
+        return;
+      }
       await createPost(accessToken, {
         categoryCode,
         title: title.trim(),
@@ -156,31 +207,55 @@ function CommunityWriteContent() {
         itinerarySnapshotJson: itinerarySnapshot ?? undefined,
       });
       router.push("/community");
-    } catch {
-      setSubmitError("게시글을 등록하지 못했습니다. 잠시 후 다시 시도해주세요.");
+    } catch (error) {
+      setSubmitError(
+        error instanceof ApiError && error.status === 409
+          ? "그 사이 게시글이 다른 곳에서 수정됐어요. 새로고침 후 다시 시도해주세요."
+          : isEditMode
+            ? "게시글을 수정하지 못했습니다. 잠시 후 다시 시도해주세요."
+            : "게시글을 등록하지 못했습니다. 잠시 후 다시 시도해주세요.",
+      );
     } finally {
       setSubmitting(false);
     }
   }
 
   if (isInitializing || !isLoggedIn) return null;
+  if (isEditMode && loadingEditPost) return null;
 
-  const canSubmit = Boolean(categoryCode) && title.trim().length > 0 && !submitting;
+  const bodyTextLength = getTiptapTextLength(bodyJson);
+  const isBodyTooLong = bodyTextLength > BODY_MAX_LENGTH;
+  const canSubmit =
+    !editLoadError &&
+    Boolean(categoryCode) &&
+    title.trim().length > 0 &&
+    !isBodyTooLong &&
+    !submitting;
+  const cancelHref = isEditMode ? `/community/detail?id=${editPostId}` : "/community";
+  const categoryName = categories.find((c) => c.code === categoryCode)?.name ?? categoryCode;
 
   return (
     <ListLayout
-      title={<h1 className="text-2xl font-bold text-foreground">글쓰기</h1>}
+      title={
+        <h1 className="text-2xl font-bold text-foreground">{isEditMode ? "게시글 수정" : "글쓰기"}</h1>
+      }
       actions={
         <div className="flex items-center gap-2">
-          <Button type="button" variant="outline" onClick={() => router.push("/community")}>
+          <Button type="button" variant="outline" onClick={() => router.push(cancelHref)}>
             취소
           </Button>
           <Button type="button" onClick={handleSubmit} disabled={!canSubmit}>
-            {submitting ? "등록 중..." : "등록"}
+            {submitting ? "저장 중..." : isEditMode ? "수정 완료" : "등록"}
           </Button>
         </div>
       }
     >
+      {editLoadError && (
+        <p role="alert" className="mb-6 text-sm text-destructive-text">
+          {editLoadError}
+        </p>
+      )}
+
       {travel && (
         <div className="mb-6 flex flex-wrap items-center gap-2 rounded-xl border border-border bg-card p-4">
           <Badge variant="secondary">{travel.title}</Badge>
@@ -216,19 +291,30 @@ function CommunityWriteContent() {
       )}
 
       <div className="flex flex-col gap-5">
-        <FormField label="카테고리" htmlFor="write-category" required>
-          <Select value={categoryCode} onValueChange={setCategoryCode}>
-            <SelectTrigger id="write-category">
-              <SelectValue placeholder="카테고리 선택" />
-            </SelectTrigger>
-            <SelectContent>
-              {categories.map((category) => (
-                <SelectItem key={category.code} value={category.code}>
-                  {category.name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+        <FormField
+          label="카테고리"
+          htmlFor="write-category"
+          required
+          description={isEditMode ? "카테고리는 수정할 수 없어요." : undefined}
+        >
+          {isEditMode ? (
+            <Badge variant="accent" className="w-fit">
+              {categoryName}
+            </Badge>
+          ) : (
+            <Select value={categoryCode} onValueChange={setCategoryCode}>
+              <SelectTrigger id="write-category">
+                <SelectValue placeholder="카테고리 선택" />
+              </SelectTrigger>
+              <SelectContent>
+                {categories.map((category) => (
+                  <SelectItem key={category.code} value={category.code}>
+                    {category.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
         </FormField>
 
         <FormField label="제목" htmlFor="write-title" required>
@@ -253,6 +339,14 @@ function CommunityWriteContent() {
             onChange={setBodyJson}
             placeholder="여행 이야기를 자유롭게 남겨보세요"
           />
+          <p
+            className={cn(
+              "mt-1 text-right text-xs text-muted-foreground",
+              isBodyTooLong && "text-destructive-text",
+            )}
+          >
+            {bodyTextLength.toLocaleString()} / {BODY_MAX_LENGTH.toLocaleString()}자
+          </p>
         </FormField>
 
         <FormField label="태그" description={`최대 ${MAX_TAGS}개, 태그당 ${TAG_MAX_LENGTH}자 이내`}>

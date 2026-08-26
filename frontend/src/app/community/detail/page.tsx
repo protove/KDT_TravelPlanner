@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { ArrowLeft, Heart, MessageCircle } from "lucide-react";
+import { ArrowLeft, Heart, MessageCircle, Pencil, Trash2 } from "lucide-react";
 import { Badge } from "@/components/atoms/Badge";
 import { Button } from "@/components/atoms/Button";
 import { Icon } from "@/components/atoms/Icon";
@@ -16,13 +16,16 @@ import { useAuthStore } from "@/lib/stores/useAuthStore";
 import {
   createComment,
   deleteComment,
+  deletePost,
   getCategories,
   getComments,
   getPost,
   toggleCommentReaction,
+  togglePostReaction,
   updateComment,
 } from "@/lib/api/community";
 import type { CommentResponse, CommunityCategory, CommunityPostDetail } from "@/lib/types/community";
+import { cn } from "@/lib/utils";
 import { formatRelativeTime } from "@/lib/utils/formatRelativeTime";
 import { COMMENT_MAX_LENGTH } from "@/lib/validation/text";
 
@@ -78,6 +81,11 @@ function CommunityDetailContent() {
   const [deletingCommentId, setDeletingCommentId] = React.useState<string | null>(null);
   const [reactionPendingId, setReactionPendingId] = React.useState<string | null>(null);
   const [editSubmittingId, setEditSubmittingId] = React.useState<string | null>(null);
+
+  const [showDeletePostConfirm, setShowDeletePostConfirm] = React.useState(false);
+  const [deletingPost, setDeletingPost] = React.useState(false);
+  const [postActionError, setPostActionError] = React.useState<string | null>(null);
+  const [postReactionPending, setPostReactionPending] = React.useState(false);
 
   React.useEffect(() => {
     if (!id) return;
@@ -160,6 +168,33 @@ function CommunityDetailContent() {
     }
   }
 
+  async function handleTogglePostReaction() {
+    if (!post || !accessToken || postReactionPending) return;
+    setPostReactionPending(true);
+    setPostActionError(null);
+    try {
+      const result = await togglePostReaction(accessToken, post.postId);
+      setPost((prev) => (prev ? { ...prev, reactionCount: result.reactionCount, isReacted: result.isReacted } : prev));
+    } catch {
+      setPostActionError("좋아요 처리에 실패했습니다. 잠시 후 다시 시도해주세요.");
+    } finally {
+      setPostReactionPending(false);
+    }
+  }
+
+  async function handleConfirmDeletePost() {
+    if (!post || !accessToken) return;
+    setPostActionError(null);
+    setDeletingPost(true);
+    try {
+      await deletePost(accessToken, post.postId);
+      router.push("/community");
+    } catch {
+      setPostActionError("게시글을 삭제하지 못했습니다. 잠시 후 다시 시도해주세요.");
+      setDeletingPost(false);
+    }
+  }
+
   async function handleEditComment(commentId: string, content: string): Promise<boolean> {
     if (!accessToken) return false;
     setEditSubmittingId(commentId);
@@ -200,12 +235,40 @@ function CommunityDetailContent() {
             <span className="font-semibold">{categoryName}</span>
           </div>
 
-          <div className="flex flex-col gap-3">
-            <Badge variant="accent" className="w-fit">
-              {categoryName}
-            </Badge>
-            <h1 className="text-2xl font-bold text-foreground">{post.title}</h1>
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex flex-col gap-3">
+              <Badge variant="accent" className="w-fit">
+                {categoryName}
+              </Badge>
+              <h1 className="text-2xl font-bold text-foreground">{post.title}</h1>
+            </div>
+            {post.isMine && (
+              <div className="flex shrink-0 items-center gap-1">
+                <button
+                  type="button"
+                  title="게시글 수정"
+                  onClick={() => router.push(`/community/write?postId=${post.postId}`)}
+                  className="flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
+                >
+                  <Icon icon={Pencil} size="sm" aria-label="게시글 수정" />
+                </button>
+                <button
+                  type="button"
+                  title="게시글 삭제"
+                  onClick={() => setShowDeletePostConfirm(true)}
+                  className="flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-destructive"
+                >
+                  <Icon icon={Trash2} size="sm" aria-label="게시글 삭제" />
+                </button>
+              </div>
+            )}
           </div>
+
+          {postActionError && (
+            <p role="alert" className="text-sm text-destructive-text">
+              {postActionError}
+            </p>
+          )}
 
           <div className="flex items-center justify-between border-b border-border pb-3">
             <div className="flex flex-col gap-0.5">
@@ -231,10 +294,20 @@ function CommunityDetailContent() {
           <RichTextEditor value={post.bodyJson} onChange={noop} readOnly />
 
           <div className="flex items-center gap-4 border-y border-border py-3">
-            <span className="flex items-center gap-1 text-xs font-semibold text-fg-secondary">
-              <Icon icon={Heart} size="sm" />
+            <button
+              type="button"
+              title="좋아요"
+              onClick={handleTogglePostReaction}
+              disabled={!isLoggedIn || postReactionPending}
+              className={cn(
+                "flex items-center gap-1 rounded-md px-1.5 py-0.5 text-xs font-semibold",
+                post.isReacted ? "text-destructive" : "text-fg-secondary",
+                isLoggedIn ? "cursor-pointer hover:bg-muted" : "cursor-default",
+              )}
+            >
+              <Icon icon={Heart} size="sm" className={cn(post.isReacted && "fill-current")} />
               {post.reactionCount.toLocaleString()}
-            </span>
+            </button>
             <span className="flex items-center gap-1 text-xs font-semibold text-fg-secondary">
               <Icon icon={MessageCircle} size="sm" />
               {commentCountLabel}
@@ -310,6 +383,17 @@ function CommunityDetailContent() {
           destructive
           isConfirming={deletingCommentId != null}
           onConfirm={handleConfirmDeleteComment}
+        />
+
+        <ConfirmDialog
+          open={showDeletePostConfirm}
+          onOpenChange={setShowDeletePostConfirm}
+          title="게시글을 삭제할까요?"
+          description="삭제한 게시글은 다시 볼 수 없어요."
+          confirmLabel="삭제"
+          destructive
+          isConfirming={deletingPost}
+          onConfirm={handleConfirmDeletePost}
         />
         </>
       }

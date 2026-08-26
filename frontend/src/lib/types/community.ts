@@ -121,6 +121,16 @@ export interface CommunityPostDetail extends CommunityPostSummary {
    */
   itinerarySnapshotJson: ItinerarySnapshot | null;
   isMine: boolean;
+  /** 로그인한 요청자가 이 게시글에 좋아요를 눌렀는지. 비로그인 조회 시 항상 false. */
+  isReacted: boolean;
+  /** PATCH /posts/{postId}의 낙관적 락에 그대로 되돌려 보내야 하는 값. */
+  version: number;
+}
+
+/** PUT /posts/{postId}/reactions/LIKE 응답. */
+export interface CommunityPostReactionResponse {
+  reactionCount: number;
+  isReacted: boolean;
 }
 
 /** 작성(community-write 등 공통) 요청. */

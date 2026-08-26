@@ -123,4 +123,62 @@ interface CommunityPostRepository : JpaRepository<CommunityPost, UUID> {
 	fun countReactions(
 		@Param("postId") postId: UUID,
 	): Long
+
+	// community_comment_reaction과 동일한 구조를 post_id 기준으로 쓴다(CommunityCommentRepository 참고).
+	@Query(
+		value = "SELECT EXISTS(SELECT 1 FROM community_reaction WHERE post_id = :postId AND user_id = :userId)",
+		nativeQuery = true,
+	)
+	fun existsReaction(
+		@Param("postId") postId: UUID,
+		@Param("userId") userId: UUID,
+	): Boolean
+
+	@Modifying
+	@Query(
+		value = "INSERT INTO community_reaction (post_id, user_id, type) VALUES (:postId, :userId, 'LIKE') " +
+			"ON CONFLICT (post_id, user_id, type) DO NOTHING",
+		nativeQuery = true,
+	)
+	fun insertReaction(
+		@Param("postId") postId: UUID,
+		@Param("userId") userId: UUID,
+	): Int
+
+	@Modifying
+	@Query(value = "DELETE FROM community_reaction WHERE post_id = :postId AND user_id = :userId", nativeQuery = true)
+	fun deleteReaction(
+		@Param("postId") postId: UUID,
+		@Param("userId") userId: UUID,
+	): Int
+
+	// 목록 조회에서 게시글마다 countActiveComments/countReactions를 따로 부르면 N+1이라
+	// CommunityCommentRepository.countReactionsByCommentIds와 동일한 패턴으로 배치 조회한다.
+	@Query(
+		value = "SELECT post_id AS postId, COUNT(*) AS commentCount " +
+			"FROM community_comment WHERE post_id IN (:postIds) AND deleted_at IS NULL GROUP BY post_id",
+		nativeQuery = true,
+	)
+	fun countActiveCommentsByPostIds(
+		@Param("postIds") postIds: List<UUID>,
+	): List<PostCommentCountRow>
+
+	@Query(
+		value = "SELECT post_id AS postId, COUNT(*) AS reactionCount " +
+			"FROM community_reaction WHERE post_id IN (:postIds) GROUP BY post_id",
+		nativeQuery = true,
+	)
+	fun countReactionsByPostIds(
+		@Param("postIds") postIds: List<UUID>,
+	): List<PostReactionCountRow>
+}
+
+interface PostCommentCountRow {
+	val postId: UUID
+	val commentCount: Long
+}
+
+interface PostReactionCountRow {
+	val postId: UUID
+	val reactionCount: Long
 }

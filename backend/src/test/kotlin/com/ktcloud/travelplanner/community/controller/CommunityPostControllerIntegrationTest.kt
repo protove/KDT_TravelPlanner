@@ -32,8 +32,11 @@ import org.springframework.http.MediaType
 import org.springframework.jdbc.core.JdbcTemplate
 import org.springframework.test.context.ActiveProfiles
 import org.springframework.test.web.servlet.MockMvc
+import org.springframework.test.web.servlet.delete
 import org.springframework.test.web.servlet.get
+import org.springframework.test.web.servlet.patch
 import org.springframework.test.web.servlet.post
+import org.springframework.test.web.servlet.put
 import org.springframework.transaction.annotation.Transactional
 import java.sql.Timestamp
 import java.time.Instant
@@ -341,6 +344,169 @@ class CommunityPostControllerIntegrationTest(
 	}
 
 	@Test
+	fun `PATCH updates title and bodyJson for the author`() {
+		val author = saveUser("patch-author")
+		val post = savePost(author)
+		// 실제 클라이언트와 동일하게 상세 조회로 현재 version을 읽어와 PATCH에 그대로 되돌려 보낸다
+		// (저장 직후 in-memory 값을 그대로 가정하지 않음 — insert 경로에 따라 달라질 수 있음).
+		val currentVersion = mockMvc.get("/api/v1/community/posts/${post.id}")
+			.andReturn().response.contentAsString
+			.let { Regex("\"version\":(\\d+)").find(it)!!.groupValues[1].toInt() }
+
+		mockMvc.patch("/api/v1/community/posts/${post.id}") {
+			header(HttpHeaders.AUTHORIZATION, bearer(author))
+			contentType = MediaType.APPLICATION_JSON
+			content = """
+				{
+					"title": "수정된 제목",
+					"bodyJson": {"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"수정된 본문"}]}]},
+					"version": $currentVersion
+				}
+			""".trimIndent()
+		}
+			.andExpect {
+				status { isOk() }
+				jsonPath("$.data.title", equalTo("수정된 제목"))
+				jsonPath("$.data.bodyJson.content[0].content[0].text", equalTo("수정된 본문"))
+				jsonPath("$.data.version", equalTo(currentVersion + 1))
+			}
+
+		mockMvc.get("/api/v1/community/posts/${post.id}")
+			.andExpect { jsonPath("$.data.title", equalTo("수정된 제목")) }
+	}
+
+	@Test
+	fun `PATCH returns 403 for a non-author requester without changing the post`() {
+		val author = saveUser("patch-owner")
+		val other = saveUser("patch-other")
+		val post = savePost(author)
+
+		mockMvc.patch("/api/v1/community/posts/${post.id}") {
+			header(HttpHeaders.AUTHORIZATION, bearer(other))
+			contentType = MediaType.APPLICATION_JSON
+			content = """{"title": "남의 글 수정 시도", "version": 0}"""
+		}
+			.andExpect {
+				status { isForbidden() }
+				jsonPath("$.code", equalTo("ACCESS_DENIED"))
+			}
+
+		mockMvc.get("/api/v1/community/posts/${post.id}")
+			.andExpect { jsonPath("$.data.title", equalTo("상세 조회 테스트")) }
+	}
+
+	@Test
+	fun `PATCH returns 409 when the requested version does not match the current version`() {
+		val author = saveUser("patch-conflict-author")
+		val post = savePost(author)
+
+		mockMvc.patch("/api/v1/community/posts/${post.id}") {
+			header(HttpHeaders.AUTHORIZATION, bearer(author))
+			contentType = MediaType.APPLICATION_JSON
+			content = """{"title": "버전 충돌", "version": 99}"""
+		}
+			.andExpect {
+				status { isConflict() }
+				jsonPath("$.code", equalTo("CONFLICT"))
+			}
+	}
+
+	@Test
+	fun `DELETE soft deletes the post for the author and it becomes 404 afterward`() {
+		val author = saveUser("delete-author")
+		val post = savePost(author)
+
+		mockMvc.delete("/api/v1/community/posts/${post.id}") {
+			header(HttpHeaders.AUTHORIZATION, bearer(author))
+		}.andExpect { status { isOk() } }
+
+		// 같은 트랜잭션(1차 캐시) 안에서는 findById가 방금 soft delete된 관리 엔티티를 그대로
+		// 돌려줄 수 있어(@SQLRestriction은 새로 나가는 SQL에만 적용됨) flush+clear로 강제 재조회시킨다.
+		// deletePost()는 REQUIRED 전파라 이 테스트 트랜잭션에 합류할 뿐 자체적으로 커밋/플러시하지
+		// 않으므로, clear()만 하면 아직 반영 안 된 소프트 삭제 변경분이 그대로 유실된다.
+		entityManager.flush()
+		entityManager.clear()
+
+		mockMvc.get("/api/v1/community/posts/${post.id}")
+			.andExpect {
+				status { isNotFound() }
+				jsonPath("$.code", equalTo("RESOURCE_NOT_FOUND"))
+			}
+	}
+
+	@Test
+	fun `DELETE returns 403 for a non-author requester without deleting`() {
+		val author = saveUser("delete-owner")
+		val other = saveUser("delete-other")
+		val post = savePost(author)
+
+		mockMvc.delete("/api/v1/community/posts/${post.id}") {
+			header(HttpHeaders.AUTHORIZATION, bearer(other))
+		}.andExpect {
+			status { isForbidden() }
+			jsonPath("$.code", equalTo("ACCESS_DENIED"))
+		}
+
+		mockMvc.get("/api/v1/community/posts/${post.id}")
+			.andExpect { status { isOk() } }
+	}
+
+	@Test
+	fun `PUT reactions LIKE toggles reactionCount and isReacted, and detail reflects it`() {
+		val author = saveUser("react-author")
+		val liker = saveUser("react-liker")
+		val post = savePost(author)
+
+		mockMvc.put("/api/v1/community/posts/${post.id}/reactions/LIKE") {
+			header(HttpHeaders.AUTHORIZATION, bearer(liker))
+		}
+			.andExpect {
+				status { isOk() }
+				jsonPath("$.data.reactionCount", equalTo(1))
+				jsonPath("$.data.isReacted", equalTo(true))
+			}
+
+		mockMvc.get("/api/v1/community/posts/${post.id}") {
+			header(HttpHeaders.AUTHORIZATION, bearer(liker))
+		}.andExpect {
+			jsonPath("$.data.reactionCount", equalTo(1))
+			jsonPath("$.data.isReacted", equalTo(true))
+		}
+
+		mockMvc.put("/api/v1/community/posts/${post.id}/reactions/LIKE") {
+			header(HttpHeaders.AUTHORIZATION, bearer(liker))
+		}
+			.andExpect {
+				status { isOk() }
+				jsonPath("$.data.reactionCount", equalTo(0))
+				jsonPath("$.data.isReacted", equalTo(false))
+			}
+	}
+
+	@Test
+	fun `PUT reactions with an unsupported type is rejected with 400`() {
+		val author = saveUser("react-bad-author")
+		val post = savePost(author)
+
+		mockMvc.put("/api/v1/community/posts/${post.id}/reactions/DISLIKE") {
+			header(HttpHeaders.AUTHORIZATION, bearer(author))
+		}
+			.andExpect {
+				status { isBadRequest() }
+				jsonPath("$.code", equalTo("VALIDATION_ERROR"))
+			}
+	}
+
+	@Test
+	fun `PUT reactions without authentication returns 401`() {
+		val author = saveUser("react-anon-author")
+		val post = savePost(author)
+
+		mockMvc.put("/api/v1/community/posts/${post.id}/reactions/LIKE")
+			.andExpect { status { isUnauthorized() } }
+	}
+
+	@Test
 	fun `list endpoint filters by category, tag, and keyword and defaults to createdAt desc order`() {
 		val author = saveUser("list-author")
 		val busan = savePost(author, tags = setOf("부산"), title = "부산 여행 후기")
@@ -379,6 +545,32 @@ class CommunityPostControllerIntegrationTest(
 		}.andExpect {
 			jsonPath("$.data.content.length()", equalTo(1))
 			jsonPath("$.data.content[0].title", equalTo("자유 게시글"))
+		}
+	}
+
+	@Test
+	fun `list endpoint reflects real commentCount and reactionCount instead of the previous hardcoded 0`() {
+		val author = saveUser("count-author")
+		val commenter = saveUser("count-commenter")
+		val liker = saveUser("count-liker")
+		val post = savePost(author, title = "카운트 집계 테스트")
+
+		mockMvc.post("/api/v1/community/posts/${post.id}/comments") {
+			header(HttpHeaders.AUTHORIZATION, bearer(commenter))
+			contentType = MediaType.APPLICATION_JSON
+			content = """{"content": "댓글1"}"""
+		}.andExpect { status { isOk() } }
+
+		mockMvc.put("/api/v1/community/posts/${post.id}/reactions/LIKE") {
+			header(HttpHeaders.AUTHORIZATION, bearer(liker))
+		}.andExpect { status { isOk() } }
+
+		mockMvc.get("/api/v1/community/posts") {
+			param("keyword", "카운트 집계 테스트")
+		}.andExpect {
+			status { isOk() }
+			jsonPath("$.data.content[0].commentCount", equalTo(1))
+			jsonPath("$.data.content[0].reactionCount", equalTo(1))
 		}
 	}
 

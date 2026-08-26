@@ -6,7 +6,9 @@ import type {
   CommunityCategory,
   CommunityPostCreateRequest,
   CommunityPostDetail,
+  CommunityPostReactionResponse,
   CommunityPostSummary,
+  CommunityPostUpdatePatch,
 } from "@/lib/types/community";
 
 export interface PageResponse<T> {
@@ -51,6 +53,36 @@ export async function createPost(
 /** 게시글 상세를 조회한다(조회수 증가). 없는 id면 404. */
 export async function getPost(accessToken: string | null | undefined, postId: string): Promise<CommunityPostDetail> {
   return apiFetch<CommunityPostDetail>(`/api/v1/community/posts/${postId}`, accessToken);
+}
+
+/** 게시글을 수정한다(PatchField 방식, version 낙관적 락). 작성자 본인만, 버전 충돌 시 409. */
+export async function updatePost(
+  accessToken: string,
+  postId: string,
+  patch: CommunityPostUpdatePatch,
+): Promise<CommunityPostDetail> {
+  return apiFetch<CommunityPostDetail>(`/api/v1/community/posts/${postId}`, accessToken, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+}
+
+/** 게시글을 삭제한다(soft delete). 작성자 본인만 가능. */
+export async function deletePost(accessToken: string, postId: string): Promise<void> {
+  await apiFetch<unknown>(`/api/v1/community/posts/${postId}`, accessToken, {
+    method: "DELETE",
+  });
+}
+
+/** 게시글 좋아요를 토글한다(이미 눌렀으면 취소). 로그인 필요. */
+export async function togglePostReaction(
+  accessToken: string,
+  postId: string,
+): Promise<CommunityPostReactionResponse> {
+  return apiFetch<CommunityPostReactionResponse>(`/api/v1/community/posts/${postId}/reactions/LIKE`, accessToken, {
+    method: "PUT",
+  });
 }
 
 export interface ListPostsParams {
