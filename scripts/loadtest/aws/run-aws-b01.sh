@@ -12,7 +12,7 @@
 # of one B-01 run.
 set -euo pipefail
 
-PHASE="${1:?usage: run-aws-b01.sh <smoke|ramp|baseline|spike|soak|scale-step> [rep]}"
+PHASE="${1:?usage: run-aws-b01.sh <smoke|ramp|baseline|spike|soak|scale-step|capacity-stress> [rep]}"
 REP="${2:-}"
 
 : "${REPOSITORY_ROOT:?REPOSITORY_ROOT is required}"
@@ -28,8 +28,8 @@ MAX_RATE="${MAX_RATE:?MAX_RATE is required}"
 OPERATOR_MAX_VUS="${MAX_VUS:?MAX_VUS is required}"
 
 case "$PHASE" in
-  smoke|ramp|baseline|spike|soak|scale-step) ;;
-  *) echo "usage: run-aws-b01.sh <smoke|ramp|baseline|spike|soak|scale-step> [rep]" >&2; exit 2 ;;
+  smoke|ramp|baseline|spike|soak|scale-step|capacity-stress) ;;
+  *) echo "usage: run-aws-b01.sh <smoke|ramp|baseline|spike|soak|scale-step|capacity-stress> [rep]" >&2; exit 2 ;;
 esac
 if [[ "$PHASE" == "baseline" && -z "$REP" ]]; then
   echo "baseline requires a rep number (1-3): run-aws-b01.sh baseline <rep>" >&2
@@ -172,6 +172,13 @@ PY
     export PREALLOCATED_VUS="${SCALE_STEP_PREALLOCATED_VUS:-20}"
     configure_phase_max_vus scale-step "${SCALE_STEP_MAX_VUS:-}"
     ALLOW_K6_FAILURE=1 "$REPOSITORY_ROOT/scripts/loadtest/aws/run-k6-aws-scenario.sh" scale-step "$run_dir"
+    ;;
+  capacity-stress)
+    : "${CONFIRMED_RATE:?CONFIRMED_RATE is required for capacity-stress (frozen normal rate)}"
+    export RATE="$CONFIRMED_RATE"
+    export PREALLOCATED_VUS="${CAPACITY_STRESS_PREALLOCATED_VUS:-100}"
+    configure_phase_max_vus capacity-stress "${CAPACITY_STRESS_MAX_VUS:-320}"
+    ALLOW_K6_FAILURE=1 "$REPOSITORY_ROOT/scripts/loadtest/aws/run-k6-aws-scenario.sh" capacity-stress "$run_dir"
     ;;
 esac
 

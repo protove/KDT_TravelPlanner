@@ -15,7 +15,7 @@
 # the pattern already established by seed-aws-load-data.py/cleanup-aws-load-data.py.
 set -euo pipefail
 
-SCENARIO="${1:?usage: run-k6-aws-scenario.sh <smoke|ramp|baseline|spike|soak|scale-step> <run-dir>}"
+SCENARIO="${1:?usage: run-k6-aws-scenario.sh <smoke|ramp|baseline|spike|soak|scale-step|capacity-stress> <run-dir>}"
 RUN_DIR="${2:?usage: run-k6-aws-scenario.sh <scenario> <run-dir>}"
 REPOSITORY_ROOT="${REPOSITORY_ROOT:?REPOSITORY_ROOT is required}"
 K6_DIR="$REPOSITORY_ROOT/load-tests/k6"
@@ -38,6 +38,7 @@ case "$SCENARIO" in
   spike) SCENARIO_FILE="b01-spike.js" ;;
   soak) SCENARIO_FILE="soak.js" ;;
   scale-step) SCENARIO_FILE="scale-step.js" ;;
+  capacity-stress) SCENARIO_FILE="capacity-stress.js" ;;
   *) SCENARIO_FILE="" ;;
 esac
 if [[ -z "$SCENARIO_FILE" ]]; then
@@ -137,6 +138,32 @@ if scenario == "spike":
         "maxVUs": int(os.environ.get("MAX_VUS") or scenario_profile.get("maxVUs")),
         "timeUnit": scenario_profile.get("timeUnit", "1s"),
     })
+elif scenario == "capacity-stress":
+    stress = profile.get("capacityStress") or {}
+    base_rate_raw = os.environ.get("CONFIRMED_RATE") or rate
+    try:
+        base_rate = float(base_rate_raw)
+    except (TypeError, ValueError):
+        raise SystemExit("capacity-stress requires a positive CONFIRMED_RATE")
+    multipliers = stress.get("stageMultipliers") or scenario_profile.get("stageMultipliers")
+    durations = stress.get("stageDurations") or scenario_profile.get("stageDurations")
+    effective_inputs.update({
+        "baseRate": base_rate,
+        "stageMultipliers": multipliers,
+        "stageDurations": durations,
+        "stageRates": [base_rate * float(multiplier) for multiplier in multipliers],
+        "stageGraceSeconds": stress.get("stageGraceSeconds"),
+        "capacityStabilitySeconds": stress.get("capacityStabilitySeconds"),
+        "hardTimeCeilingSeconds": stress.get("hardTimeCeilingSeconds"),
+        "maxVUs": int(os.environ.get("MAX_VUS") or stress.get("maxVUs")),
+        "preAllocatedVUs": int(os.environ.get("PREALLOCATED_VUS") or stress.get("preAllocatedVUs")),
+        "terminalConditions": [
+            "MAX_CAPACITY_REACHED",
+            "SLO_COLLAPSE",
+            "DATA_TIER_SATURATION",
+            "HARD_CEILING",
+        ],
+    })
 Path(output).write_text(json.dumps({
     "runId": run_id,
     "scenario": scenario,
@@ -193,6 +220,7 @@ docker run -i --name "$K6_CONTAINER_NAME" \
   -e REQUIRED_UNIQUE_CREDENTIAL_COUNT="$EFFECTIVE_MAX_VUS" \
   -e K6_IMAGE_DIGEST="$K6_IMAGE_DIGEST" \
   -e RATE="${RATE:-}" \
+  -e CONFIRMED_RATE="${CONFIRMED_RATE:-}" \
   -e START_RATE="${START_RATE:-}" \
   -e RUN_ID="$RUN_ID" \
   -e RUN_STARTED_AT="$started_at" \

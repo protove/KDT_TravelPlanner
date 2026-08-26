@@ -266,13 +266,11 @@ PY
 }
 
 normalize_dev_eks_workload_compatibility() {
-  # The retained dev-eks node group is intentionally t3.small.  The older
-  # snapshot asks the scheduler for more memory than those two nodes can
-  # place once the platform DaemonSets are present, and its monitoring images
-  # do not declare numeric non-root users.  Normalize only the downloaded
-  # compatibility copy; the canonical S3 bundle and its revision stay
-  # immutable.  Requests are lowered (limits remain unchanged), while every
-  # affected container remains explicitly non-root with a writable fsGroup.
+  # The comparison node group is intentionally t3.medium 2/2/4.  Normalize
+  # only the downloaded compatibility copy; the canonical S3 bundle and its
+  # revision stay immutable.  Measured requests/limits and the 0/1 rollout
+  # are part of the comparison contract, while every affected container
+  # remains explicitly non-root with a writable fsGroup.
   local workload_root="$BUNDLE_DIR/base"
   [[ -d "$workload_root" ]] || workload_root="$BUNDLE_DIR/k8s/base"
   [[ -d "$workload_root/backend" && -d "$workload_root/monitoring" ]] || return 0
@@ -324,6 +322,43 @@ def patch_container(path: Path, name: str, old_memories: tuple[str, ...], new_me
                 break
         else:
             raise SystemExit(f"{path}: {name} runAsNonRoot marker is missing")
+    lines[start:end] = block
+    if changed:
+        path.write_text("".join(lines), encoding="utf-8")
+    return changed
+
+def ensure_backend_cpu_resources(path: Path) -> bool:
+    lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
+    marker = "        - name: backend"
+    try:
+        start = next(i for i, line in enumerate(lines) if line.rstrip("\n") == marker)
+    except StopIteration:
+        return False
+    end = next((i for i in range(start + 1, len(lines)) if lines[i].startswith("        - name: ") or lines[i].startswith("      volumes:")), len(lines))
+    block = lines[start:end]
+    changed = False
+    section = None
+    for i, line in enumerate(block):
+        stripped = line.strip()
+        if stripped in {"requests:", "limits:"}:
+            section = stripped[:-1]
+            continue
+        if stripped in {"requests:", "limits:"}:
+            section = stripped[:-1]
+        if section == "requests" and stripped.startswith("cpu:"):
+            current = stripped.split(":", 1)[1].strip()
+            if current in {"250m", "200m", "384m", "550m"} and current != "550m":
+                block[i] = line.replace(current, "550m", 1)
+                changed = True
+        if section == "limits" and stripped.startswith("cpu:"):
+            current = stripped.split(":", 1)[1].strip().strip('"')
+            if current in {"1", "1000m", "400m", "1100m"} and current != "1100m":
+                block[i] = line.replace(line.strip().split(":", 1)[1].strip(), "1100m", 1)
+                changed = True
+    if not any(line.strip() == "cpu: 550m" for line in block):
+        raise SystemExit(f"{path}: backend CPU request marker is missing")
+    if not any(line.strip() == "cpu: 1100m" for line in block):
+        raise SystemExit(f"{path}: backend CPU limit marker is missing")
     lines[start:end] = block
     if changed:
         path.write_text("".join(lines), encoding="utf-8")
@@ -394,11 +429,17 @@ def ensure_fs_group_policy(path: Path) -> bool:
 
 def ensure_backend_rollout_strategy(path: Path) -> bool:
     text = path.read_text(encoding="utf-8")
-    old = "      maxUnavailable: 0\n      maxSurge: 1\n"
-    new = "      maxUnavailable: 1\n      maxSurge: 0\n"
-    if old not in text:
+    # The comparison campaign uses t3.medium 2/2/4 nodes.  The prior
+    # t3.small compatibility repair forced 1/0 and would make EKS's
+    # availability envelope unfairly different from EC2's 100/150 rollout.
+    # Normalize stale downloaded bundles back to the approved 0/1 contract.
+    expected = "      maxUnavailable: 0\n      maxSurge: 1\n"
+    legacy = "      maxUnavailable: 1\n      maxSurge: 0\n"
+    if expected in text:
         return False
-    path.write_text(text.replace(old, new, 1), encoding="utf-8")
+    if legacy not in text:
+        return False
+    path.write_text(text.replace(legacy, expected, 1), encoding="utf-8")
     return True
 
 backend = root / "backend" / "deployment.yaml"
@@ -408,7 +449,8 @@ changed = False
 if backend.exists():
     changed |= ensure_backend_rollout_strategy(backend)
     changed |= ensure_fs_group_policy(backend)
-    changed |= patch_container(backend, "backend", ("640Mi", "512Mi", "448Mi"), "384Mi", 10001)
+    changed |= ensure_backend_cpu_resources(backend)
+    changed |= patch_container(backend, "backend", ("640Mi", "512Mi", "448Mi", "384Mi"), "640Mi", 10001)
     changed |= patch_container(backend, "alloy-sidecar", ("256Mi", "128Mi", "64Mi"), "64Mi", 10001)
     changed |= ensure_storage_parent_mount(backend, "alloy-sidecar")
     changed |= ensure_tmp_mount(backend, "alloy-sidecar", "alloy-tmp", "128Mi")

@@ -94,10 +94,12 @@ SOAK_PREALLOCATED_VUS="${SOAK_PREALLOCATED_VUS:-}"
 SOAK_MAX_VUS="${SOAK_MAX_VUS:-}"
 SCALE_STEP_PREALLOCATED_VUS="${SCALE_STEP_PREALLOCATED_VUS:-}"
 SCALE_STEP_MAX_VUS="${SCALE_STEP_MAX_VUS:-}"
+CAPACITY_STRESS_PREALLOCATED_VUS="${CAPACITY_STRESS_PREALLOCATED_VUS:-100}"
+CAPACITY_STRESS_MAX_VUS="${CAPACITY_STRESS_MAX_VUS:-320}"
 
 usage() {
   cat <<'USAGE'
-usage: orchestrate-aws-b01.sh [target|seed|smoke|ramp|baseline|d005-record|spike|soak|scale-step|evidence|cleanup|provisional-review|freeze|export|all] [options]
+usage: orchestrate-aws-b01.sh [target|seed|smoke|ramp|baseline|d005-record|spike|soak|scale-step|capacity-stress|evidence|cleanup|provisional-review|freeze|export|all] [options]
 
 Required:
   --profile PATH                 AWS load-test profile JSON (default: load-tests/aws/profiles/ec2-b01.json)
@@ -117,7 +119,7 @@ Required:
 
 Also required for most modes:
   --s3-bucket NAME                (seed/export/all) evidence S3 bucket
-  --k6-image DIGEST                (smoke/ramp/baseline/spike/soak/scale-step/all) digest-pinned k6 image
+  --k6-image DIGEST                (smoke/ramp/baseline/spike/soak/scale-step/capacity-stress/all) digest-pinned k6 image
   --database-host/--database-name/--database-secret-arn   (seed/cleanup/all)
                                     --database-secret-arn must be a dedicated test-only Secret,
                                     JSON {"username":..,"password":..} (never the RDS master secret)
@@ -145,7 +147,7 @@ EKS target options (required when --target-platform eks):
   --backend-deployment NAME      Backend Deployment (default: backend)
 
 Modes:
-  target|seed|smoke|ramp|baseline|spike|soak|scale-step   individual phases with target validation
+  target|seed|smoke|ramp|baseline|spike|soak|scale-step|capacity-stress   individual phases with target validation
   evidence            Grafana Annotation + Query collection (post-Spike; PNG excluded, see D-003/Plan04)
   cleanup              synthetic data cleanup; writes cleanup-result.json into the evidence bundle
   provisional-review    writes provisional-review.json (an inventory, not a pass/fail verdict) for the
@@ -160,7 +162,7 @@ USAGE
 
 while [[ "$#" -gt 0 ]]; do
   case "$1" in
-    target|seed|smoke|ramp|baseline|d005-record|spike|soak|scale-step|evidence|cleanup|provisional-review|freeze|export|all) MODE="$1"; shift ;;
+    target|seed|smoke|ramp|baseline|d005-record|spike|soak|scale-step|capacity-stress|evidence|cleanup|provisional-review|freeze|export|all) MODE="$1"; shift ;;
     --profile) PROFILE="$2"; shift 2 ;;
     --slo-contract) SLO_CONTRACT="$2"; SLO_CONTRACT_EXPLICIT=1; shift 2 ;;
     --target-platform) TARGET_PLATFORM="$2"; shift 2 ;;
@@ -301,7 +303,7 @@ STAGE_DIR="$EVIDENCE_ROOT/stages"
 stage_confirmed_rate() {
   local stage="$1"
   case "$stage" in
-    baseline-*|d005|spike|soak|scale-step) printf '%s' "${CONFIRMED_RATE:-}" ;;
+    baseline-*|d005|spike|soak|scale-step|capacity-stress) printf '%s' "${CONFIRMED_RATE:-}" ;;
     *) printf '' ;;
   esac
 }
@@ -321,6 +323,7 @@ stage_input_digest() {
     "$RAMP_PREALLOCATED_VUS" "$RAMP_MAX_VUS" "$BASELINE_PREALLOCATED_VUS" "$BASELINE_MAX_VUS" \
     "$SPIKE_PREALLOCATED_VUS" "$SPIKE_MAX_VUS" "$SPIKE_PEAK_MULTIPLIER" "$SPIKE_HOLD" \
     "${SOAK_PREALLOCATED_VUS:-}" "${SOAK_MAX_VUS:-}" "${SCALE_STEP_PREALLOCATED_VUS:-}" "${SCALE_STEP_MAX_VUS:-}" \
+    "${CAPACITY_STRESS_PREALLOCATED_VUS:-}" "${CAPACITY_STRESS_MAX_VUS:-}" \
     "$(stage_confirmed_rate "$stage")" <<'PY'
 import hashlib
 import json
@@ -340,6 +343,7 @@ import sys
     ramp_preallocated_vus, ramp_max_vus, baseline_preallocated_vus, baseline_max_vus,
     spike_preallocated_vus, spike_max_vus, spike_peak_multiplier, spike_hold,
     soak_preallocated_vus, soak_max_vus, scale_step_preallocated_vus, scale_step_max_vus,
+    capacity_stress_preallocated_vus, capacity_stress_max_vus,
     confirmed_rate,
 ) = sys.argv[1:]
 
@@ -390,7 +394,7 @@ elif stage == "seed":
         "redisIamUser": redis_iam_user,
         "redisReplicationGroupId": redis_replication_group_id,
     })
-elif stage in {"smoke", "ramp", "spike", "soak", "scale-step"} or stage.startswith("baseline-"):
+elif stage in {"smoke", "ramp", "spike", "soak", "scale-step", "capacity-stress"} or stage.startswith("baseline-"):
     payload["k6Image"] = k6_image
     payload["credentialLifecycle"] = {
         "users": users,
@@ -435,7 +439,14 @@ elif stage in {"smoke", "ramp", "spike", "soak", "scale-step"} or stage.startswi
             "preAllocatedVUs": scale_step_preallocated_vus,
             "maxVUs": scale_step_max_vus,
         }
-    if stage in {"spike", "soak", "scale-step"} or stage.startswith("baseline-"):
+    elif stage == "capacity-stress":
+        payload["effectiveK6Overrides"] = {
+            "rate": confirmed_rate,
+            "preAllocatedVUs": capacity_stress_preallocated_vus,
+            "maxVUs": capacity_stress_max_vus,
+            "stageMultipliers": [1, 2, 4, 8],
+        }
+    if stage in {"spike", "soak", "scale-step", "capacity-stress"} or stage.startswith("baseline-"):
         payload["confirmedRate"] = confirmed_rate
 elif stage == "d005":
     payload["confirmedRate"] = confirmed_rate
@@ -515,7 +526,7 @@ payload = {
     "inputDigest": input_digest,
     "completedAtUtc": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
 }
-if stage == "seed" or stage in {"smoke", "ramp", "spike", "soak", "scale-step"} or stage.startswith("baseline-"):
+if stage == "seed" or stage in {"smoke", "ramp", "spike", "soak", "scale-step", "capacity-stress"} or stage.startswith("baseline-"):
     payload.update({
         "fixtureId": stage,
         "fixtureResultPath": f"fixtures/{stage}.json",
@@ -951,6 +962,7 @@ phase_max_vus_override() {
     spike) printf '%s' "$SPIKE_MAX_VUS" ;;
     soak) printf '%s' "$SOAK_MAX_VUS" ;;
     scale-step) printf '%s' "$SCALE_STEP_MAX_VUS" ;;
+    capacity-stress) printf '%s' "$CAPACITY_STRESS_MAX_VUS" ;;
     *) echo "unsupported phase for VU capacity validation: $1" >&2; return 2 ;;
   esac
 }
@@ -1024,6 +1036,7 @@ k6_phase_stage() {
   export BASELINE_PREALLOCATED_VUS BASELINE_MAX_VUS
   export SPIKE_PREALLOCATED_VUS SPIKE_MAX_VUS SPIKE_PEAK_MULTIPLIER SPIKE_HOLD
   export SOAK_PREALLOCATED_VUS SOAK_MAX_VUS SCALE_STEP_PREALLOCATED_VUS SCALE_STEP_MAX_VUS
+  export CAPACITY_STRESS_PREALLOCATED_VUS CAPACITY_STRESS_MAX_VUS
   export AWS_SLO_CONTRACT_FILE="$SLO_CONTRACT"
   if [[ -n "$CONFIRMED_RATE" ]]; then export CONFIRMED_RATE; fi
   if [[ "$phase" == "baseline" ]]; then
@@ -1484,6 +1497,12 @@ case "$MODE" in
     run_stage_once target target_stage
     run_stage_once seed seed_stage
     run_stage_once scale-step k6_phase_stage scale-step
+    ;;
+  capacity-stress)
+    validate_confirmed_rate
+    run_stage_once target target_stage
+    run_stage_once seed seed_stage
+    run_stage_once capacity-stress k6_phase_stage capacity-stress
     ;;
   evidence)
     run_stage_once evidence evidence_stage

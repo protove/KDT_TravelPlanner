@@ -123,11 +123,14 @@ spec:
             failureThreshold: 6
           resources:
             requests:
-              cpu: 250m
-              memory: 384Mi
+              # SCRUM-43 EKS calibration: ceil50m(1.25 * load p95)
+              # and ceil64Mi(1.25 * working-set p95).
+              cpu: 550m
+              memory: 640Mi
             limits:
-              cpu: "1"
-              memory: 1Gi
+              # At least 2x the measured requests and formula-compliant.
+              cpu: 1100m
+              memory: 1280Mi
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:
