@@ -34,6 +34,7 @@ class CommunityCategoryControllerIntegrationTest(
 		communityCategoryRepository.save(
 			CommunityCategory(id = 3, code = "HIDDEN", name = "숨김 카테고리", sortOrder = 0, isActive = false),
 		)
+		communityCategoryRepository.save(CommunityCategory(id = 4, code = "NOTICE", name = "공지사항", sortOrder = 4))
 	}
 
 	@Test
@@ -41,10 +42,22 @@ class CommunityCategoryControllerIntegrationTest(
 		mockMvc.get("/api/v1/community/categories")
 			.andExpect {
 				status { isOk() }
-				jsonPath("$.data", hasSize<Any>(2))
+				jsonPath("$.data", hasSize<Any>(3))
 				jsonPath("$.data[0].code", equalTo("TRAVEL_REVIEW"))
 				jsonPath("$.data[0].name", equalTo("여행후기"))
 				jsonPath("$.data[0].sortOrder", equalTo(1))
+				jsonPath("$.data[1].code", equalTo("FREE"))
+				jsonPath("$.data[2].code", equalTo("NOTICE"))
+			}
+	}
+
+	@Test
+	fun `excludes NOTICE when excludeNotice=true`() {
+		mockMvc.get("/api/v1/community/categories") { param("excludeNotice", "true") }
+			.andExpect {
+				status { isOk() }
+				jsonPath("$.data", hasSize<Any>(2))
+				jsonPath("$.data[0].code", equalTo("TRAVEL_REVIEW"))
 				jsonPath("$.data[1].code", equalTo("FREE"))
 			}
 	}

@@ -38,10 +38,10 @@ class CommunityPostService(
 		authorId: UUID,
 		request: CommunityPostCreateRequest,
 	): CommunityPostCreateResponse {
-		if (request.categoryCode != SUPPORTED_CATEGORY_CODE) {
+		if (request.categoryCode == NOTICE_CATEGORY_CODE) {
 			throw UnsupportedCommunityCategoryException()
 		}
-		val category = communityCategoryRepository.findByCodeAndIsActiveTrue(SUPPORTED_CATEGORY_CODE)
+		val category = communityCategoryRepository.findByCodeAndIsActiveTrue(request.categoryCode)
 			?: throw CommunityCategoryNotFoundException()
 
 		// itinerarySnapshotJson은 bodyJson과 달리 Tiptap 문서가 아니라(일정 자체의 day/장소 구조 +
@@ -195,7 +195,7 @@ class CommunityPostService(
 	}
 
 	companion object {
-		private const val SUPPORTED_CATEGORY_CODE = "TRAVEL_REVIEW"
+		private const val NOTICE_CATEGORY_CODE = "NOTICE"
 		private const val MAX_TAG_COUNT = 5
 		private const val TAG_NAME_MIN_LENGTH = 1
 		private const val TAG_NAME_MAX_LENGTH = 20

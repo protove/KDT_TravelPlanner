@@ -78,14 +78,13 @@ function CommunityWriteContent() {
 
   React.useEffect(() => {
     if (!accessToken) return;
-    getCategories(accessToken)
+    // excludeNotice: 공지사항은 관리자 전용 플로우 대상이라 글쓰기 화면에서는 서버 조회
+    // 단계에서부터 아예 로드하지 않는다. 그 외 활성 카테고리(여행후기/자유/QNA 등)는
+    // community_category 테이블 값 그대로 선택지에 노출한다.
+    getCategories(accessToken, { excludeNotice: true })
       .then((res) => {
-        // 백엔드가 현재 TRAVEL_REVIEW만 게시글 작성을 지원한다(1차 마일스톤 범위) — 아직
-        // 지원 안 하는 카테고리를 골라 400을 받는 상황을 막기 위해 선택지에서 미리 걸러낸다.
-        // 백엔드가 다른 카테고리도 지원하게 되면 이 필터만 지우면 된다.
-        const supported = res.filter((c) => c.code === TRAVEL_REVIEW_CATEGORY_CODE);
-        setCategories(supported);
-        setCategoryCode((prev) => prev || supported[0]?.code || "");
+        setCategories(res);
+        setCategoryCode((prev) => prev || res[0]?.code || "");
       })
       .catch(() => {});
   }, [accessToken]);
@@ -170,7 +169,7 @@ function CommunityWriteContent() {
 
   return (
     <ListLayout
-      title={<h1 className="text-2xl font-bold text-foreground">여행후기 작성</h1>}
+      title={<h1 className="text-2xl font-bold text-foreground">글쓰기</h1>}
       actions={
         <div className="flex items-center gap-2">
           <Button type="button" variant="outline" onClick={() => router.push("/community")}>

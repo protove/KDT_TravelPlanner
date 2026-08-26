@@ -108,14 +108,32 @@ class CommunityPostControllerIntegrationTest(
 	}
 
 	@Test
-	fun `category outside TRAVEL_REVIEW scope is rejected`() {
-		val author = saveUser("scope-author")
+	fun `creates a post under a non-TRAVEL_REVIEW active category such as FREE`() {
+		val author = saveUser("free-author")
 		val accessToken = jwtTokenService.issueAccessToken(requireNotNull(author.id)).value
 
 		mockMvc.post("/api/v1/community/posts") {
 			header(HttpHeaders.AUTHORIZATION, "Bearer $accessToken")
 			contentType = MediaType.APPLICATION_JSON
 			content = """{"categoryCode":"FREE","title":"t","bodyJson":{"type":"doc"}}"""
+		}
+			.andExpect {
+				status { isOk() }
+				jsonPath("$.data.postId", notNullValue())
+			}
+
+		assertEquals(1, communityPostRepository.count())
+	}
+
+	@Test
+	fun `NOTICE category is rejected`() {
+		val author = saveUser("scope-author")
+		val accessToken = jwtTokenService.issueAccessToken(requireNotNull(author.id)).value
+
+		mockMvc.post("/api/v1/community/posts") {
+			header(HttpHeaders.AUTHORIZATION, "Bearer $accessToken")
+			contentType = MediaType.APPLICATION_JSON
+			content = """{"categoryCode":"NOTICE","title":"t","bodyJson":{"type":"doc"}}"""
 		}
 			.andExpect {
 				status { isBadRequest() }

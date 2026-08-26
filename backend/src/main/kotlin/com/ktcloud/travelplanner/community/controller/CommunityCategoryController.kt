@@ -5,6 +5,7 @@ import com.ktcloud.travelplanner.community.service.CommunityCategoryService
 import com.ktcloud.travelplanner.global.response.ApiResponse
 import org.springframework.web.bind.annotation.GetMapping
 import org.springframework.web.bind.annotation.RequestMapping
+import org.springframework.web.bind.annotation.RequestParam
 import org.springframework.web.bind.annotation.RestController
 
 @RestController
@@ -13,6 +14,8 @@ class CommunityCategoryController(
 	private val communityCategoryService: CommunityCategoryService,
 ) {
 	@GetMapping
-	fun getCategories(): ApiResponse<List<CommunityCategoryResponse>> =
-		ApiResponse.success(communityCategoryService.getCategories())
+	fun getCategories(
+		@RequestParam(defaultValue = "false") excludeNotice: Boolean,
+	): ApiResponse<List<CommunityCategoryResponse>> =
+		ApiResponse.success(communityCategoryService.getCategories(excludeNotice))
 }

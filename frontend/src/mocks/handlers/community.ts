@@ -29,7 +29,11 @@ function notImplemented() {
 }
 
 export const communityHandlers = [
-  http.get("*/api/v1/community/categories", () => HttpResponse.json({ data: CATEGORIES })),
+  http.get("*/api/v1/community/categories", ({ request }) => {
+    const excludeNotice = new URL(request.url).searchParams.get("excludeNotice") === "true";
+    const data = excludeNotice ? CATEGORIES.filter((c) => c.code !== "NOTICE") : CATEGORIES;
+    return HttpResponse.json({ data });
+  }),
 
   // 아래는 자리만 남겨둔 임시 핸들러 — 각 담당 브랜치에서 실제 구현으로 교체
   http.get("*/api/v1/community/tags", () => HttpResponse.json({ data: [] })),
