@@ -92,12 +92,34 @@ class CommunityPostServiceTest {
 	}
 
 	@Test
-	fun `rejects categories other than TRAVEL_REVIEW before touching other repositories`() {
+	fun `rejects the NOTICE category before touching other repositories`() {
 		assertThrows<UnsupportedCommunityCategoryException> {
-			service.createPost(authorId, request(categoryCode = "FREE"))
+			service.createPost(authorId, request(categoryCode = "NOTICE"))
 		}
 
 		verifyNoInteractions(communityCategoryRepository, userRepository, communityPostRepository)
+	}
+
+	@Test
+	fun `creates a post under any active non-NOTICE category`() {
+		val freeCategory = CommunityCategory(id = 2, code = "FREE", name = "자유게시판", sortOrder = 2, isActive = true)
+		`when`(communityCategoryRepository.findByCodeAndIsActiveTrue("FREE")).thenReturn(freeCategory)
+		`when`(userRepository.findById(authorId)).thenReturn(Optional.of(author))
+		`when`(communityPostRepository.save(any(CommunityPost::class.java)))
+			.thenAnswer { it.getArgument<CommunityPost>(0) }
+
+		service.createPost(authorId, request(categoryCode = "FREE"))
+	}
+
+	@Test
+	fun `rejects a category code that does not exist or is inactive`() {
+		`when`(communityCategoryRepository.findByCodeAndIsActiveTrue("QNA")).thenReturn(null)
+
+		assertThrows<CommunityCategoryNotFoundException> {
+			service.createPost(authorId, request(categoryCode = "QNA"))
+		}
+
+		verifyNoInteractions(userRepository, communityPostRepository)
 	}
 
 	@Test

@@ -9,6 +9,7 @@ import { Icon } from "@/components/atoms/Icon";
 import { CommentInput } from "@/components/molecules/CommentInput";
 import { CommentRow } from "@/components/molecules/CommentRow";
 import { ConfirmDialog } from "@/components/molecules/ConfirmDialog";
+import { ItinerarySnapshotCard } from "@/components/organisms/ItinerarySnapshotCard";
 import { RichTextEditor } from "@/components/organisms/RichTextEditor";
 import { DetailLayout } from "@/components/templates/DetailLayout";
 import { useAuthStore } from "@/lib/stores/useAuthStore";
@@ -221,6 +222,12 @@ function CommunityDetailContent() {
       schedule={
         <>
         <div className="flex flex-col gap-4">
+          {post.itinerarySnapshotJson && (
+            <div className="rounded-xl border border-border bg-card p-4">
+              <ItinerarySnapshotCard snapshot={post.itinerarySnapshotJson} />
+            </div>
+          )}
+
           <RichTextEditor value={post.bodyJson} onChange={noop} readOnly />
 
           <div className="flex items-center gap-4 border-y border-border py-3">

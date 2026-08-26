@@ -38,12 +38,14 @@ class CommunityPostService(
 		authorId: UUID,
 		request: CommunityPostCreateRequest,
 	): CommunityPostCreateResponse {
-		if (request.categoryCode != SUPPORTED_CATEGORY_CODE) {
+		if (request.categoryCode == NOTICE_CATEGORY_CODE) {
 			throw UnsupportedCommunityCategoryException()
 		}
-		val category = communityCategoryRepository.findByCodeAndIsActiveTrue(SUPPORTED_CATEGORY_CODE)
+		val category = communityCategoryRepository.findByCodeAndIsActiveTrue(request.categoryCode)
 			?: throw CommunityCategoryNotFoundException()
 
+		// itinerarySnapshotJson은 bodyJson과 달리 Tiptap 문서가 아니라(일정 자체의 day/장소 구조 +
+		// 좌표) 프론트가 작성 시점에 한 번 조립해서 보내는 불변 스냅샷이라 화이트리스트 검증 대상이 아니다.
 		TiptapBodyJsonValidator.validate(request.bodyJson)
 
 		val author = userRepository.findById(authorId).orElseThrow(::CommunityPostAuthorNotFoundException)
@@ -61,6 +63,7 @@ class CommunityPostService(
 			bodyJson = request.bodyJson.toString(),
 			bodyPreview = buildBodyPreview(request.bodyJson),
 			sourceTravelId = request.sourceTravelId,
+			itinerarySnapshotJson = request.itinerarySnapshotJson?.toString(),
 		)
 		post.assignTags(tags)
 
@@ -86,6 +89,7 @@ class CommunityPostService(
 		val response = CommunityPostDetailResponse.from(
 			post = post,
 			bodyJson = objectMapper.readTree(post.bodyJson),
+			itinerarySnapshotJson = post.itinerarySnapshotJson?.let(objectMapper::readTree),
 			viewCount = post.viewCount + 1,
 			commentCount = commentCount,
 			reactionCount = reactionCount,
@@ -191,7 +195,7 @@ class CommunityPostService(
 	}
 
 	companion object {
-		private const val SUPPORTED_CATEGORY_CODE = "TRAVEL_REVIEW"
+		private const val NOTICE_CATEGORY_CODE = "NOTICE"
 		private const val MAX_TAG_COUNT = 5
 		private const val TAG_NAME_MIN_LENGTH = 1
 		private const val TAG_NAME_MAX_LENGTH = 20

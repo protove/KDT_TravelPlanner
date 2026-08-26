@@ -357,6 +357,7 @@ class CommunityCommentControllerIntegrationTest(
 			bodyJson = bodyJson.toString(),
 			bodyPreview = "본문",
 			sourceTravelId = null,
+			itinerarySnapshotJson = null,
 		)
 		return communityPostRepository.saveAndFlush(post)
 	}

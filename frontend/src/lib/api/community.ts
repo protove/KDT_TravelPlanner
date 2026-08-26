@@ -19,9 +19,17 @@ export interface PageResponse<T> {
   isLast: boolean;
 }
 
-/** 카테고리 목록(탭용)을 조회한다. */
-export async function getCategories(accessToken?: string | null): Promise<CommunityCategory[]> {
-  return apiFetch<CommunityCategory[]>("/api/v1/community/categories", accessToken);
+/**
+ * 카테고리 목록(탭용)을 조회한다.
+ * excludeNotice: true면 NOTICE(공지사항) 행을 서버 조회 단계에서부터 제외한다 — 글쓰기
+ * 화면처럼 공지사항을 아예 로드하면 안 되는 곳에서 사용한다.
+ */
+export async function getCategories(
+  accessToken?: string | null,
+  options?: { excludeNotice?: boolean },
+): Promise<CommunityCategory[]> {
+  const query = options?.excludeNotice ? "?excludeNotice=true" : "";
+  return apiFetch<CommunityCategory[]>(`/api/v1/community/categories${query}`, accessToken);
 }
 
 export interface CommunityPostCreateResponse {
