@@ -148,7 +148,14 @@ resource "aws_eks_node_group" "this" {
     desired_size = var.node_desired_size
   }
 
-  tags = merge(var.tags, { Name = "${local.name}-eks-nodes" })
+  tags = merge(var.tags, {
+    Name = "${local.name}-eks-nodes"
+    # Cluster Autoscaler discovers only this managed node group. These tags
+    # are propagated to the backing ASG by EKS and are intentionally scoped to
+    # the exact dev-eks cluster name.
+    "k8s.io/cluster-autoscaler/enabled"           = "true"
+    "k8s.io/cluster-autoscaler/${local.name}-eks" = "owned"
+  })
 
   lifecycle {
     precondition {

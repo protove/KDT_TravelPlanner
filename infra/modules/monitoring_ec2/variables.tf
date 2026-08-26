@@ -13,6 +13,28 @@ variable "environment" {
   description = "Deployment environment name."
 }
 
+variable "platform" {
+  type        = string
+  description = "Monitoring deployment profile. EC2 keeps the legacy discovery/bind behavior; EKS enables the remote-write receiver."
+  default     = "ec2"
+
+  validation {
+    condition     = contains(["ec2", "eks"], var.platform)
+    error_message = "platform must be either ec2 or eks."
+  }
+}
+
+variable "name_suffix" {
+  type        = string
+  description = "Optional lowercase suffix used to keep disposable platform resources uniquely named."
+  default     = ""
+
+  validation {
+    condition     = var.name_suffix == "" || can(regex("^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$", var.name_suffix))
+    error_message = "name_suffix must be empty or use lowercase letters, numbers, and single hyphens."
+  }
+}
+
 variable "instance_type" {
   type        = string
   description = "Monitoring EC2 instance type."

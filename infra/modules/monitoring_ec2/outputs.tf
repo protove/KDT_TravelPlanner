@@ -13,6 +13,16 @@ output "monitoring_endpoint_parameter_name" {
   value       = aws_ssm_parameter.monitoring_endpoint.name
 }
 
+output "monitoring_config_bucket_name" {
+  description = "S3 bucket name containing the environment-local monitoring configuration and EKS bundle."
+  value       = aws_s3_bucket.monitoring_config.id
+}
+
+output "monitoring_config_bucket_arn" {
+  description = "S3 bucket ARN containing the environment-local monitoring configuration and EKS bundle."
+  value       = aws_s3_bucket.monitoring_config.arn
+}
+
 output "monitoring_config_revision" {
   description = "Hash of the Prometheus, Loki and Grafana configuration uploaded to S3."
   value       = local.monitoring_config_revision

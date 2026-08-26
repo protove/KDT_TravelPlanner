@@ -115,11 +115,11 @@ run "nodes_are_private_with_standard_managed_policies" {
   assert {
     condition = (
       toset(aws_eks_node_group.this.subnet_ids) == toset(var.subnet_ids) &&
-      aws_eks_node_group.this.scaling_config[0].min_size == 1 &&
-      aws_eks_node_group.this.scaling_config[0].max_size == 1 &&
-      aws_eks_node_group.this.scaling_config[0].desired_size == 1
+      aws_eks_node_group.this.scaling_config[0].min_size == 2 &&
+      aws_eks_node_group.this.scaling_config[0].max_size == 4 &&
+      aws_eks_node_group.this.scaling_config[0].desired_size == 2
     )
-    error_message = "Nodes must run only in the private app subnets at the agreed minimum 1/1/1 size."
+    error_message = "Nodes must run only in the private app subnets at the EC2 comparison 2/4/2 size."
   }
 
   assert {
@@ -129,6 +129,18 @@ run "nodes_are_private_with_standard_managed_policies" {
       aws_iam_role_policy_attachment.node_ecr_read_only.policy_arn == "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly"
     )
     error_message = "Node role must use the standard AWS worker/CNI/registry-read-only managed policies, not a repository-scoped policy."
+  }
+}
+
+run "nodes_have_only_dev_eks_autoscaler_discovery_tags" {
+  command = plan
+
+  assert {
+    condition = (
+      aws_eks_node_group.this.tags["k8s.io/cluster-autoscaler/enabled"] == "true" &&
+      aws_eks_node_group.this.tags["k8s.io/cluster-autoscaler/kdt-travelplanner-dev-eks"] == "owned"
+    )
+    error_message = "The managed node group must expose only the exact dev-eks Cluster Autoscaler discovery tags."
   }
 }
 

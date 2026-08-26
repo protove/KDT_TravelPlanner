@@ -39,7 +39,7 @@ variable "persistent_state_key" {
 variable "kubernetes_version" {
   type        = string
   description = "EKS control plane Kubernetes minor version."
-  default     = "1.31"
+  default     = "1.35"
 
   validation {
     condition     = can(regex("^1\\.[0-9]{2}$", var.kubernetes_version))
@@ -64,6 +64,53 @@ variable "public_access_cidrs" {
   default     = ["0.0.0.0/0"]
 }
 
+variable "postgres_engine_version" {
+  type        = string
+  description = "Exact PostgreSQL 17 patch version available in the target AWS region."
+  default     = "17.10"
+
+  validation {
+    condition     = can(regex("^17\\.[0-9]+$", var.postgres_engine_version))
+    error_message = "postgres_engine_version must pin an exact PostgreSQL 17 patch version."
+  }
+}
+
+variable "pod_identity_agent_version" {
+  type        = string
+  description = "Exact eks-pod-identity-agent EKS add-on version compatible with kubernetes_version; query and pin immediately before plan."
+
+  validation {
+    condition     = can(regex("^v[0-9]+\\.[0-9]+\\.[0-9]+-eksbuild\\.[0-9]+$", var.pod_identity_agent_version))
+    error_message = "pod_identity_agent_version must be an exact vX.Y.Z-eksbuild.N EKS add-on version."
+  }
+}
+
+variable "monitoring_image_references" {
+  type = object({
+    prometheus = string
+    loki       = string
+    grafana    = string
+    alloy      = string
+  })
+  description = "Pinned common Monitoring EC2 image tags. The EKS Alloy bundle additionally pins its Kubernetes image digest in k8s/eks/monitoring."
+  default = {
+    prometheus = "prom/prometheus:v3.13.1"
+    loki       = "grafana/loki:3.7.2"
+    grafana    = "grafana/grafana:13.1.0"
+    alloy      = "grafana/alloy:v1.16.1"
+  }
+
+  validation {
+    condition = alltrue([
+      can(regex("^prom/prometheus:v[0-9]+\\.[0-9]+\\.[0-9]+$", var.monitoring_image_references.prometheus)),
+      can(regex("^grafana/loki:[0-9]+\\.[0-9]+\\.[0-9]+$", var.monitoring_image_references.loki)),
+      can(regex("^grafana/grafana:[0-9]+\\.[0-9]+\\.[0-9]+$", var.monitoring_image_references.grafana)),
+      can(regex("^grafana/alloy:v[0-9]+\\.[0-9]+\\.[0-9]+$", var.monitoring_image_references.alloy)),
+    ])
+    error_message = "monitoring_image_references must use the official DockerHub repositories with exact semantic version tags; latest and tagless references are not allowed."
+  }
+}
+
 variable "admin_principal_arns" {
   type        = list(string)
   description = <<-EOT
@@ -80,7 +127,7 @@ variable "admin_principal_arns" {
 variable "bastion_kubectl_version" {
   type        = string
   description = "Pinned kubectl version installed on the SSM verification bastion, matching kubernetes_version."
-  default     = "1.31.0"
+  default     = "1.35.6"
 
   validation {
     condition     = can(regex("^[0-9]+\\.[0-9]+\\.[0-9]+$", var.bastion_kubectl_version))
@@ -91,23 +138,23 @@ variable "bastion_kubectl_version" {
 variable "node_instance_types" {
   type        = list(string)
   description = "Managed node group EC2 instance types."
-  default     = ["t3.medium"]
+  default     = ["t3.small"]
 }
 
 variable "node_min_size" {
   type        = number
   description = "Minimum managed node group size."
-  default     = 1
+  default     = 2
 }
 
 variable "node_max_size" {
   type        = number
   description = "Maximum managed node group size."
-  default     = 1
+  default     = 4
 }
 
 variable "node_desired_size" {
   type        = number
   description = "Desired managed node group size."
-  default     = 1
+  default     = 2
 }

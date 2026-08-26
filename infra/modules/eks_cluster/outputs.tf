@@ -58,6 +58,14 @@ output "node_role_arn" {
   value       = aws_iam_role.node.arn
 }
 
+output "cluster_autoscaler_discovery_tags" {
+  description = "Exact managed node-group tags used by the dev-eks Cluster Autoscaler discovery contract."
+  value = {
+    "k8s.io/cluster-autoscaler/enabled"           = aws_eks_node_group.this.tags["k8s.io/cluster-autoscaler/enabled"]
+    "k8s.io/cluster-autoscaler/${local.name}-eks" = aws_eks_node_group.this.tags["k8s.io/cluster-autoscaler/${local.name}-eks"]
+  }
+}
+
 output "secrets_kms_key_arn" {
   description = "Dedicated KMS key ARN used for EKS Kubernetes Secrets envelope encryption."
   value       = aws_kms_key.eks_secrets.arn

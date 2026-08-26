@@ -21,7 +21,7 @@ variable "subnet_ids" {
 variable "kubernetes_version" {
   type        = string
   description = "EKS control plane Kubernetes minor version."
-  default     = "1.31"
+  default     = "1.35"
 
   validation {
     condition     = can(regex("^1\\.[0-9]{2}$", var.kubernetes_version))
@@ -79,7 +79,7 @@ variable "admin_principal_arns" {
 variable "node_instance_types" {
   type        = list(string)
   description = "Managed node group EC2 instance types."
-  default     = ["t3.medium"]
+  default     = ["t3.small"]
 
   validation {
     condition     = length(var.node_instance_types) > 0
@@ -90,7 +90,7 @@ variable "node_instance_types" {
 variable "node_min_size" {
   type        = number
   description = "Minimum managed node group size."
-  default     = 1
+  default     = 2
 
   validation {
     condition     = var.node_min_size >= 1
@@ -101,7 +101,7 @@ variable "node_min_size" {
 variable "node_max_size" {
   type        = number
   description = "Maximum managed node group size."
-  default     = 1
+  default     = 4
 
   validation {
     condition     = var.node_max_size >= 1
@@ -112,7 +112,7 @@ variable "node_max_size" {
 variable "node_desired_size" {
   type        = number
   description = "Desired managed node group size."
-  default     = 1
+  default     = 2
 
   validation {
     condition     = var.node_desired_size >= 1
