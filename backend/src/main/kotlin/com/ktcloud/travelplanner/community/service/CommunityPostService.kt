@@ -11,6 +11,7 @@ import com.ktcloud.travelplanner.community.dto.CommunityPostUpdateRequest
 import com.ktcloud.travelplanner.community.model.CommunityPost
 import com.ktcloud.travelplanner.community.model.CommunityTag
 import com.ktcloud.travelplanner.community.repository.CommunityCategoryRepository
+import com.ktcloud.travelplanner.community.repository.CommunityPostListRow
 import com.ktcloud.travelplanner.community.repository.CommunityPostRepository
 import com.ktcloud.travelplanner.community.repository.CommunityTagRepository
 import com.ktcloud.travelplanner.community.validation.TiptapBodyJsonValidator
@@ -22,6 +23,7 @@ import com.ktcloud.travelplanner.travel.repository.TravelRepository
 import com.ktcloud.travelplanner.user.dto.PatchField
 import com.ktcloud.travelplanner.user.repository.UserRepository
 import org.springframework.dao.OptimisticLockingFailureException
+import org.springframework.data.domain.Page
 import org.springframework.data.domain.PageRequest
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
@@ -253,9 +255,25 @@ class CommunityPostService(
 			)
 		}
 
+		return buildSummaryPage(result)
+	}
+
+	// 마이페이지 "내가 쓴 글" 탭 — 카테고리/검색 필터 없이 본인 글만 작성일 역순으로.
+	@Transactional(readOnly = true)
+	fun getMyPosts(
+		authorId: UUID,
+		page: Int,
+		size: Int,
+	): PageResponse<CommunityPostSummaryResponse> {
+		val pageable = PageRequest.of(page.coerceAtLeast(0), size.coerceIn(MIN_PAGE_SIZE, MAX_PAGE_SIZE))
+		val result = communityPostRepository.findByAuthorIdOrderByCreatedAtDesc(authorId, pageable)
+		return buildSummaryPage(result)
+	}
+
+	// 게시글마다 countActiveComments/countReactions를 따로 부르면 N+1이라 배치로 한 번에 가져온다
+	// (CommunityCommentService.getComments와 동일한 패턴). getPosts/getMyPosts가 공유.
+	private fun buildSummaryPage(result: Page<CommunityPostListRow>): PageResponse<CommunityPostSummaryResponse> {
 		val postIds = result.content.map { it.postId }
-		// 게시글마다 countActiveComments/countReactions를 따로 부르면 N+1이라 배치로 한 번에 가져온다
-		// (CommunityCommentService.getComments와 동일한 패턴).
 		val tagsByPostId: Map<UUID, List<String>>
 		val commentCountByPostId: Map<UUID, Long>
 		val reactionCountByPostId: Map<UUID, Long>

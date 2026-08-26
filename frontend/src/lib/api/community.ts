@@ -10,6 +10,7 @@ import type {
   CommunityPostSearchScope,
   CommunityPostSummary,
   CommunityPostUpdatePatch,
+  MyCommentResponse,
 } from "@/lib/types/community";
 
 export interface PageResponse<T> {
@@ -163,4 +164,39 @@ export async function toggleCommentReaction(accessToken: string, commentId: stri
   return apiFetch<CommentResponse>(`/api/v1/community/comments/${commentId}/reactions/LIKE`, accessToken, {
     method: "PUT",
   });
+}
+
+export interface MyPageListParams {
+  page?: number;
+  size?: number;
+}
+
+/** 마이페이지 "내가 쓴 글" 탭. 로그인 필요(토큰만으로 본인 글을 식별, 필터 없음). */
+export async function listMyPosts(
+  accessToken: string,
+  params: MyPageListParams = {},
+): Promise<PageResponse<CommunityPostSummary>> {
+  const searchParams = new URLSearchParams();
+  if (params.page != null) searchParams.set("page", String(params.page));
+  if (params.size != null) searchParams.set("size", String(params.size));
+  const qs = searchParams.toString();
+  return apiFetch<PageResponse<CommunityPostSummary>>(
+    `/api/v1/community/me/posts${qs ? `?${qs}` : ""}`,
+    accessToken,
+  );
+}
+
+/** 마이페이지 "내가 쓴 댓글" 탭. 로그인 필요. */
+export async function listMyComments(
+  accessToken: string,
+  params: MyPageListParams = {},
+): Promise<PageResponse<MyCommentResponse>> {
+  const searchParams = new URLSearchParams();
+  if (params.page != null) searchParams.set("page", String(params.page));
+  if (params.size != null) searchParams.set("size", String(params.size));
+  const qs = searchParams.toString();
+  return apiFetch<PageResponse<MyCommentResponse>>(
+    `/api/v1/community/me/comments${qs ? `?${qs}` : ""}`,
+    accessToken,
+  );
 }

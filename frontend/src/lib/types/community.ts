@@ -180,3 +180,17 @@ export interface CommentCreateRequest {
 
 /** PATCH /comments/{commentId} 요청. 필드가 CommentCreateRequest와 동일해서 별도 타입을 만들지 않고 재사용한다. */
 export type CommentUpdateRequest = CommentCreateRequest;
+
+/**
+ * 마이페이지 "내가 쓴 댓글" 탭 전용 응답(GET /community/me/comments). 어느 글에 단 댓글인지
+ * 보여줘야 해서 postId/postTitle을 들고 있다 — 댓글 목록 API의 CommentResponse와는 다른 형태.
+ */
+export interface MyCommentResponse {
+  commentId: string;
+  postId: string;
+  postTitle: string;
+  content: string;
+  createdAt: string;
+  /** null이면 한 번도 수정되지 않은 댓글. */
+  updatedAt: string | null;
+}

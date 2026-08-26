@@ -2,12 +2,15 @@ package com.ktcloud.travelplanner.community.service
 
 import com.ktcloud.travelplanner.community.dto.CommentCreateRequest
 import com.ktcloud.travelplanner.community.dto.CommentResponse
+import com.ktcloud.travelplanner.community.dto.MyCommentResponse
 import com.ktcloud.travelplanner.community.model.CommunityComment
 import com.ktcloud.travelplanner.community.repository.CommunityCommentRepository
 import com.ktcloud.travelplanner.community.repository.CommunityPostRepository
 import com.ktcloud.travelplanner.global.exception.DomainException
 import com.ktcloud.travelplanner.global.exception.ErrorCode
+import com.ktcloud.travelplanner.global.response.PageResponse
 import com.ktcloud.travelplanner.user.repository.UserRepository
+import org.springframework.data.domain.PageRequest
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
 import java.time.Instant
@@ -131,8 +134,22 @@ class CommunityCommentService(
 		)
 	}
 
+	// 마이페이지 "내가 쓴 댓글" 탭 — 필터 없이 본인 댓글만 작성일 역순으로.
+	@Transactional(readOnly = true)
+	fun getMyComments(
+		authorId: UUID,
+		page: Int,
+		size: Int,
+	): PageResponse<MyCommentResponse> {
+		val pageable = PageRequest.of(page.coerceAtLeast(0), size.coerceIn(MIN_PAGE_SIZE, MAX_PAGE_SIZE))
+		val result = communityCommentRepository.findByAuthorIdOrderByCreatedAtDesc(authorId, pageable)
+		return PageResponse.from(result.map(MyCommentResponse::from))
+	}
+
 	companion object {
 		private const val SUPPORTED_REACTION_TYPE = "LIKE"
+		private const val MIN_PAGE_SIZE = 1
+		private const val MAX_PAGE_SIZE = 50
 	}
 }
 

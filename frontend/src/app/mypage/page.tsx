@@ -5,6 +5,8 @@ import { useRouter } from "next/navigation";
 import { Button } from "@/components/atoms/Button";
 import { ProfileSection } from "@/components/organisms/ProfileSection";
 import { NotificationList } from "@/components/organisms/NotificationList";
+import { MyPostsPanel } from "@/components/organisms/MyPostsPanel";
+import { MyCommentsPanel } from "@/components/organisms/MyCommentsPanel";
 import { ConfirmDialog } from "@/components/molecules/ConfirmDialog";
 import { MyPageLayout } from "@/components/templates/MyPageLayout";
 import { useAuthStore } from "@/lib/stores/useAuthStore";
@@ -32,11 +34,13 @@ import {
 } from "@/lib/api/profileImage";
 import type { Gender } from "@/components/organisms/ProfileSection";
 
-type MypageTab = "profile" | "notif";
+type MypageTab = "profile" | "notif" | "myPosts" | "myComments";
 
 const TABS = [
   { key: "profile", label: "프로필수정" },
   { key: "notif", label: "초대알림" },
+  { key: "myPosts", label: "내가 쓴 글" },
+  { key: "myComments", label: "내가 쓴 댓글" },
 ];
 
 interface ProfileDraft {
@@ -405,7 +409,7 @@ export default function MypagePage() {
             onConfirm={handleWithdraw}
           />
         </>
-      ) : (
+      ) : tab === "notif" ? (
         <>
           <h1 className="mb-5 text-xl font-bold text-foreground">초대알림</h1>
           <NotificationList
@@ -413,6 +417,16 @@ export default function MypagePage() {
             onAccept={acceptNotification}
             onReject={rejectNotification}
           />
+        </>
+      ) : tab === "myPosts" ? (
+        <>
+          <h1 className="mb-5 text-xl font-bold text-foreground">내가 쓴 글</h1>
+          {accessToken && <MyPostsPanel accessToken={accessToken} />}
+        </>
+      ) : (
+        <>
+          <h1 className="mb-5 text-xl font-bold text-foreground">내가 쓴 댓글</h1>
+          {accessToken && <MyCommentsPanel accessToken={accessToken} />}
         </>
       )}
     </MyPageLayout>

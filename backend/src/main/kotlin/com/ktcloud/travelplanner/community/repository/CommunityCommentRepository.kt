@@ -1,10 +1,13 @@
 package com.ktcloud.travelplanner.community.repository
 
 import com.ktcloud.travelplanner.community.model.CommunityComment
+import org.springframework.data.domain.Page
+import org.springframework.data.domain.Pageable
 import org.springframework.data.jpa.repository.JpaRepository
 import org.springframework.data.jpa.repository.Modifying
 import org.springframework.data.jpa.repository.Query
 import org.springframework.data.repository.query.Param
+import java.time.Instant
 import java.util.UUID
 
 interface CommunityCommentRepository : JpaRepository<CommunityComment, UUID> {
@@ -76,6 +79,31 @@ interface CommunityCommentRepository : JpaRepository<CommunityComment, UUID> {
 		@Param("commentIds") commentIds: List<UUID>,
 		@Param("userId") userId: UUID,
 	): List<UUID>
+
+	// 마이페이지 "내가 쓴 댓글" 탭 — 어느 글에 달았는지 보여줘야 해서 post.title까지 함께 가져온다.
+	// @SQLRestriction("deleted_at IS NULL")이 CommunityComment/CommunityPost 양쪽에 걸려 있어
+	// 삭제된 댓글이나 삭제된 글에 달린 댓글은 JOIN 단계에서 자동 제외된다.
+	@Query(
+		value = """
+			SELECT new com.ktcloud.travelplanner.community.repository.MyCommentRow(
+				comment.id,
+				post.id,
+				post.title,
+				comment.content,
+				comment.createdAt,
+				comment.updatedAt
+			)
+			FROM CommunityComment comment
+			JOIN comment.post post
+			WHERE comment.author.id = :authorId
+			ORDER BY comment.createdAt DESC
+		""",
+		countQuery = "SELECT COUNT(comment) FROM CommunityComment comment WHERE comment.author.id = :authorId",
+	)
+	fun findByAuthorIdOrderByCreatedAtDesc(
+		@Param("authorId") authorId: UUID,
+		pageable: Pageable,
+	): Page<MyCommentRow>
 }
 
 // countReactionsByCommentIds의 네이티브 쿼리 결과를 매핑하는 Spring Data 인터페이스 프로젝션.
@@ -84,3 +112,12 @@ interface CommentReactionCountRow {
 	val commentId: UUID
 	val reactionCount: Long
 }
+
+data class MyCommentRow(
+	val commentId: UUID,
+	val postId: UUID,
+	val postTitle: String,
+	val content: String,
+	val createdAt: Instant,
+	val updatedAt: Instant?,
+)

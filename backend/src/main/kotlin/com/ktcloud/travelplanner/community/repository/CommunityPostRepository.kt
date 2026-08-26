@@ -222,6 +222,33 @@ interface CommunityPostRepository : JpaRepository<CommunityPost, UUID> {
 	fun countReactionsByPostIds(
 		@Param("postIds") postIds: List<UUID>,
 	): List<PostReactionCountRow>
+
+	// 마이페이지 "내가 쓴 글" 탭 — 카테고리/키워드 필터 없이 본인 글만 작성일 역순으로.
+	@Query(
+		value = """
+			SELECT new com.ktcloud.travelplanner.community.repository.CommunityPostListRow(
+				post.id,
+				category.code,
+				post.title,
+				post.bodyPreview,
+				author.nickname,
+				author.profileImageUrl,
+				post.viewCount,
+				post.sourceTravelId,
+				post.createdAt
+			)
+			FROM CommunityPost post
+			JOIN post.category category
+			JOIN post.author author
+			WHERE author.id = :authorId
+			ORDER BY post.createdAt DESC
+		""",
+		countQuery = "SELECT COUNT(post) FROM CommunityPost post WHERE post.author.id = :authorId",
+	)
+	fun findByAuthorIdOrderByCreatedAtDesc(
+		@Param("authorId") authorId: UUID,
+		pageable: Pageable,
+	): Page<CommunityPostListRow>
 }
 
 interface PostCommentCountRow {
