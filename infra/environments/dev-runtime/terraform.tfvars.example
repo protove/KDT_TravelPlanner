@@ -9,6 +9,10 @@ postgres_engine_version = "17.8"
 # Tags are rejected. Replace this example digest with an image that exists in the persistent dev ECR repository.
 backend_image_uri = "123456789012.dkr.ecr.ap-northeast-2.amazonaws.com/kdt-travelplanner-dev-backend@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
+# EC2 comparison seed. Keep 300 seconds for the first calibration; replace
+# only after observing ASG InService -> ALB healthy readiness on the live run.
+backend_health_check_grace_period_seconds = 300
+
 # Rollout contract defaults. Keep NORMAL values for the ordinary dev-runtime
 # baseline. Recovery experiments must set all fields together in a separate,
 # uniquely named tfvars/plan file; never edit a previously approved plan.

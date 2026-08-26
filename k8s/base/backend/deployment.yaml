@@ -12,11 +12,11 @@ spec:
   strategy:
     type: RollingUpdate
     rollingUpdate:
-      # The retained dev-eks node group has only two t3.small nodes.  Delete
-      # one old replica before scheduling its replacement so a rollout cannot
-      # deadlock on the temporary surge request.
-      maxUnavailable: 1
-      maxSurge: 0
+      # The comparison seed uses two t3.medium nodes. Keep both old replicas
+      # available while one replacement is scheduled, matching the EC2
+      # 100/150 availability objective during the action-time rollout.
+      maxUnavailable: 0
+      maxSurge: 1
   selector:
     matchLabels:
       app.kubernetes.io/name: travel-planner-backend

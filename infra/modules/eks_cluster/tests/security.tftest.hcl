@@ -118,6 +118,7 @@ run "nodes_are_private_with_standard_managed_policies" {
       aws_eks_node_group.this.scaling_config[0].min_size == 2 &&
       aws_eks_node_group.this.scaling_config[0].max_size == 4 &&
       aws_eks_node_group.this.scaling_config[0].desired_size == 2
+      && tolist(aws_eks_node_group.this.instance_types) == tolist(["t3.medium"])
     )
     error_message = "Nodes must run only in the private app subnets at the EC2 comparison 2/4/2 size."
   }

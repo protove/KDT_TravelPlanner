@@ -98,6 +98,21 @@ variable "backend_rollout_mode" {
   }
 }
 
+variable "backend_health_check_grace_period_seconds" {
+  type        = number
+  description = "Comparison seed for the EC2 ASG ELB health-check grace period; calibrate only after observing ASG InService -> ALB healthy readiness on the live run."
+  default     = 300
+
+  validation {
+    condition = (
+      var.backend_health_check_grace_period_seconds >= 0 &&
+      var.backend_health_check_grace_period_seconds <= 600 &&
+      var.backend_health_check_grace_period_seconds == floor(var.backend_health_check_grace_period_seconds)
+    )
+    error_message = "backend_health_check_grace_period_seconds must be an integer from 0 through 600."
+  }
+}
+
 variable "backend_rollout_min_healthy_percentage" {
   type        = number
   description = "Instance Refresh minimum healthy percentage for the backend rollout contract."
