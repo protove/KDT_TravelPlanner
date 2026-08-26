@@ -113,6 +113,11 @@ export interface CommunityPostSummary {
   reactionCount: number;
   sourceTravelId: string | null;
   createdAt: string;
+  /**
+   * 공개 목록(GET /posts)에서는 소프트 삭제된 글이 아예 안 내려와서 항상 null이고, 마이페이지
+   * "내가 쓴 글"(GET /community/me/posts)에서만 본인이 삭제한 글에 실제 값이 들어간다.
+   */
+  deletedAt?: string | null;
 }
 
 /** 상세(community-detail) 응답. 목록 요약 필드 + 본문 + 내 글 여부. */
@@ -193,4 +198,8 @@ export interface MyCommentResponse {
   createdAt: string;
   /** null이면 한 번도 수정되지 않은 댓글. */
   updatedAt: string | null;
+  /** 본인이 삭제한 댓글이면 값이 들어간다. */
+  deletedAt: string | null;
+  /** 댓글은 안 지웠는데 글이 삭제된 경우 값이 들어간다(상세로 못 들어가게 막는 용도). */
+  postDeletedAt: string | null;
 }

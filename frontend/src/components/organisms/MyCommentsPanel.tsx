@@ -2,10 +2,12 @@
 
 import * as React from "react";
 import { useRouter } from "next/navigation";
+import { Badge } from "@/components/atoms/Badge";
 import { Button } from "@/components/atoms/Button";
 import { Skeleton } from "@/components/atoms/Skeleton";
 import { listMyComments } from "@/lib/api/community";
 import type { MyCommentResponse } from "@/lib/types/community";
+import { cn } from "@/lib/utils";
 import { formatRelativeTime } from "@/lib/utils/formatRelativeTime";
 
 const PAGE_SIZE = 10;
@@ -15,17 +17,42 @@ export interface MyCommentsPanelProps {
 }
 
 function MyCommentCard({ comment, onClick }: { comment: MyCommentResponse; onClick: () => void }) {
+  // 댓글 자체를 지웠거나(deletedAt), 댓글은 안 지웠는데 글이 삭제된 경우(postDeletedAt) 둘 다
+  // 상세로 들어가면 404라 클릭을 막는다.
+  const isDeleted = Boolean(comment.deletedAt);
+  const isPostDeleted = Boolean(comment.postDeletedAt);
+  const disabled = isDeleted || isPostDeleted;
+
   return (
     <div
-      role="button"
-      tabIndex={0}
-      onClick={onClick}
-      onKeyDown={(event) => {
-        if (event.key === "Enter" || event.key === " ") onClick();
-      }}
-      className="flex cursor-pointer flex-col gap-1.5 rounded-lg border border-border bg-card p-4 shadow-card transition-shadow hover:shadow-dialog"
+      role={disabled ? undefined : "button"}
+      tabIndex={disabled ? undefined : 0}
+      onClick={disabled ? undefined : onClick}
+      onKeyDown={
+        disabled
+          ? undefined
+          : (event) => {
+              if (event.key === "Enter" || event.key === " ") onClick();
+            }
+      }
+      className={cn(
+        "flex flex-col gap-1.5 rounded-lg border border-border bg-card p-4 shadow-card transition-shadow",
+        disabled ? "opacity-60" : "cursor-pointer hover:shadow-dialog",
+      )}
     >
-      <p className="truncate text-xs font-semibold text-muted-foreground">{comment.postTitle}</p>
+      <div className="flex items-center gap-1.5">
+        <p className="truncate text-xs font-semibold text-muted-foreground">{comment.postTitle}</p>
+        {isDeleted && (
+          <Badge variant="destructive" className="shrink-0">
+            삭제한 댓글
+          </Badge>
+        )}
+        {!isDeleted && isPostDeleted && (
+          <Badge variant="destructive" className="shrink-0">
+            삭제된 글
+          </Badge>
+        )}
+      </div>
       <p className="line-clamp-2 break-words text-sm text-foreground">{comment.content}</p>
       <span className="text-xs text-fg-muted">
         {formatRelativeTime(comment.createdAt)}
