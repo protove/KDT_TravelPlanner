@@ -28,6 +28,12 @@ class AwsRecoveryRunnerContractTest(unittest.TestCase):
         self.assertIn("metadata.update({", source)
         self.assertIn('"profileSha256": hashlib.sha256(Path(profile_path).read_bytes()).hexdigest()', source)
 
+    def test_runner_supports_operator_pinned_custom_origin_resolution(self):
+        source = RUNNER.read_text(encoding="utf-8")
+        self.assertIn("AWS_TARGET_HOST_IPS", source)
+        self.assertIn("DOCKER_HOST_ARGS+=(--add-host", source)
+        self.assertIn('"method": "docker-add-host"', source)
+
     def test_planned_entrypoint_delegates_to_k6_runner(self):
         source = ENTRYPOINT.read_text(encoding="utf-8")
         self.assertIn("run-k6-aws-recovery.sh", source)
