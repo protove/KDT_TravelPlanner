@@ -3,6 +3,7 @@
 // (see b01SpikeThresholds). Peaks off the same D-005 baseline rate, so it
 // cannot run before requireScenarioRate('baseline') has a value.
 import { mapPoints, travelDetail, travelList } from '../../flows/travel-read.js';
+import { orderChange, timelineCreate } from '../../flows/timeline-write.js';
 import { accessToken } from '../../lib/auth.js';
 import { recordCoreOperation } from '../lib/core-metrics.js';
 import { b01SpikeThresholds } from '../thresholds.js';
@@ -39,9 +40,11 @@ const FLOWS = {
   travelList: () => recordCoreOperation(travelList),
   travelDetail: () => recordCoreOperation(travelDetail),
   mapPoints: () => recordCoreOperation(mapPoints),
+  timelineCreate: () => recordCoreOperation(timelineCreate),
+  orderChange: () => recordCoreOperation(orderChange),
 };
 
-const order = ['refresh', 'travelList', 'travelDetail', 'mapPoints'];
+const order = ['refresh', 'travelList', 'travelDetail', 'mapPoints', 'timelineCreate', 'orderChange'];
 let cursor = 0;
 const boundaries = order.map((key) => {
   const weight = MIX[key];

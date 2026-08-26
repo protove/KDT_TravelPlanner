@@ -139,12 +139,12 @@ def build_kubectl_commands(
     _require(isinstance(region, str) and re.fullmatch(r"[a-z]{2}(?:-gov)?-[a-z0-9-]+-\d", region), "AWS region is invalid")
     return [
         "set -euo pipefail",
-        f"aws eks update-kubeconfig --name {cluster_name} --region {region} --alias scr53-eks",
-        f"printf '%s\\n' __SCRUM53_HPA_BEGIN__; kubectl --context scr53-eks --namespace {namespace} get hpa {deployment} -o json; printf '%s\\n' __SCRUM53_HPA_END__",
-        f"printf '%s\\n' __SCRUM53_DEPLOYMENT_BEGIN__; kubectl --context scr53-eks --namespace {namespace} get deployment {deployment} -o json; printf '%s\\n' __SCRUM53_DEPLOYMENT_END__",
-        f"printf '%s\\n' __SCRUM53_PODS_BEGIN__; kubectl --context scr53-eks --namespace {namespace} get pods -l app.kubernetes.io/name=travel-planner-backend -o json; printf '%s\\n' __SCRUM53_PODS_END__",
-        "printf '%s\\n' __SCRUM53_NODES_BEGIN__; kubectl --context scr53-eks get nodes -o json; printf '%s\\n' __SCRUM53_NODES_END__",
-        "printf '%s\\n' __SCRUM53_EVENTS_BEGIN__; kubectl --context scr53-eks get events --all-namespaces --sort-by=.lastTimestamp -o json; printf '%s\\n' __SCRUM53_EVENTS_END__",
+        f"aws eks update-kubeconfig --name {cluster_name} --region {region} --alias scr43-eks",
+        f"printf '%s\\n' __SCRUM53_HPA_BEGIN__; kubectl --context scr43-eks --namespace {namespace} get hpa {deployment} -o json; printf '%s\\n' __SCRUM53_HPA_END__",
+        f"printf '%s\\n' __SCRUM53_DEPLOYMENT_BEGIN__; kubectl --context scr43-eks --namespace {namespace} get deployment {deployment} -o json; printf '%s\\n' __SCRUM53_DEPLOYMENT_END__",
+        f"printf '%s\\n' __SCRUM53_PODS_BEGIN__; kubectl --context scr43-eks --namespace {namespace} get pods -l app.kubernetes.io/name=travel-planner-backend -o json; printf '%s\\n' __SCRUM53_PODS_END__",
+        "printf '%s\\n' __SCRUM53_NODES_BEGIN__; kubectl --context scr43-eks get nodes -o json; printf '%s\\n' __SCRUM53_NODES_END__",
+        "printf '%s\\n' __SCRUM53_EVENTS_BEGIN__; kubectl --context scr43-eks get events --all-namespaces --sort-by=.lastTimestamp -o json; printf '%s\\n' __SCRUM53_EVENTS_END__",
     ]
 
 
@@ -180,10 +180,26 @@ def build_evidence(
         status = item.get("status") if isinstance(item, dict) else {}
         if not isinstance(metadata, dict) or not isinstance(spec, dict):
             continue
+        containers = status.get("containerStatuses", []) if isinstance(status, dict) else []
+        ready_containers = sum(1 for container in containers if isinstance(container, dict) and container.get("ready") is True)
+        restart_count = sum(
+            int(container.get("restartCount", 0))
+            for container in containers
+            if isinstance(container, dict) and isinstance(container.get("restartCount", 0), int)
+        )
         placement.append({
             "podName": metadata.get("name"),
             "nodeName": spec.get("nodeName"),
             "phase": status.get("phase") if isinstance(status, dict) else None,
+            "readyContainers": ready_containers,
+            "containerCount": len(containers) if isinstance(containers, list) else 0,
+            "restartCount": restart_count,
+            "imageIds": sorted({
+                str(container.get("imageID"))
+                for container in containers
+                if isinstance(container, dict) and container.get("imageID")
+            }),
+            "ready": bool(containers) and ready_containers == len(containers),
         })
     return {
         "platform": "eks",
@@ -194,7 +210,7 @@ def build_evidence(
         "hpa": {
             "desiredReplicas": hpa_status.get("desiredReplicas"),
             "currentReplicas": hpa_status.get("currentReplicas"),
-            "availableReplicas": hpa_status.get("currentReplicas"),
+            "availableReplicas": deployment_status.get("availableReplicas"),
             "conditions": [
                 {"type": item.get("type"), "status": item.get("status"), "reason": item.get("reason")}
                 for item in (hpa_status.get("conditions") or [])
@@ -210,6 +226,9 @@ def build_evidence(
         "backendPods": {
             "count": len(pod_items),
             "placement": placement,
+            "readyCount": sum(1 for item in placement if item.get("ready")),
+            "restartCount": sum(int(item.get("restartCount", 0)) for item in placement),
+            "imageIds": sorted({image_id for item in placement for image_id in item.get("imageIds", [])}),
         },
         "nodeCount": len(node_items),
         "nodeReadyCount": sum(
@@ -239,6 +258,30 @@ def build_evidence(
             "privateIpAndSecretFieldsDropped": True,
         },
     }
+
+
+def high_watermark(previous: dict[str, Any] | None, current: dict[str, Any]) -> dict[str, Any]:
+    """Keep monotonic observations when a Kubernetes phase is skipped.
+
+    A skipped phase is recorded as ``not_observed`` by the coordinator rather
+    than being treated as a missing/failed terminal state. This helper keeps
+    the largest observed replica and readiness counts for later evidence.
+    """
+
+    previous = previous or {}
+    result = dict(previous)
+    for key in ("nodeCount", "nodeReadyCount", "eventCount"):
+        if isinstance(current.get(key), int):
+            result[key] = max(int(previous.get(key, 0)), current[key])
+    previous_pods = previous.get("backendPods", {}) if isinstance(previous.get("backendPods"), dict) else {}
+    current_pods = current.get("backendPods", {}) if isinstance(current.get("backendPods"), dict) else {}
+    result["backendPods"] = {
+        **previous_pods,
+        **current_pods,
+        "count": max(int(previous_pods.get("count", 0)), int(current_pods.get("count", 0))),
+        "readyCount": max(int(previous_pods.get("readyCount", 0)), int(current_pods.get("readyCount", 0))),
+    }
+    return result
 
 
 def sanitize_invocation(invocation: dict[str, Any]) -> dict[str, Any]:

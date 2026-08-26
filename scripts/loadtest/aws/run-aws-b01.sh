@@ -12,7 +12,7 @@
 # of one B-01 run.
 set -euo pipefail
 
-PHASE="${1:?usage: run-aws-b01.sh <smoke|ramp|baseline|spike> [rep]}"
+PHASE="${1:?usage: run-aws-b01.sh <smoke|ramp|baseline|spike|soak|scale-step> [rep]}"
 REP="${2:-}"
 
 : "${REPOSITORY_ROOT:?REPOSITORY_ROOT is required}"
@@ -28,8 +28,8 @@ MAX_RATE="${MAX_RATE:?MAX_RATE is required}"
 OPERATOR_MAX_VUS="${MAX_VUS:?MAX_VUS is required}"
 
 case "$PHASE" in
-  smoke|ramp|baseline|spike) ;;
-  *) echo "usage: run-aws-b01.sh <smoke|ramp|baseline|spike> [rep]" >&2; exit 2 ;;
+  smoke|ramp|baseline|spike|soak|scale-step) ;;
+  *) echo "usage: run-aws-b01.sh <smoke|ramp|baseline|spike|soak|scale-step> [rep]" >&2; exit 2 ;;
 esac
 if [[ "$PHASE" == "baseline" && -z "$REP" ]]; then
   echo "baseline requires a rep number (1-3): run-aws-b01.sh baseline <rep>" >&2
@@ -42,6 +42,7 @@ run_dir="$EVIDENCE_ROOT/k6/$suffix"
 phase_run_id="$RUN_ID-$suffix"
 
 export REPOSITORY_ROOT BASE_URL K6_IMAGE_DIGEST AWS_PROFILE_FILE REGION ENVIRONMENT TARGET_PLATFORM
+export AWS_SLO_CONTRACT_FILE="${AWS_SLO_CONTRACT_FILE:-$REPOSITORY_ROOT/load-tests/aws/contracts/slo-v1.1-candidate.json}"
 export RUN_ID="$phase_run_id"
 
 configure_phase_max_vus() {
@@ -157,6 +158,20 @@ PY
     # Spike is diagnostic (b01SpikeThresholds is empty) — intentional peak
     # overload is expected, not a failure signal by itself.
     ALLOW_K6_FAILURE=1 "$REPOSITORY_ROOT/scripts/loadtest/aws/run-k6-aws-scenario.sh" spike "$run_dir"
+    ;;
+  soak)
+    : "${CONFIRMED_RATE:?CONFIRMED_RATE is required for soak}"
+    export RATE="$CONFIRMED_RATE"
+    export PREALLOCATED_VUS="${SOAK_PREALLOCATED_VUS:-20}"
+    configure_phase_max_vus soak "${SOAK_MAX_VUS:-}"
+    ALLOW_K6_FAILURE=1 "$REPOSITORY_ROOT/scripts/loadtest/aws/run-k6-aws-scenario.sh" soak "$run_dir"
+    ;;
+  scale-step)
+    : "${CONFIRMED_RATE:?CONFIRMED_RATE is required for scale-step}"
+    export RATE="$CONFIRMED_RATE"
+    export PREALLOCATED_VUS="${SCALE_STEP_PREALLOCATED_VUS:-20}"
+    configure_phase_max_vus scale-step "${SCALE_STEP_MAX_VUS:-}"
+    ALLOW_K6_FAILURE=1 "$REPOSITORY_ROOT/scripts/loadtest/aws/run-k6-aws-scenario.sh" scale-step "$run_dir"
     ;;
 esac
 

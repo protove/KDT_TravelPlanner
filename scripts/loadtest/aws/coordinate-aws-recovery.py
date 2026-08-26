@@ -34,7 +34,7 @@ from typing import Any, Callable, Protocol, Sequence
 
 CONTRACT_VERSION = "aws-recovery-live-coordinator-v1"
 APPROVED_REGION_RE = re.compile(r"^[a-z]{2}(?:-gov)?-[a-z]+-[0-9]+$")
-RUN_ID_RE = re.compile(r"^aws-(b02|r01|r03|r05|r07)-[A-Za-z0-9._-]{1,80}$")
+RUN_ID_RE = re.compile(r"^(?:aws-(b02|r01|r03|r05|r07)|scrum43-(b02|r01|r03|r05|r07))-[A-Za-z0-9._-]{1,80}$")
 INSTANCE_ID_RE = re.compile(r"^i-[0-9a-f]{8,32}$")
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 DETAIL_MAX = 200
@@ -90,6 +90,24 @@ def sha256_file(path: Path) -> str:
 def sanitize_detail(detail: str) -> str:
     single_line = " ".join(str(detail).split())
     return single_line[:DETAIL_MAX]
+
+
+def platform_high_watermark(previous: dict[str, Any] | None, current: dict[str, Any]) -> dict[str, Any]:
+    """Merge monotonic readiness observations across skipped polls."""
+
+    previous = previous or {}
+    result = dict(previous)
+    for section in ("deployment", "hpa"):
+        old_status = previous.get(section, {}).get("status", {}) if isinstance(previous.get(section), dict) else {}
+        new_status = current.get(section, {}).get("status", {}) if isinstance(current.get(section), dict) else {}
+        merged = dict(old_status) if isinstance(old_status, dict) else {}
+        if isinstance(new_status, dict):
+            for key in ("replicas", "updatedReplicas", "availableReplicas", "readyReplicas", "currentReplicas", "desiredReplicas"):
+                if isinstance(new_status.get(key), int):
+                    merged[key] = max(int(merged.get(key, 0) or 0), new_status[key])
+        if merged:
+            result[section] = {**(previous.get(section, {}) if isinstance(previous.get(section), dict) else {}), "status": merged}
+    return result
 
 
 class ClockPort(Protocol):
@@ -244,9 +262,15 @@ def load_config(path: Path) -> dict[str, Any]:
     _require(scenario in SCENARIO_PREFIX, "config scenario must be B-02/R-01/R-03/R-05/R-07")
     run_id = config.get("runId", "")
     _require(bool(RUN_ID_RE.fullmatch(str(run_id))), "config runId is not an approved Recovery run id")
-    _require(str(run_id).startswith(SCENARIO_PREFIX[scenario]), "config runId prefix does not match scenario")
+    _require(
+        str(run_id).startswith(SCENARIO_PREFIX[scenario])
+        or str(run_id).startswith(f"scrum43-{scenario.lower()}-"),
+        "config runId prefix does not match scenario",
+    )
     _require(bool(APPROVED_REGION_RE.fullmatch(str(config.get("region", "")))), "config region is invalid")
-    _require(config.get("environment") == "dev-runtime", "config environment must be dev-runtime")
+    _require(config.get("environment") in {"dev-runtime", "dev-eks", "comparison"}, "config environment must be dev-runtime, dev-eks or comparison")
+    platform = config.get("platform", "ec2")
+    _require(platform in {"ec2", "eks"}, "config platform must be ec2 or eks")
 
     runner = config.get("runner")
     _require(isinstance(runner, dict), "config.runner must be an object")
@@ -265,8 +289,12 @@ def load_config(path: Path) -> dict[str, Any]:
 
     target = config.get("target")
     _require(isinstance(target, dict), "config.target must be an object")
-    for field in ("asgName", "targetGroupArn"):
-        _require(isinstance(target.get(field), str) and target[field], f"target.{field} is required")
+    _require(isinstance(target.get("targetGroupArn"), str) and target["targetGroupArn"], "target.targetGroupArn is required")
+    if platform == "ec2":
+        _require(isinstance(target.get("asgName"), str) and target["asgName"], "target.asgName is required for EC2")
+    else:
+        _require(isinstance(target.get("clusterName"), str) and target["clusterName"], "target.clusterName is required for EKS")
+        _require(isinstance(target.get("nodeGroupName"), str) and target["nodeGroupName"], "target.nodeGroupName is required for EKS")
     if scenario == "B-02":
         _require(
             bool(INSTANCE_ID_RE.fullmatch(str(target.get("instanceId", "")))),
@@ -294,10 +322,11 @@ def load_config(path: Path) -> dict[str, Any]:
     t1 = config.get("t1Mutation")
     _validate_mutation_spec(t1, "t1Mutation", scenario)
     t4 = config.get("t4Mutation")
+    _require(t4 is None, "t4Mutation is forbidden: recovery/image restore is a human operator action")
     if scenario in RESTORE_SCENARIOS:
-        _validate_mutation_spec(t4, "t4Mutation", scenario)
-    else:
-        _require(t4 is None, f"{scenario} must not define t4Mutation")
+        operator_recovery = config.get("operatorRecovery")
+        _require(isinstance(operator_recovery, dict), "restore scenarios require operatorRecovery")
+        _require(operator_recovery.get("mode") == "manual", "operatorRecovery.mode must be manual")
     return config
 
 
@@ -361,8 +390,10 @@ class CoordinatorState:
                 "scenario": scenario,
                 "steps": {},
                 "mutations": [],
+                "observations": [],
             }
             self._write()
+        self._payload.setdefault("observations", [])
 
     def _write(self) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)
@@ -395,9 +426,30 @@ class CoordinatorState:
         )
         self._write()
 
+    def record_observation(self, stream: str, status: str, detail: dict[str, Any] | None = None) -> None:
+        """Append a non-blocking platform observation.
+
+        Platform events can legitimately be missed between polls. They are
+        recorded as ``not_observed`` rather than creating a synthetic failed
+        lifecycle step, so a skipped state cannot deadlock the run.
+        """
+
+        _require(status in {"observed", "not_observed", "terminal"}, "invalid observation status")
+        self._payload["observations"].append({
+            "stream": stream,
+            "status": status,
+            "recordedAtUtc": utc_iso(self._clock.now()),
+            **({"detail": detail} if detail else {}),
+        })
+        self._write()
+
     @property
     def mutations(self) -> list[dict[str, Any]]:
         return list(self._payload["mutations"])
+
+    @property
+    def observations(self) -> list[dict[str, Any]]:
+        return list(self._payload.get("observations", []))
 
 
 class Coordinator:
@@ -419,6 +471,8 @@ class Coordinator:
         self.mutations = mutations
         self.clock = clock
         self.log = log
+        self.platform = str(config.get("platform", "ec2"))
+        self._last_platform_snapshot: dict[str, Any] | None = None
         timing = config.get("timing", {})
         self.warmup_seconds = int(timing.get("warmupSeconds", 180))
         self.normal_window_seconds = int(timing.get("normalWindowSeconds", 120))
@@ -488,6 +542,8 @@ class Coordinator:
         return result
 
     def _scaling_activities(self, *, since_step: str = "t1") -> list[dict[str, Any]]:
+        if self.platform == "eks" and not self.config["target"].get("asgName"):
+            return []
         payload = self.aws.call(
             [
                 "autoscaling",
@@ -512,6 +568,16 @@ class Coordinator:
         return recent
 
     def _instance_refreshes(self) -> list[dict[str, Any]]:
+        if self.platform == "eks" and not self.config["target"].get("asgName"):
+            payload = self.aws.call([
+                "eks", "describe-nodegroup",
+                "--cluster-name", self.config["target"]["clusterName"],
+                "--nodegroup-name", self.config["target"]["nodeGroupName"],
+            ])
+            nodegroup = payload.get("nodegroup", {}) if isinstance(payload, dict) else {}
+            status = nodegroup.get("status")
+            update = nodegroup.get("updateConfig", {}) if isinstance(nodegroup, dict) else {}
+            return [{"Status": status, "PercentageComplete": update.get("maxUnavailablePercentage", 0)}]
         payload = self.aws.call(
             [
                 "autoscaling",
@@ -523,6 +589,52 @@ class Coordinator:
             ]
         )
         return payload.get("InstanceRefreshes", [])
+
+    def _eks_snapshot(self) -> dict[str, Any]:
+        """Read a sanitized kubectl snapshot through the SSM bastion."""
+
+        target = self.config["target"]
+        cluster = target["clusterName"]
+        node_group = target["nodeGroupName"]
+        namespace = target.get("namespace", "travel-planner")
+        deployment = target.get("deployment", "backend")
+        region = self.config["region"]
+        command = (
+            "set -euo pipefail; "
+            f"aws eks update-kubeconfig --name {shlex.quote(cluster)} --region {shlex.quote(region)} --alias scr43-eks; "
+            f"printf '%s\\n' __SCRUM53_DEPLOYMENT_BEGIN__; kubectl --context scr43-eks -n {shlex.quote(namespace)} get deployment {shlex.quote(deployment)} -o json; printf '%s\\n' __SCRUM53_DEPLOYMENT_END__; "
+            f"printf '%s\\n' __SCRUM53_PODS_BEGIN__; kubectl --context scr43-eks -n {shlex.quote(namespace)} get pods -l app.kubernetes.io/name=travel-planner-backend -o json; printf '%s\\n' __SCRUM53_PODS_END__; "
+            f"printf '%s\\n' __SCRUM53_HPA_BEGIN__; kubectl --context scr43-eks -n {shlex.quote(namespace)} get hpa {shlex.quote(deployment)} -o json; printf '%s\\n' __SCRUM53_HPA_END__"
+        )
+        stdout = self.ssm.run(command, timeout_seconds=180, comment="eks-platform-snapshot")
+        snapshots: dict[str, Any] = {}
+        for key in ("deployment", "pods", "hpa"):
+            begin = f"__SCRUM53_{key.upper()}_BEGIN__"
+            end = f"__SCRUM53_{key.upper()}_END__"
+            match = re.search(re.escape(begin) + r"\s*(.*?)\s*" + re.escape(end), stdout, re.DOTALL)
+            if not match:
+                continue
+            try:
+                parsed = json.loads(match.group(1))
+            except json.JSONDecodeError as error:
+                raise CoordinatorError(f"EKS snapshot section {key} is not JSON") from error
+            if isinstance(parsed, dict):
+                snapshots[key] = parsed
+        if not snapshots:
+            self.state.record_observation("eks-platform-snapshot", "not_observed", {"reason": "no kubectl sections"})
+        else:
+            self.state.record_observation("eks-platform-snapshot", "observed", {"sections": sorted(snapshots)})
+        merged = platform_high_watermark(self._last_platform_snapshot, snapshots)
+        self._last_platform_snapshot = merged
+        return merged
+
+    def _eks_ready(self, snapshot: dict[str, Any]) -> bool:
+        deployment = snapshot.get("deployment", {}) if isinstance(snapshot.get("deployment"), dict) else {}
+        status = deployment.get("status", {}) if isinstance(deployment.get("status"), dict) else {}
+        desired = int(status.get("replicas", 2) or 2)
+        available = int(status.get("availableReplicas", 0) or 0)
+        ready = int(status.get("readyReplicas", 0) or 0)
+        return desired >= 2 and available >= 2 and ready >= 2
 
     def _poll_until(self, label: str, probe: Callable[[], str | None]) -> str:
         deadline = self.clock.now() + self.detector_timeout_seconds
@@ -618,6 +730,15 @@ class Coordinator:
 
     def _detect_t2(self) -> str:
         scenario = self.config["scenario"]
+        if self.platform == "eks":
+            def probe() -> str | None:
+                snapshot = self._eks_snapshot()
+                deployment = snapshot.get("deployment", {}) if isinstance(snapshot.get("deployment"), dict) else {}
+                status = deployment.get("status", {}) if isinstance(deployment.get("status"), dict) else {}
+                if int(status.get("updatedReplicas", 0) or 0) > 0:
+                    return "EKS Deployment observed an updated backend replica"
+                return None
+            return self._poll_until(f"{scenario} EKS first replacement", probe)
         if scenario == "B-02":
             instance = self.config["target"]["instanceId"]
 
@@ -654,6 +775,20 @@ class Coordinator:
 
     def _detect_t3(self) -> str:
         scenario = self.config["scenario"]
+        if self.platform == "eks":
+            def probe() -> str | None:
+                snapshot = self._eks_snapshot()
+                deployment = snapshot.get("deployment", {}) if isinstance(snapshot.get("deployment"), dict) else {}
+                status = deployment.get("status", {}) if isinstance(deployment.get("status"), dict) else {}
+                if not self._eks_ready(snapshot):
+                    return "EKS Deployment/Pod readiness failure observed"
+                health = self._target_health()
+                if any(state in {"unhealthy", "initial", "draining"} for state in health.values()):
+                    return "EKS ALB Pod-IP readiness failure observed"
+                if int(status.get("updatedReplicas", 0) or 0) > 0 and int(status.get("availableReplicas", 0) or 0) < int(status.get("replicas", 2) or 2):
+                    return "EKS rollout has updated but unavailable replicas"
+                return None
+            return self._poll_until(f"{scenario} EKS readiness failure", probe)
         if scenario == "B-02":
 
             def probe() -> str | None:
@@ -695,8 +830,22 @@ class Coordinator:
     def _detect_t4(self) -> str:
         scenario = self.config["scenario"]
         if scenario in RESTORE_SCENARIOS:
-            self._execute_mutation("t4Mutation")
-            return "manual baseline restore apply issued"
+            self.state.record_observation("operator-recovery", "not_observed", {"mode": "manual"})
+
+            def probe() -> str | None:
+                health = self._target_health()
+                healthy = sum(state == "healthy" for state in health.values())
+                if self.platform == "eks":
+                    snapshot = self._eks_snapshot()
+                    ready = self._eks_ready(snapshot)
+                else:
+                    ready = healthy >= int(self.config.get("expectedHealthyTargets", 2))
+                if healthy >= int(self.config.get("expectedHealthyTargets", 2)) and ready:
+                    self.state.record_observation("operator-recovery", "observed", {"healthyTargets": healthy})
+                    return "human operator recovery observed; automation issued no restore mutation"
+                return None
+
+            return self._poll_until("manual operator recovery", probe)
         if scenario == "B-02":
 
             def probe() -> str | None:
@@ -762,6 +911,39 @@ class Coordinator:
         self.log("[coordinator] RUN_END observed on runner")
 
     def step_restoration_readback(self) -> None:
+        if self.platform == "eks":
+            payload = self.aws.call([
+                "eks", "describe-nodegroup",
+                "--cluster-name", self.config["target"]["clusterName"],
+                "--nodegroup-name", self.config["target"]["nodeGroupName"],
+            ])
+            nodegroup = payload.get("nodegroup", {}) if isinstance(payload, dict) else {}
+            scaling = nodegroup.get("scalingConfig", {}) if isinstance(nodegroup, dict) else {}
+            _require(
+                (scaling.get("minSize"), scaling.get("desiredSize"), scaling.get("maxSize")) == (2, 2, 4),
+                f"EKS node group capacity is not restored: {scaling}",
+            )
+            health = self._target_health()
+            healthy = [target for target, state in health.items() if state == "healthy"]
+            snapshot = self._eks_snapshot()
+            _require(self._eks_ready(snapshot), "EKS Deployment is not ready during restoration read-back")
+            _require(len(healthy) >= int(self.config.get("expectedHealthyTargets", 2)), "EKS healthy Pod target count is below the expected floor")
+            readback = {
+                "contractVersion": CONTRACT_VERSION,
+                "runId": self.config["runId"],
+                "scenario": self.config["scenario"],
+                "platform": "eks",
+                "capacity": {"minSize": scaling.get("minSize"), "desiredCapacity": scaling.get("desiredSize"), "maxSize": scaling.get("maxSize")},
+                "healthyTargetCount": len(healthy),
+                "deploymentReady": True,
+                "mutationsExecuted": self.state.mutations,
+                "recordedAtUtc": utc_iso(self.clock.now()),
+            }
+            control_dir = Path(self.config["controlDir"])
+            control_dir.mkdir(parents=True, exist_ok=True)
+            (control_dir / "restoration-readback.json").write_text(json.dumps(readback, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+            self.log("[coordinator] EKS restoration read-back verified")
+            return
         asg_payload = self.aws.call(
             [
                 "autoscaling",
@@ -833,7 +1015,7 @@ class Coordinator:
 
 def dry_run_report(config: dict[str, Any]) -> dict[str, Any]:
     checks = []
-    for label in ("t1Mutation", "t4Mutation"):
+    for label in ("t1Mutation",):
         spec = config.get(label)
         if not spec:
             continue
@@ -853,9 +1035,11 @@ def dry_run_report(config: dict[str, Any]) -> dict[str, Any]:
         "mode": "dry-run",
         "runId": config["runId"],
         "scenario": config["scenario"],
+        "platform": config.get("platform", "ec2"),
         "steps": list(STEPS),
         "mutationChecks": checks,
         "mutations": [],
+        "operatorRecovery": config.get("operatorRecovery", {"mode": "not-applicable"}),
     }
 
 

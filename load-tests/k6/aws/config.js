@@ -25,7 +25,7 @@ function loadProfile() {
 }
 
 function loadSloContract() {
-  const contractPath = '../../aws/contracts/slo-v1.0.json';
+  const contractPath = __ENV.AWS_SLO_CONTRACT_FILE || '../../aws/contracts/slo-v1.0.json';
   let raw;
   try {
     raw = open(contractPath);
@@ -38,8 +38,16 @@ function loadSloContract() {
   } catch (error) {
     fail(`SLO contract file is not valid JSON: ${contractPath}`);
   }
-  if (contract.contractVersion !== 'v1.0' || contract.sloVersion !== 'v1.0-frozen') {
-    fail('SLO contract must be contractVersion=v1.0 and sloVersion=v1.0-frozen');
+  const supported = (contract.contractVersion === 'v1.0' && contract.sloVersion === 'v1.0-frozen')
+    || (contract.contractVersion === 'v1.1'
+      && ['v1.1-candidate', 'v1.1-frozen'].includes(contract.sloVersion));
+  if (!supported) {
+    fail('SLO contract must be v1.0-frozen or v1.1 candidate/frozen');
+  }
+  if (contract.contractVersion === 'v1.1') {
+    if (!contract.comparison || contract.comparison.sameInstanceFamily !== 't3.medium') {
+      fail('v1.1 comparison contract must bind the t3.medium common host envelope');
+    }
   }
   return contract;
 }
@@ -130,6 +138,20 @@ export const LIMITS = PROFILE.limits || fail('limits is missing from profile');
 export const SCENARIOS = PROFILE.scenarios || fail('scenarios is missing from profile');
 export const REQUEST_MIX = PROFILE.requestMix || fail('requestMix is missing from profile');
 
+function validateMix(name, mix) {
+  if (!mix || typeof mix !== 'object') fail(`requestMix.${name} is missing`);
+  const values = Object.values(mix).map(Number);
+  if (values.length === 0 || values.some((value) => !Number.isFinite(value) || value < 0)) {
+    fail(`requestMix.${name} contains an invalid weight`);
+  }
+  const total = values.reduce((sum, value) => sum + value, 0);
+  if (Math.abs(total - 100) > 0.001) fail(`requestMix.${name} must sum to 100 (got ${total})`);
+}
+
+['baseline', 'normal', 'spike', 'soak'].forEach((name) => {
+  if (REQUEST_MIX[name]) validateMix(name, REQUEST_MIX[name]);
+});
+
 assertGoogleApiDisabled(PROFILE);
 
 export function enforceRateLimit(rate) {
@@ -155,4 +177,10 @@ export function requireScenarioRate(scenarioName) {
       + 'profile.scenarios.baseline.rate or the RATE env var before running this scenario');
   }
   return enforceRateLimit(rate);
+}
+
+export function requestMixFor(scenarioName) {
+  const selected = REQUEST_MIX[scenarioName] || REQUEST_MIX.normal || REQUEST_MIX.baseline;
+  if (!selected) fail(`no request mix is defined for scenario "${scenarioName}"`);
+  return selected;
 }

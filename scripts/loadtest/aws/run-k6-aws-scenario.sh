@@ -15,10 +15,11 @@
 # the pattern already established by seed-aws-load-data.py/cleanup-aws-load-data.py.
 set -euo pipefail
 
-SCENARIO="${1:?usage: run-k6-aws-scenario.sh <smoke|ramp|baseline|spike> <run-dir>}"
+SCENARIO="${1:?usage: run-k6-aws-scenario.sh <smoke|ramp|baseline|spike|soak|scale-step> <run-dir>}"
 RUN_DIR="${2:?usage: run-k6-aws-scenario.sh <scenario> <run-dir>}"
 REPOSITORY_ROOT="${REPOSITORY_ROOT:?REPOSITORY_ROOT is required}"
 K6_DIR="$REPOSITORY_ROOT/load-tests/k6"
+CONTRACT_DIR="$REPOSITORY_ROOT/load-tests/aws/contracts"
 BASE_URL="${BASE_URL:?BASE_URL is required (approved ALB HTTPS origin)}"
 K6_IMAGE_DIGEST="${K6_IMAGE_DIGEST:?K6_IMAGE_DIGEST is required (digest-pinned k6 image)}"
 RUN_ID="${RUN_ID:?RUN_ID is required}"
@@ -27,6 +28,7 @@ DATA_FILE="${DATA_FILE:?DATA_FILE is required (seeded credential file for this r
 REGION="${REGION:?REGION is required}"
 ENVIRONMENT="${ENVIRONMENT:?ENVIRONMENT is required}"
 TARGET_PLATFORM="${TARGET_PLATFORM:-ec2}"
+AWS_SLO_CONTRACT_FILE="${AWS_SLO_CONTRACT_FILE:-$CONTRACT_DIR/slo-v1.1-candidate.json}"
 EFFECTIVE_MAX_VUS="${EFFECTIVE_MAX_VUS:?EFFECTIVE_MAX_VUS is required}"
 
 declare -A SCENARIO_FILES=(
@@ -34,6 +36,8 @@ declare -A SCENARIO_FILES=(
   [ramp]="b01-ramp.js"
   [baseline]="b01-baseline.js"
   [spike]="b01-spike.js"
+  [soak]="soak.js"
+  [scale-step]="scale-step.js"
 )
 SCENARIO_FILE="${SCENARIO_FILES[$SCENARIO]:-}"
 if [[ -z "$SCENARIO_FILE" ]]; then
@@ -46,6 +50,10 @@ if [[ "$K6_IMAGE_DIGEST" != *@sha256:* ]]; then
 fi
 if [[ ! -f "$AWS_PROFILE_FILE" ]]; then
   echo "missing AWS profile file: $AWS_PROFILE_FILE" >&2
+  exit 2
+fi
+if [[ ! -f "$AWS_SLO_CONTRACT_FILE" ]]; then
+  echo "missing SLO contract file: $AWS_SLO_CONTRACT_FILE" >&2
   exit 2
 fi
 if [[ ! -f "$DATA_FILE" ]]; then
@@ -171,6 +179,7 @@ docker run -i --name "$K6_CONTAINER_NAME" \
   --cap-drop ALL \
   --security-opt no-new-privileges \
   -v "$K6_DIR:/scripts:ro" \
+  -v "$CONTRACT_DIR:/contracts:ro" \
   -v "$(dirname "$AWS_PROFILE_FILE"):/profiles:ro" \
   -v "$DATA_FILE:/data/data.json:ro" \
   -v "$RUN_DIR:/out" \
@@ -178,6 +187,7 @@ docker run -i --name "$K6_CONTAINER_NAME" \
   -e TARGET_REGION="$REGION" \
   -e TARGET_ENVIRONMENT="$ENVIRONMENT" \
   -e AWS_PROFILE_FILE="/profiles/$(basename "$AWS_PROFILE_FILE")" \
+  -e AWS_SLO_CONTRACT_FILE="/contracts/$(basename "$AWS_SLO_CONTRACT_FILE")" \
   -e DATA_FILE=/data/data.json \
   -e REQUIRE_UNIQUE_CREDENTIALS=1 \
   -e REQUIRED_UNIQUE_CREDENTIAL_COUNT="$EFFECTIVE_MAX_VUS" \

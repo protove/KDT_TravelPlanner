@@ -4,7 +4,7 @@
 # TEAM_MEMBER_B01_ACTION_REQUEST.md §4.2 "B-01 실행 순서":
 #
 #   target -> seed -> smoke -> ramp -> [operator picks a candidate rate] ->
-#   baseline x3 (same rate) -> D-005 arrival-rate record -> spike ->
+#   baseline x3 (same rate) -> D-005 arrival-rate record -> spike/soak/scale-step ->
 #   evidence (Grafana Annotation + Query; CloudWatch is collected in
 #   target_stage's aws/ dir; PNG excluded for now — see D-003/Plan04) ->
 #   cleanup -> cleanup-result record -> provisional evidence review ->
@@ -39,6 +39,7 @@ REPOSITORY_ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
 MODE="all"
 PROFILE="$REPOSITORY_ROOT/load-tests/aws/profiles/ec2-b01.json"
 SLO_CONTRACT="$REPOSITORY_ROOT/load-tests/aws/contracts/slo-v1.0.json"
+SLO_CONTRACT_EXPLICIT=0
 TARGET_PLATFORM="ec2"
 REGION=""
 ENVIRONMENT=""
@@ -89,13 +90,18 @@ SPIKE_PREALLOCATED_VUS="${SPIKE_PREALLOCATED_VUS:-}"
 SPIKE_MAX_VUS="${SPIKE_MAX_VUS:-}"
 SPIKE_PEAK_MULTIPLIER="${SPIKE_PEAK_MULTIPLIER:-}"
 SPIKE_HOLD="${SPIKE_HOLD:-}"
+SOAK_PREALLOCATED_VUS="${SOAK_PREALLOCATED_VUS:-}"
+SOAK_MAX_VUS="${SOAK_MAX_VUS:-}"
+SCALE_STEP_PREALLOCATED_VUS="${SCALE_STEP_PREALLOCATED_VUS:-}"
+SCALE_STEP_MAX_VUS="${SCALE_STEP_MAX_VUS:-}"
 
 usage() {
   cat <<'USAGE'
-usage: orchestrate-aws-b01.sh [target|seed|smoke|ramp|baseline|d005-record|spike|evidence|cleanup|provisional-review|freeze|export|all] [options]
+usage: orchestrate-aws-b01.sh [target|seed|smoke|ramp|baseline|d005-record|spike|soak|scale-step|evidence|cleanup|provisional-review|freeze|export|all] [options]
 
 Required:
   --profile PATH                 AWS load-test profile JSON (default: load-tests/aws/profiles/ec2-b01.json)
+  --slo-contract PATH            versioned SLO contract (comparison default: v1.1 candidate)
   --target-platform PLATFORM     Explicit target adapter: ec2 or eks (default: ec2)
   --region REGION
   --environment ENVIRONMENT
@@ -111,7 +117,7 @@ Required:
 
 Also required for most modes:
   --s3-bucket NAME                (seed/export/all) evidence S3 bucket
-  --k6-image DIGEST                (smoke/ramp/baseline/spike/all) digest-pinned k6 image
+  --k6-image DIGEST                (smoke/ramp/baseline/spike/soak/scale-step/all) digest-pinned k6 image
   --database-host/--database-name/--database-secret-arn   (seed/cleanup/all)
                                     --database-secret-arn must be a dedicated test-only Secret,
                                     JSON {"username":..,"password":..} (never the RDS master secret)
@@ -139,7 +145,7 @@ EKS target options (required when --target-platform eks):
   --backend-deployment NAME      Backend Deployment (default: backend)
 
 Modes:
-  target|seed|smoke|ramp|baseline|spike   individual phases with target validation
+  target|seed|smoke|ramp|baseline|spike|soak|scale-step   individual phases with target validation
   evidence            Grafana Annotation + Query collection (post-Spike; PNG excluded, see D-003/Plan04)
   cleanup              synthetic data cleanup; writes cleanup-result.json into the evidence bundle
   provisional-review    writes provisional-review.json (an inventory, not a pass/fail verdict) for the
@@ -154,8 +160,9 @@ USAGE
 
 while [[ "$#" -gt 0 ]]; do
   case "$1" in
-    target|seed|smoke|ramp|baseline|d005-record|spike|evidence|cleanup|provisional-review|freeze|export|all) MODE="$1"; shift ;;
+    target|seed|smoke|ramp|baseline|d005-record|spike|soak|scale-step|evidence|cleanup|provisional-review|freeze|export|all) MODE="$1"; shift ;;
     --profile) PROFILE="$2"; shift 2 ;;
+    --slo-contract) SLO_CONTRACT="$2"; SLO_CONTRACT_EXPLICIT=1; shift 2 ;;
     --target-platform) TARGET_PLATFORM="$2"; shift 2 ;;
     --region) REGION="$2"; shift 2 ;;
     --environment) ENVIRONMENT="$2"; shift 2 ;;
@@ -203,6 +210,18 @@ case "$TARGET_PLATFORM" in
   *) echo "--target-platform must be ec2 or eks" >&2; exit 2 ;;
 esac
 
+COMPARISON_PROFILE=0
+if [[ "$PROFILE" == *ec2-eks-comparison-v1.1.json* || "$SLO_CONTRACT" == *slo-v1.1-* ]]; then
+  COMPARISON_PROFILE=1
+fi
+if [[ "$COMPARISON_PROFILE" == "1" && "$SLO_CONTRACT_EXPLICIT" == "0" ]]; then
+  SLO_CONTRACT="$REPOSITORY_ROOT/load-tests/aws/contracts/slo-v1.1-candidate.json"
+fi
+if [[ "$COMPARISON_PROFILE" == "1" && "$MODE" == "all" ]]; then
+  echo "comparison profile forbids 'all': evidence capture, human recovery, rollback, freeze/export and cleanup remain operator-directed phases" >&2
+  exit 2
+fi
+
 for required in REGION ENVIRONMENT EXPECTED_ACCOUNT_ID ALB_ARN BASE_URL RUNNER_ID MAX_RATE MAX_VUS; do
   if [[ -z "${!required}" ]]; then
     echo "--${required,,} is required" >&2
@@ -243,6 +262,10 @@ if [[ ! -f "$PROFILE" ]]; then
   echo "--profile file does not exist: $PROFILE" >&2
   exit 2
 fi
+if [[ ! -f "$SLO_CONTRACT" ]]; then
+  echo "--slo-contract file does not exist: $SLO_CONTRACT" >&2
+  exit 2
+fi
 python3 "$REPOSITORY_ROOT/scripts/loadtest/aws/validate-aws-profile.py" "$PROFILE"
 
 RUN_ID="${RUN_ID:-aws-b01-$(date -u +%Y%m%d-%H%M%S)}"
@@ -253,6 +276,7 @@ EVIDENCE_ROOT="$EVIDENCE_BASE/$RUN_ID"
 DATA_FILE="$EVIDENCE_ROOT/data.json"
 FIXTURES_DIR="$EVIDENCE_ROOT/fixtures"
 PROFILE_SHA256="$(python3 -c "import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],'rb').read()).hexdigest())" "$PROFILE")"
+SLO_CONTRACT_SHA256="$(python3 -c "import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],'rb').read()).hexdigest())" "$SLO_CONTRACT")"
 SOURCE_COMMIT_SHA="$(git -C "$REPOSITORY_ROOT" rev-parse HEAD)"
 mkdir -p "$EVIDENCE_ROOT"
 
@@ -277,14 +301,14 @@ STAGE_DIR="$EVIDENCE_ROOT/stages"
 stage_confirmed_rate() {
   local stage="$1"
   case "$stage" in
-    baseline-*|d005|spike) printf '%s' "${CONFIRMED_RATE:-}" ;;
+    baseline-*|d005|spike|soak|scale-step) printf '%s' "${CONFIRMED_RATE:-}" ;;
     *) printf '' ;;
   esac
 }
 
 stage_input_digest() {
   local stage="$1"
-  python3 - "$stage" "$RUN_ID" "$PROFILE_SHA256" "$SOURCE_COMMIT_SHA" \
+  python3 - "$stage" "$RUN_ID" "$PROFILE_SHA256" "${SLO_CONTRACT_SHA256:-}" "$SOURCE_COMMIT_SHA" \
     "${TARGET_PLATFORM:-ec2}" "${EKS_CLUSTER_NAME:-}" "${EKS_NODE_GROUP_NAME:-}" "${EKS_BASTION_ID:-}" \
     "${BACKEND_NAMESPACE:-}" "${BACKEND_DEPLOYMENT:-}" \
     "$REGION" "$ENVIRONMENT" "$EXPECTED_ACCOUNT_ID" "$ALB_ARN" "$BASE_URL" \
@@ -296,13 +320,14 @@ stage_input_digest() {
     "$SLO_FREEZE_APPROVED_BY" "$START_RATE" "$DURATION" "$WARMUP" \
     "$RAMP_PREALLOCATED_VUS" "$RAMP_MAX_VUS" "$BASELINE_PREALLOCATED_VUS" "$BASELINE_MAX_VUS" \
     "$SPIKE_PREALLOCATED_VUS" "$SPIKE_MAX_VUS" "$SPIKE_PEAK_MULTIPLIER" "$SPIKE_HOLD" \
+    "${SOAK_PREALLOCATED_VUS:-}" "${SOAK_MAX_VUS:-}" "${SCALE_STEP_PREALLOCATED_VUS:-}" "${SCALE_STEP_MAX_VUS:-}" \
     "$(stage_confirmed_rate "$stage")" <<'PY'
 import hashlib
 import json
 import sys
 
 (
-    stage, run_id, profile_sha, source_commit_sha,
+    stage, run_id, profile_sha, slo_contract_sha, source_commit_sha,
     target_platform, eks_cluster_name, eks_node_group_name, eks_bastion_id,
     backend_namespace, backend_deployment,
     region, environment, expected_account_id, alb_arn, base_url,
@@ -314,6 +339,7 @@ import sys
     slo_freeze_approved_by, start_rate, duration, warmup,
     ramp_preallocated_vus, ramp_max_vus, baseline_preallocated_vus, baseline_max_vus,
     spike_preallocated_vus, spike_max_vus, spike_peak_multiplier, spike_hold,
+    soak_preallocated_vus, soak_max_vus, scale_step_preallocated_vus, scale_step_max_vus,
     confirmed_rate,
 ) = sys.argv[1:]
 
@@ -341,6 +367,7 @@ payload = {
     "stage": stage,
     "runId": run_id,
     "profileSha256": profile_sha,
+    "sloContractSha256": slo_contract_sha,
     "sourceCommitSha": source_commit_sha,
     **common,
 }
@@ -363,7 +390,7 @@ elif stage == "seed":
         "redisIamUser": redis_iam_user,
         "redisReplicationGroupId": redis_replication_group_id,
     })
-elif stage in {"smoke", "ramp", "spike"} or stage.startswith("baseline-"):
+elif stage in {"smoke", "ramp", "spike", "soak", "scale-step"} or stage.startswith("baseline-"):
     payload["k6Image"] = k6_image
     payload["credentialLifecycle"] = {
         "users": users,
@@ -396,7 +423,19 @@ elif stage in {"smoke", "ramp", "spike"} or stage.startswith("baseline-"):
             "peakMultiplier": spike_peak_multiplier,
             "hold": spike_hold,
         }
-    if stage == "spike" or stage.startswith("baseline-"):
+    elif stage == "soak":
+        payload["effectiveK6Overrides"] = {
+            "rate": confirmed_rate,
+            "preAllocatedVUs": soak_preallocated_vus,
+            "maxVUs": soak_max_vus,
+        }
+    elif stage == "scale-step":
+        payload["effectiveK6Overrides"] = {
+            "rate": confirmed_rate,
+            "preAllocatedVUs": scale_step_preallocated_vus,
+            "maxVUs": scale_step_max_vus,
+        }
+    if stage in {"spike", "soak", "scale-step"} or stage.startswith("baseline-"):
         payload["confirmedRate"] = confirmed_rate
 elif stage == "d005":
     payload["confirmedRate"] = confirmed_rate
@@ -476,7 +515,7 @@ payload = {
     "inputDigest": input_digest,
     "completedAtUtc": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
 }
-if stage == "seed" or stage in {"smoke", "ramp", "spike"} or stage.startswith("baseline-"):
+if stage == "seed" or stage in {"smoke", "ramp", "spike", "soak", "scale-step"} or stage.startswith("baseline-"):
     payload.update({
         "fixtureId": stage,
         "fixtureResultPath": f"fixtures/{stage}.json",
@@ -910,6 +949,8 @@ phase_max_vus_override() {
     ramp) printf '%s' "$RAMP_MAX_VUS" ;;
     baseline) printf '%s' "$BASELINE_MAX_VUS" ;;
     spike) printf '%s' "$SPIKE_MAX_VUS" ;;
+    soak) printf '%s' "$SOAK_MAX_VUS" ;;
+    scale-step) printf '%s' "$SCALE_STEP_MAX_VUS" ;;
     *) echo "unsupported phase for VU capacity validation: $1" >&2; return 2 ;;
   esac
 }
@@ -982,6 +1023,8 @@ k6_phase_stage() {
   export RAMP_PREALLOCATED_VUS RAMP_MAX_VUS
   export BASELINE_PREALLOCATED_VUS BASELINE_MAX_VUS
   export SPIKE_PREALLOCATED_VUS SPIKE_MAX_VUS SPIKE_PEAK_MULTIPLIER SPIKE_HOLD
+  export SOAK_PREALLOCATED_VUS SOAK_MAX_VUS SCALE_STEP_PREALLOCATED_VUS SCALE_STEP_MAX_VUS
+  export AWS_SLO_CONTRACT_FILE="$SLO_CONTRACT"
   if [[ -n "$CONFIRMED_RATE" ]]; then export CONFIRMED_RATE; fi
   if [[ "$phase" == "baseline" ]]; then
     if [[ -n "$baseline_rep" ]]; then
@@ -1427,6 +1470,20 @@ case "$MODE" in
     run_stage_once target target_stage
     run_stage_once seed seed_stage
     run_stage_once spike k6_phase_stage spike
+    ;;
+  soak)
+    validate_confirmed_rate
+    require_d005_record_gate
+    run_stage_once target target_stage
+    run_stage_once seed seed_stage
+    run_stage_once soak k6_phase_stage soak
+    ;;
+  scale-step)
+    validate_confirmed_rate
+    require_d005_record_gate
+    run_stage_once target target_stage
+    run_stage_once seed seed_stage
+    run_stage_once scale-step k6_phase_stage scale-step
     ;;
   evidence)
     run_stage_once evidence evidence_stage
