@@ -31,15 +31,15 @@ TARGET_PLATFORM="${TARGET_PLATFORM:-ec2}"
 AWS_SLO_CONTRACT_FILE="${AWS_SLO_CONTRACT_FILE:-$CONTRACT_DIR/slo-v1.1-candidate.json}"
 EFFECTIVE_MAX_VUS="${EFFECTIVE_MAX_VUS:?EFFECTIVE_MAX_VUS is required}"
 
-declare -A SCENARIO_FILES=(
-  [smoke]="smoke.js"
-  [ramp]="b01-ramp.js"
-  [baseline]="b01-baseline.js"
-  [spike]="b01-spike.js"
-  [soak]="soak.js"
-  [scale-step]="scale-step.js"
-)
-SCENARIO_FILE="${SCENARIO_FILES[$SCENARIO]:-}"
+case "$SCENARIO" in
+  smoke) SCENARIO_FILE="smoke.js" ;;
+  ramp) SCENARIO_FILE="b01-ramp.js" ;;
+  baseline) SCENARIO_FILE="b01-baseline.js" ;;
+  spike) SCENARIO_FILE="b01-spike.js" ;;
+  soak) SCENARIO_FILE="soak.js" ;;
+  scale-step) SCENARIO_FILE="scale-step.js" ;;
+  *) SCENARIO_FILE="" ;;
+esac
 if [[ -z "$SCENARIO_FILE" ]]; then
   echo "unsupported AWS k6 scenario: $SCENARIO" >&2
   exit 2
