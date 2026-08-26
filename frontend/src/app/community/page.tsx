@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { Button } from "@/components/atoms/Button";
 import { Tabs, TabsList, TabsTrigger } from "@/components/atoms/Tabs";
 import {
@@ -32,11 +32,22 @@ const SEARCH_SCOPE_OPTIONS: { value: CommunityPostSearchScope; label: string }[]
 ];
 
 export default function CommunityPage() {
+  return (
+    <React.Suspense fallback={null}>
+      <CommunityPageContent />
+    </React.Suspense>
+  );
+}
+
+function CommunityPageContent() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const accessToken = useAuthStore((s) => s.accessToken);
 
   const [categories, setCategories] = React.useState<CommunityCategory[]>([]);
-  const [categoryTab, setCategoryTab] = React.useState(ALL_CATEGORY);
+  // 상세로 갔다가 뒤로가기(브라우저 back, 상세 화면의 "커뮤니티" 링크)로 돌아왔을 때
+  // 선택했던 카테고리 탭이 "전체"로 초기화되지 않도록 URL 쿼리(?category=)로 상태를 남긴다.
+  const [categoryTab, setCategoryTab] = React.useState(() => searchParams.get("category") ?? ALL_CATEGORY);
   const [sort, setSort] = React.useState<SortOption>("latest");
   const [keyword, setKeyword] = React.useState("");
   const [searchScope, setSearchScope] = React.useState<CommunityPostSearchScope>("ALL");
@@ -130,6 +141,9 @@ export default function CommunityPage() {
 
   function changeCategory(value: string) {
     setCategoryTab(value);
+    router.replace(value === ALL_CATEGORY ? "/community" : `/community?category=${value}`, {
+      scroll: false,
+    });
   }
 
   function changeSort(value: string) {

@@ -236,7 +236,7 @@ function CommunityDetailContent() {
           <div className="flex items-center gap-2 text-sm text-fg-muted">
             <button
               type="button"
-              onClick={() => router.push("/community")}
+              onClick={() => router.back()}
               className="flex items-center gap-2 hover:text-foreground"
             >
               <Icon icon={ArrowLeft} size="sm" />
