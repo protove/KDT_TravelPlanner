@@ -87,12 +87,23 @@ function CommunityDetailContent() {
   const [postActionError, setPostActionError] = React.useState<string | null>(null);
   const [postReactionPending, setPostReactionPending] = React.useState(false);
 
+  // accessToken은 앱 부팅 시 null -> (로그인 상태면) 실제 토큰 순으로 한 번 바뀐다. 이 effect가
+  // accessToken을 그대로 deps에 두면 그 전환 때마다 다시 실행돼 GET /posts/{id}를 두 번 불러서
+  // (백엔드가 매 조회마다 viewCount를 올리므로) 조회수가 2씩 오르는 버그가 있었다. isInitializing이
+  // 꺼질 때까지 기다렸다가 그 시점의 accessToken으로 딱 한 번만 요청하면, 로그인 상태가 이미
+  // 반영된 채로 조회되어 isMine/isReacted 같은 개인화 필드도 여전히 정확하다 — ref로 최신
+  // accessToken 값만 참조하고 deps에서는 빼서 재실행을 막는다.
+  const accessTokenRef = React.useRef(accessToken);
   React.useEffect(() => {
-    if (!id) return;
-    getPost(accessToken, id)
+    accessTokenRef.current = accessToken;
+  }, [accessToken]);
+
+  React.useEffect(() => {
+    if (!id || isInitializing) return;
+    getPost(accessTokenRef.current, id)
       .then(setPost)
       .catch(() => setNotFound(true));
-  }, [accessToken, id]);
+  }, [id, isInitializing]);
 
   React.useEffect(() => {
     getCategories(accessToken).then(setCategories).catch(() => {});
