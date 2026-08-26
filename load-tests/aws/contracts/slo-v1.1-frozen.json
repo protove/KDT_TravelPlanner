@@ -44,8 +44,8 @@
     "p99Recorded": true
   },
   "comparison": {
-    "normalRate": null,
-    "normalRateStatus": "pending-live-freeze",
+    "normalRate": 16,
+    "normalRateStatus": "frozen-after-six-baselines",
     "platforms": ["ec2-asg", "eks"],
     "sameApplicationWorkload": true,
     "sameInstanceFamily": "t3.medium",
