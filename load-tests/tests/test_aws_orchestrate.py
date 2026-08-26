@@ -163,6 +163,13 @@ class AwsOrchestrationContractTests(unittest.TestCase):
         self.assertIn("__ENV.TARGET_ENVIRONMENT || PROFILE.environment", config_source)
         self.assertIn("__ENV.TARGET_REGION || PROFILE.region", config_source)
 
+    def test_k6_runner_keeps_custom_host_and_allows_operator_ip_resolution(self) -> None:
+        runner_source = AWS_PHASE_RUNNER.parent.joinpath("run-k6-aws-scenario.sh").read_text(encoding="utf-8")
+        self.assertIn("AWS_TARGET_HOST_IPS", runner_source)
+        self.assertIn("DOCKER_HOST_ARGS+=(--add-host", runner_source)
+        self.assertIn('"method": "docker-add-host"', runner_source)
+        self.assertNotIn("amazonaws.com", runner_source)
+
     def test_d005_and_spike_are_fail_closed_on_baseline_candidate(self) -> None:
         source = SCRIPT.read_text(encoding="utf-8")
         self.assertIn("require_baseline_candidate_gate", source)

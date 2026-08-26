@@ -31,6 +31,54 @@ TARGET_PLATFORM="${TARGET_PLATFORM:-ec2}"
 AWS_SLO_CONTRACT_FILE="${AWS_SLO_CONTRACT_FILE:-$CONTRACT_DIR/slo-v1.1-candidate.json}"
 EFFECTIVE_MAX_VUS="${EFFECTIVE_MAX_VUS:?EFFECTIVE_MAX_VUS is required}"
 
+# A private Runner may resolve the approved custom hostname on the host via an
+# operator-provided /etc/hosts entry while Docker's bridge network still asks
+# the VPC resolver.  Keep the hostname (and therefore TLS SNI/HTTP Host) as
+# the workload target, but allow the operator to pin the current ALB address
+# set for this disposable run.  This is deliberately an execution-time input:
+# the workload never discovers, changes, or recovers an ALB/DNS record.
+DOCKER_HOST_ARGS=()
+if [[ -n "${AWS_TARGET_HOST_IPS:-}" ]]; then
+  target_host="$(python3 - "$BASE_URL" <<'PY'
+import sys
+from urllib.parse import urlparse
+
+host = urlparse(sys.argv[1]).hostname
+if not host or "." not in host:
+    raise SystemExit("BASE_URL hostname is missing")
+print(host)
+PY
+)"
+  old_ifs="$IFS"
+  IFS=,
+  read -r -a target_ips <<< "$AWS_TARGET_HOST_IPS"
+  IFS="$old_ifs"
+  if [[ "${#target_ips[@]}" -eq 0 ]]; then
+    echo "AWS_TARGET_HOST_IPS must contain at least one IPv4 address" >&2
+    exit 2
+  fi
+  for target_ip in "${target_ips[@]}"; do
+    if [[ ! "$target_ip" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
+      echo "AWS_TARGET_HOST_IPS contains a non-IPv4 value" >&2
+      exit 2
+    fi
+    if ! python3 - "$target_ip" <<'PY'
+import ipaddress
+import sys
+
+try:
+    ipaddress.IPv4Address(sys.argv[1])
+except ipaddress.AddressValueError:
+    raise SystemExit(1)
+PY
+    then
+      echo "AWS_TARGET_HOST_IPS contains an invalid IPv4 address" >&2
+      exit 2
+    fi
+    DOCKER_HOST_ARGS+=(--add-host "${target_host}:${target_ip}")
+  done
+fi
+
 case "$SCENARIO" in
   smoke) SCENARIO_FILE="smoke.js" ;;
   ramp) SCENARIO_FILE="b01-ramp.js" ;;
@@ -107,19 +155,22 @@ if [[ "$SCENARIO" == "baseline" ]]; then
   fi
 fi
 python3 - "$RUN_DIR/metadata.json" "$RUN_ID" "$SCENARIO" "$started_at" "$BASE_URL" "$git_sha" \
-  "$K6_IMAGE_DIGEST" "${RATE:-0}" "$REGION" "$ENVIRONMENT" "$TARGET_PLATFORM" "$warmup_seconds" "$AWS_PROFILE_FILE" <<'PY'
+  "$K6_IMAGE_DIGEST" "${RATE:-0}" "$REGION" "$ENVIRONMENT" "$TARGET_PLATFORM" "$warmup_seconds" "$AWS_PROFILE_FILE" \
+  "${AWS_TARGET_HOST_IPS:-}" <<'PY'
 import hashlib
 import json
 import os
 import sys
+from urllib.parse import urlparse
 from pathlib import Path
 
 (output, run_id, scenario, started_at, target, commit_sha, image, rate, region,
- environment, platform, warmup_seconds, profile_path) = sys.argv[1:]
+ environment, platform, warmup_seconds, profile_path, target_host_ips_raw) = sys.argv[1:]
 profile = json.loads(Path(profile_path).read_text(encoding="utf-8"))
 profile_sha256 = hashlib.sha256(Path(profile_path).read_bytes()).hexdigest()
 rate_value = float(rate) if float(rate) else None
 scenario_profile = profile.get("scenarios", {}).get(scenario, {})
+target_host_ips = [value.strip() for value in target_host_ips_raw.split(",") if value.strip()]
 effective_inputs = {
     "scenario": scenario,
     "profileSha256": profile_sha256,
@@ -181,6 +232,11 @@ Path(output).write_text(json.dumps({
     "sloVersion": profile.get("sloVersion", "unknown"),
     "profileVersion": profile.get("profileVersion", "unknown"),
     "profileSha256": profile_sha256,
+    "targetHostResolution": {
+        "hostname": urlparse(target).hostname,
+        "ips": target_host_ips,
+        "method": "docker-add-host" if target_host_ips else "container-vpc-dns",
+    },
     "effectiveInputs": effective_inputs,
 }, indent=2) + "\n", encoding="utf-8")
 PY
@@ -205,6 +261,7 @@ docker run -i --name "$K6_CONTAINER_NAME" \
   --user 0:0 \
   --cap-drop ALL \
   --security-opt no-new-privileges \
+  "${DOCKER_HOST_ARGS[@]}" \
   -v "$K6_DIR:/scripts:ro" \
   -v "$CONTRACT_DIR:/contracts:ro" \
   -v "$(dirname "$AWS_PROFILE_FILE"):/profiles:ro" \
