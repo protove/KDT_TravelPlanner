@@ -29,6 +29,6 @@ output "load_test_security_group_id" {
 }
 
 output "target_runtime_state_key" {
-  description = "EC2 runtime State key consumed by this Load Runner deployment."
+  description = "Disposable runtime State key consumed by this Load Runner deployment (dev-runtime or dev-eks)."
   value       = var.runtime_state_key
 }

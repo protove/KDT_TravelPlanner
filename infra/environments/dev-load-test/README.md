@@ -1,12 +1,13 @@
 # dev-load-test 운영 인계
 
-`dev-load-test`는 EC2 `dev-runtime`을 대상으로 부하·복구 테스트를 실행할 때만 생성하는
-종속 Terraform Root다. Load Runner EC2, Runner 전용 Security Group과 IAM, raw evidence
-S3 버킷을 `dev-runtime`과 다른 `dev-load-test/terraform.tfstate`에서 관리한다.
+`dev-load-test`는 한 번에 하나의 disposable runtime을 대상으로 부하·복구 테스트를 실행할
+때만 생성하는 종속 Terraform Root다. 대상은 EC2 `dev-runtime` 또는 EKS `dev-eks`이며,
+Load Runner EC2, Runner 전용 Security Group과 IAM, raw evidence S3 버킷은 대상 runtime과
+다른 `dev-load-test/terraform.tfstate`에서 관리한다.
 
-이 Root는 독립 서비스 환경이 아니다. `dev`의 VPC·app subnet과 `dev-runtime`의
+이 Root는 독립 서비스 환경이 아니다. `dev`의 VPC·app subnet과 선택한 runtime State의
 RDS·Redis Security Group 및 Redis IAM 식별자를 원격 State output으로 읽는다. 따라서
-`dev-runtime`을 먼저 생성하고 정상 상태를 확인한 뒤에만 plan/apply한다.
+선택한 runtime을 먼저 생성하고 정상 상태를 확인한 뒤에만 plan/apply한다.
 
 > 현재 코드 분리 시점에는 `dev-load-test`를 실제 AWS에 apply하지 않았다. 이 문서는
 > 다음 부하 테스트에서 재생성하기 위한 runbook이며, 명령 예시는 실행 기록이 아니다.
@@ -16,16 +17,20 @@ RDS·Redis Security Group 및 Redis IAM 식별자를 원격 State output으로 �
 생성 순서는 다음과 같다.
 
 ```text
-dev → dev-runtime → dev-load-test
+dev → (dev-runtime 또는 dev-eks) → dev-load-test
 ```
 
 삭제 순서는 반대다.
 
 ```text
-dev-load-test → dev-runtime
+dev-load-test → (dev-runtime 또는 dev-eks)
 ```
 
-`dev-load-test`가 남아 있는 동안 `dev-runtime`을 먼저 destroy하면 Runner Security Group의
+EKS 비교를 수행할 때의 삭제 순서는 `dev-load-test → dev-eks`다. `dev-runtime`과
+`dev-eks`를 동시에 생성해 같은 persistent app route table이나 논리적 데이터 tier를
+공유하지 않는다.
+
+`dev-load-test`가 남아 있는 동안 선택한 runtime을 먼저 destroy하면 Runner Security Group의
 RDS·Redis 참조 때문에 삭제가 실패하거나 테스트 실행 중 대상이 사라질 수 있다.
 
 이 Root가 생성하는 주요 리소스는 다음과 같다.
@@ -36,9 +41,21 @@ RDS·Redis 참조 때문에 삭제가 실패하거나 테스트 실행 중 대�
 - raw k6 결과용 private S3 bucket, SSE-S3, 30일 lifecycle
 - unattached evidence operator read policy
 
-Redis의 load-test IAM RBAC 사용자는 Redis User Group과 함께 `dev-runtime`의
+Redis의 load-test IAM RBAC 사용자는 Redis User Group과 함께 선택한 runtime의
 `backend_data` 모듈이 관리한다. `dev-load-test`는 사용자 ARN과 replication group ARN을
 읽어 Runner의 `elasticache:Connect` 권한만 구성한다.
+
+## Runtime target contract
+
+동일한 Runner와 evidence 계약을 유지하면서 `runtime_state_key`만 바꾼다.
+
+| 비교 대상 | `runtime_state_key` | 데이터/SG 소유자 |
+| --- | --- | --- |
+| EC2 ASG | `dev-runtime/terraform.tfstate` | `dev-runtime` |
+| EKS Backend | `dev-eks/terraform.tfstate` | `dev-eks` |
+
+두 runtime State는 동시에 존재하면 안 된다. `dev-load-test`는 두 target의 output 이름과
+형식을 동일하게 소비한다.
 
 ## 최초 분리 후 로컬 설정
 
@@ -68,7 +85,8 @@ State 운영자 정책에는 `dev-load-test/terraform.tfstate`와 해당 `.tfloc
 
 ## Plan
 
-먼저 `dev-runtime` State가 필요한 output을 제공하는지와 실제 Runtime이 정상인지 확인한다.
+먼저 `runtime_state_key`가 가리키는 State가 필요한 output을 제공하는지와 실제 Runtime이
+정상인지 확인한다. EKS 비교에서는 `dev-eks` apply 후에만 아래 값을 사용한다.
 
 ```bash
 export AWS_PROFILE=kdt-travel-terraform
@@ -94,7 +112,8 @@ Plan에서 다음을 확인한다.
 - PostgreSQL 5432와 Redis 6379는 Security Group reference를 사용한다.
 - k6 이미지는 정확한 digest로 고정된다.
 - Runner IAM은 지정 test DB Secret만 읽고 Redis IAM user/replication group에만 연결한다.
-- `dev-runtime` 소유 리소스의 create/update/delete/replace가 없다.
+- 선택한 runtime 소유 리소스의 create/update/delete/replace가 없다.
+- EKS 비교에서는 `runtime_state_key=dev-eks/terraform.tfstate`가 plan과 output에 기록된다.
 
 `apply`는 비용과 IAM·네트워크 상태를 바꾸므로 saved plan 검토 후 별도 승인을 받아 실행한다.
 
@@ -131,10 +150,10 @@ terraform -chdir=infra/environments/dev-load-test state list
 ```
 
 `dev-load-test` State가 비고 Runner EC2·evidence bucket·Runner IAM/SG가 제거된 것을 확인한
-뒤에만 `dev-runtime` destroy를 진행한다.
+뒤에만 선택한 runtime destroy를 진행한다.
 
-## 후속 EKS 범위
+## EKS 비교 주의사항
 
-`dev-eks-runtime`과 EC2/EKS 공통 target contract는 SCRUM-21 범위에 포함하지 않는다.
-추후 EKS Runtime을 추가할 때도 Load Runner를 중복 생성하기보다 이 Root의 실행 대상
-interface를 확장해 동일 Runner와 evidence 계약을 재사용하는 방향을 별도 Jira에서 설계한다.
+EKS에서는 `dev-eks`의 RDS·Redis·SG outputs가 준비된 뒤 동일한 Runner를 재사용한다.
+Runner를 EKS용으로 중복 생성하지 않으며, 대상 전환은 `runtime_state_key` 변경과 새
+saved plan 검토로만 수행한다.

@@ -23,6 +23,7 @@ REP="${2:-}"
 : "${AWS_PROFILE_FILE:?AWS_PROFILE_FILE is required}"
 : "${REGION:?REGION is required}"
 : "${ENVIRONMENT:?ENVIRONMENT is required}"
+TARGET_PLATFORM="${TARGET_PLATFORM:-ec2}"
 MAX_RATE="${MAX_RATE:?MAX_RATE is required}"
 OPERATOR_MAX_VUS="${MAX_VUS:?MAX_VUS is required}"
 
@@ -40,7 +41,7 @@ suffix="$PHASE"
 run_dir="$EVIDENCE_ROOT/k6/$suffix"
 phase_run_id="$RUN_ID-$suffix"
 
-export REPOSITORY_ROOT BASE_URL K6_IMAGE_DIGEST AWS_PROFILE_FILE REGION ENVIRONMENT
+export REPOSITORY_ROOT BASE_URL K6_IMAGE_DIGEST AWS_PROFILE_FILE REGION ENVIRONMENT TARGET_PLATFORM
 export RUN_ID="$phase_run_id"
 
 configure_phase_max_vus() {

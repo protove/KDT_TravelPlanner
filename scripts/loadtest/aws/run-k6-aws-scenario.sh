@@ -26,6 +26,7 @@ AWS_PROFILE_FILE="${AWS_PROFILE_FILE:?AWS_PROFILE_FILE is required}"
 DATA_FILE="${DATA_FILE:?DATA_FILE is required (seeded credential file for this run)}"
 REGION="${REGION:?REGION is required}"
 ENVIRONMENT="${ENVIRONMENT:?ENVIRONMENT is required}"
+TARGET_PLATFORM="${TARGET_PLATFORM:-ec2}"
 EFFECTIVE_MAX_VUS="${EFFECTIVE_MAX_VUS:?EFFECTIVE_MAX_VUS is required}"
 
 declare -A SCENARIO_FILES=(
@@ -97,7 +98,7 @@ if [[ "$SCENARIO" == "baseline" ]]; then
   fi
 fi
 python3 - "$RUN_DIR/metadata.json" "$RUN_ID" "$SCENARIO" "$started_at" "$BASE_URL" "$git_sha" \
-  "$K6_IMAGE_DIGEST" "${RATE:-0}" "$REGION" "$ENVIRONMENT" "$warmup_seconds" "$AWS_PROFILE_FILE" <<'PY'
+  "$K6_IMAGE_DIGEST" "${RATE:-0}" "$REGION" "$ENVIRONMENT" "$TARGET_PLATFORM" "$warmup_seconds" "$AWS_PROFILE_FILE" <<'PY'
 import hashlib
 import json
 import os
@@ -105,7 +106,7 @@ import sys
 from pathlib import Path
 
 (output, run_id, scenario, started_at, target, commit_sha, image, rate, region,
- environment, warmup_seconds, profile_path) = sys.argv[1:]
+ environment, platform, warmup_seconds, profile_path) = sys.argv[1:]
 profile = json.loads(Path(profile_path).read_text(encoding="utf-8"))
 profile_sha256 = hashlib.sha256(Path(profile_path).read_bytes()).hexdigest()
 rate_value = float(rate) if float(rate) else None
@@ -133,7 +134,7 @@ Path(output).write_text(json.dumps({
     "scenario": scenario,
     "startedAtUtc": started_at,
     "target": target,
-    "platform": "ec2",
+    "platform": platform,
     "region": region,
     "environment": environment,
     "commitSha": commit_sha,
@@ -174,6 +175,8 @@ docker run -i --name "$K6_CONTAINER_NAME" \
   -v "$DATA_FILE:/data/data.json:ro" \
   -v "$RUN_DIR:/out" \
   -e BASE_URL="$BASE_URL" \
+  -e TARGET_REGION="$REGION" \
+  -e TARGET_ENVIRONMENT="$ENVIRONMENT" \
   -e AWS_PROFILE_FILE="/profiles/$(basename "$AWS_PROFILE_FILE")" \
   -e DATA_FILE=/data/data.json \
   -e REQUIRE_UNIQUE_CREDENTIALS=1 \
@@ -183,6 +186,7 @@ docker run -i --name "$K6_CONTAINER_NAME" \
   -e START_RATE="${START_RATE:-}" \
   -e RUN_ID="$RUN_ID" \
   -e RUN_STARTED_AT="$started_at" \
+  -e TARGET_PLATFORM="$TARGET_PLATFORM" \
   -e OUT_DIR=/out \
   -e DURATION="${DURATION:-}" \
   -e WARMUP="${WARMUP:-}" \

@@ -1,0 +1,62 @@
+{
+  "targetPlatform": "eks",
+  "clusterName": "example-dev-eks",
+  "nodeGroupName": "example-dev-eks-nodes",
+  "region": "ap-northeast-2",
+  "targetGroupArn": "arn:aws:elasticloadbalancing:ap-northeast-2:000000000000:targetgroup/example/0000000000000000",
+  "nodeGroup": {
+    "nodegroup": {
+      "clusterName": "example-dev-eks",
+      "nodegroupName": "example-dev-eks-nodes",
+      "status": "ACTIVE",
+      "version": "1.35",
+      "capacityType": "ON_DEMAND",
+      "scalingConfig": {"minSize": 2, "desiredSize": 2, "maxSize": 4},
+      "instanceTypes": ["t3.small"],
+      "resources": {
+        "autoScalingGroups": [{"name": "eks-example-nodegroup-asg"}]
+      }
+    }
+  },
+  "targetHealth": {
+    "TargetHealthDescriptions": [
+      {"Target": {"Id": "192.0.2.10"}, "TargetHealth": {"State": "healthy"}},
+      {"Target": {"Id": "192.0.2.11"}, "TargetHealth": {"State": "healthy"}}
+    ]
+  },
+  "asgActivities": {
+    "Activities": [
+      {
+        "StatusCode": "Successful",
+        "Cause": "sample scale-out activity",
+        "StartTime": "2026-01-01T00:00:00Z",
+        "EndTime": "2026-01-01T00:02:00Z"
+      }
+    ]
+  },
+  "kubectl": {
+    "hpa": {
+      "status": {
+        "desiredReplicas": 2,
+        "currentReplicas": 2,
+        "conditions": [{"type": "AbleToScale", "status": "True", "reason": "ReadyForNewScale"}]
+      }
+    },
+    "deployment": {
+      "status": {"replicas": 2, "updatedReplicas": 2, "availableReplicas": 2, "readyReplicas": 2}
+    },
+    "pods": {
+      "items": [
+        {"metadata": {"name": "backend-example-a"}, "spec": {"nodeName": "example-node-a"}, "status": {"phase": "Running"}},
+        {"metadata": {"name": "backend-example-b"}, "spec": {"nodeName": "example-node-b"}, "status": {"phase": "Running"}}
+      ]
+    },
+    "nodes": {
+      "items": [
+        {"status": {"conditions": [{"type": "Ready", "status": "True"}]}},
+        {"status": {"conditions": [{"type": "Ready", "status": "True"}]}}
+      ]
+    },
+    "events": {"items": []}
+  }
+}

@@ -117,8 +117,11 @@ const PROFILE = loadProfile();
 export const BASE_URL = resolveBaseUrl(PROFILE);
 export const API = `${BASE_URL}/api/v1`;
 export const K6_IMAGE_DIGEST = resolveImageDigest(PROFILE);
-export const REGION = PROFILE.region || fail('region is missing from profile');
-export const ENVIRONMENT = PROFILE.environment || fail('environment is missing from profile');
+// The workload/profile is shared between the sequential EC2 and EKS runs.
+// The orchestrator supplies the target's environment/region at action time so
+// an EC2 profile does not silently label an EKS evidence bundle dev-runtime.
+export const REGION = __ENV.TARGET_REGION || PROFILE.region || fail('region is missing from profile');
+export const ENVIRONMENT = __ENV.TARGET_ENVIRONMENT || PROFILE.environment || fail('environment is missing from profile');
 export const SLO_VERSION = PROFILE.sloVersion || fail('sloVersion is missing from profile');
 export const SEED_VERSION = PROFILE.seedVersion || fail('seedVersion is missing from profile');
 export const REQUEST_MIX_VERSION = PROFILE.requestMixVersion

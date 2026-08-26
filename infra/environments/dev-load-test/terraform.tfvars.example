@@ -3,7 +3,8 @@ aws_region     = "ap-northeast-2"
 project_name   = "kdt-travelplanner"
 state_bucket   = "kdt-travelplanner-tfstate-123456789012-ap-northeast-2"
 
-# Keep these defaults while the Load Runner targets the existing EC2 Runtime.
+# Keep these defaults for the EC2 comparison. For the EKS comparison, change
+# only runtime_state_key to dev-eks/terraform.tfstate after dev-eks is verified.
 persistent_state_key = "dev/terraform.tfstate"
 runtime_state_key    = "dev-runtime/terraform.tfstate"
 

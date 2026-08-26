@@ -49,3 +49,17 @@ run "rejects_different_account_secret" {
 
   expect_failures = [var.test_db_secret_arn]
 }
+
+run "accepts_dev_eks_as_the_disposable_runtime_target" {
+  command = plan
+
+  variables {
+    runtime_state_key  = "dev-eks/terraform.tfstate"
+    test_db_secret_arn = "arn:aws:secretsmanager:ap-northeast-2:123456789012:secret:kdt-travelplanner-dev/loadtest/db-ABC123"
+  }
+
+  assert {
+    condition     = output.target_runtime_state_key == "dev-eks/terraform.tfstate"
+    error_message = "dev-load-test must reuse the same Runner contract when the disposable runtime target is dev-eks."
+  }
+}

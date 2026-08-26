@@ -112,9 +112,56 @@ class AwsOrchestrationContractTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("--base-url URL", result.stdout)
+        self.assertIn("--target-platform PLATFORM", result.stdout)
+        self.assertIn("--eks-bastion-id INSTANCE_ID", result.stdout)
         self.assertIn("--runner-instance-type TYPE", result.stdout)
         self.assertIn("d005-record", result.stdout)
         self.assertIn("Default: 80", result.stdout)
+
+    def test_eks_target_dry_run_uses_explicit_adapter_and_writes_sanitized_contract(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            environment = {**os.environ, "B01_EVIDENCE_BASE": directory}
+            result = subprocess.run(
+                [
+                    "bash", str(SCRIPT), "target", "--dry-run",
+                    "--target-platform", "eks",
+                    "--region", "ap-northeast-2", "--environment", "dev",
+                    "--expected-account-id", "111111111111",
+                    "--alb-arn", "arn:aws:elasticloadbalancing:ap-northeast-2:111111111111:loadbalancer/app/example/1234567890abcdef",
+                    "--base-url", "https://b01.example.com",
+                    "--runner-id", "i-0123456789abcdef0",
+                    "--eks-bastion-id", "i-0fedcba9876543210",
+                    "--max-rate", "30", "--max-vus", "100",
+                    "--run-id", "aws-b01-eks-adapter-test", "--profile", str(PROFILE),
+                ],
+                cwd=REPOSITORY_ROOT,
+                env=environment,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            evidence = Path(directory) / "aws-b01-eks-adapter-test" / "aws"
+            self.assertEqual(json.loads((evidence / "eks-evidence.json").read_text())['platform'], "eks")
+            self.assertFalse(json.loads((evidence / "eks-kubectl-invocation.json").read_text()).get("rawOutputStored"))
+
+    def test_eks_adapter_does_not_derive_backend_asg_from_alb_targets(self) -> None:
+        source = SCRIPT.read_text(encoding="utf-8")
+        start = source.index("eks_target_stage()")
+        end = source.index("\ntarget_stage()", start)
+        eks_source = source[start:end]
+        self.assertIn("describe-nodegroup", eks_source)
+        self.assertIn("eks_target_adapter.py", eks_source)
+        self.assertNotIn("describe-auto-scaling-instances", eks_source)
+        self.assertIn("EKS ALB targets Pod IPs", eks_source)
+
+    def test_shared_k6_profile_gets_action_time_platform_environment(self) -> None:
+        runner_source = AWS_PHASE_RUNNER.parent.joinpath("run-k6-aws-scenario.sh").read_text(encoding="utf-8")
+        config_source = (K6_ROOT / "aws/config.js").read_text(encoding="utf-8")
+        self.assertIn('TARGET_PLATFORM="$TARGET_PLATFORM"', runner_source)
+        self.assertIn('TARGET_ENVIRONMENT="$ENVIRONMENT"', runner_source)
+        self.assertIn("__ENV.TARGET_ENVIRONMENT || PROFILE.environment", config_source)
+        self.assertIn("__ENV.TARGET_REGION || PROFILE.region", config_source)
 
     def test_d005_and_spike_are_fail_closed_on_baseline_candidate(self) -> None:
         source = SCRIPT.read_text(encoding="utf-8")
