@@ -100,8 +100,8 @@ variable "backend_rollout_mode" {
 
 variable "backend_health_check_grace_period_seconds" {
   type        = number
-  description = "Measured EC2 ASG ELB health-check grace period from ASG InService -> ALB healthy readiness calibration."
-  default     = 60
+  description = "EC2 ASG ELB health-check grace period; retain the availability seed until final Acceptance proves a shorter value across replacement variance."
+  default     = 300
 
   validation {
     condition = (
