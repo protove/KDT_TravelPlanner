@@ -79,11 +79,22 @@ class EksTargetAdapterTests(unittest.TestCase):
         )
         self.assertEqual(evidence["hpa"]["desiredReplicas"], 2)
         self.assertEqual(evidence["hpa"]["currentReplicas"], 2)
+        self.assertEqual(evidence["hpa"]["availableReplicas"], 2)
         self.assertEqual(evidence["backendPods"]["count"], 2)
+        self.assertEqual(evidence["backendPods"]["readyCount"], 2)
+        self.assertEqual(evidence["backendPods"]["restartCount"], 1)
+        self.assertEqual(len(evidence["backendPods"]["imageIds"]), 2)
         self.assertEqual(evidence["nodeCount"], 2)
         self.assertEqual(len(evidence["nodeGroupScalingActivities"]), 1)
         self.assertEqual(evidence["alb"]["healthyTargetCount"], 2)
         self.assertTrue(evidence["sanitization"]["rawKubectlOutputStored"] is False)
+
+    def test_high_watermark_preserves_observed_capacity_when_a_phase_is_skipped(self) -> None:
+        previous = {"nodeCount": 2, "nodeReadyCount": 2, "backendPods": {"count": 2, "readyCount": 2}}
+        current = {"nodeCount": 1, "nodeReadyCount": 1, "backendPods": {"count": 1, "readyCount": 0}}
+        result = MODULE.high_watermark(previous, current)
+        self.assertEqual(result["nodeCount"], 2)
+        self.assertEqual(result["backendPods"]["readyCount"], 2)
 
     def test_fixture_has_no_credentials_private_ips_or_live_account_ids(self) -> None:
         text = FIXTURE.read_text(encoding="utf-8")

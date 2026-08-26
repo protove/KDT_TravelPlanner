@@ -47,8 +47,8 @@
     },
     "pods": {
       "items": [
-        {"metadata": {"name": "backend-example-a"}, "spec": {"nodeName": "example-node-a"}, "status": {"phase": "Running"}},
-        {"metadata": {"name": "backend-example-b"}, "spec": {"nodeName": "example-node-b"}, "status": {"phase": "Running"}}
+        {"metadata": {"name": "backend-example-a"}, "spec": {"nodeName": "example-node-a"}, "status": {"phase": "Running", "containerStatuses": [{"name": "backend", "ready": true, "restartCount": 0, "imageID": "docker-pullable://backend@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}, {"name": "alloy-sidecar", "ready": true, "restartCount": 0, "imageID": "docker-pullable://alloy@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}]}},
+        {"metadata": {"name": "backend-example-b"}, "spec": {"nodeName": "example-node-b"}, "status": {"phase": "Running", "containerStatuses": [{"name": "backend", "ready": true, "restartCount": 1, "imageID": "docker-pullable://backend@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}, {"name": "alloy-sidecar", "ready": true, "restartCount": 0, "imageID": "docker-pullable://alloy@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}]}}
       ]
     },
     "nodes": {

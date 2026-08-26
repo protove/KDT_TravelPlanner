@@ -205,13 +205,9 @@ def base_config(directory: Path, scenario: str = "B-02", run_id: str = "aws-b02-
             "approvalFile": approval_path,
             "approvalSha256": approval_sha,
         }
-        config["t4Mutation"] = {
-            "kind": "terraform-apply",
-            "argv": ["terraform", "apply", str(restore_path)],
-            "planFile": str(restore_path),
-            "planSha256": restore_sha,
-            "approvalFile": approval2,
-            "approvalSha256": approval2_sha,
+        config["operatorRecovery"] = {
+            "mode": "manual",
+            "requiredActions": ["cancel-refresh", "restore-healthy-image"],
         }
     if scenario == "R-01":
         plan_path = directory / "experiment.tfplan"
@@ -314,6 +310,12 @@ class DryRunTests(unittest.TestCase):
 
 
 class StateMachineTests(unittest.TestCase):
+    def test_platform_high_watermark_keeps_readiness_when_snapshot_is_skipped(self) -> None:
+        previous = {"deployment": {"status": {"replicas": 2, "availableReplicas": 2, "readyReplicas": 2}}}
+        current = {"deployment": {"status": {"replicas": 1, "availableReplicas": 0, "readyReplicas": 0}}}
+        result = MODULE.platform_high_watermark(previous, current)
+        self.assertEqual(result["deployment"]["status"]["availableReplicas"], 2)
+
     def test_state_refuses_out_of_order_steps(self) -> None:
         with TemporaryDirectory() as raw:
             directory = Path(raw)
@@ -491,14 +493,18 @@ class ScenarioDetectorTests(unittest.TestCase):
             with self.assertRaisesRegex(MODULE.CoordinatorError, "user-visible errors"):
                 coordinator._detect_t3()
 
-    def test_r03_t4_executes_restore_mutation(self) -> None:
+    def test_r03_t4_waits_for_human_restore_without_mutation(self) -> None:
         with TemporaryDirectory() as raw:
             directory = Path(raw)
             config = base_config(directory, scenario="R-03", run_id="aws-r03-test-1")
             coordinator, aws, ssm, mutations, clock, state = build_coordinator(directory, config)
+            aws.target_health_queue = [{
+                "i-0bbbbbbbbbbbbbbb2": "healthy",
+                "i-0ccccccccccccccc3": "healthy",
+            }]
             detail = coordinator._detect_t4()
-            self.assertIn("restore", detail)
-            self.assertEqual(mutations.executed, ["terraform-apply"])
+            self.assertIn("human operator recovery", detail)
+            self.assertEqual(mutations.executed, [])
 
     def test_b02_t5_rejects_terminated_instance_as_recovery(self) -> None:
         with TemporaryDirectory() as raw:

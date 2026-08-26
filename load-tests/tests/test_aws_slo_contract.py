@@ -10,6 +10,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).parents[2]
 CONTRACT_PATH = ROOT / "load-tests/aws/contracts/slo-v1.0.json"
+COMPARISON_CONTRACT_PATH = ROOT / "load-tests/aws/contracts/slo-v1.1-candidate.json"
 
 
 def load_module(name: str, path: Path):
@@ -56,6 +57,11 @@ class SloBoundaryTest(unittest.TestCase):
     def test_bool_is_not_accepted_as_numeric_metric(self):
         self.assertFalse(SLO.satisfies(self.contract, "p95Ms", True))
         self.assertTrue(SLO.satisfies(self.contract, "runnerBottleneckSuspected", False))
+
+    def test_comparison_candidate_binds_common_capacity_envelope(self):
+        contract = SLO.load_contract(COMPARISON_CONTRACT_PATH, expected_version="v1.1-candidate")
+        self.assertEqual(contract["comparison"]["sameInstanceFamily"], "t3.medium")
+        self.assertEqual(contract["comparison"]["sameCapacityShape"], {"min": 2, "desired": 2, "max": 4})
 
 
 class FreezeInputManifestTest(unittest.TestCase):
