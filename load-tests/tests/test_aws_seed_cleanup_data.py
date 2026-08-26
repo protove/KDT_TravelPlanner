@@ -101,6 +101,9 @@ class RefreshCredentialLifecycleTest(unittest.TestCase):
 
 
 class SeedAwsLoadDataTest(unittest.TestCase):
+    def test_seed_limit_covers_capacity_stress_fixture_contract(self):
+        self.assertGreaterEqual(SEED.MAX_SYNTHETIC_USERS, 320)
+
     def test_provider_user_id_is_deterministic_and_bounded(self):
         first = SEED.provider_user_id("aws-b01-20260809-001", 7)
         second = SEED.provider_user_id("aws-b01-20260809-001", 7)

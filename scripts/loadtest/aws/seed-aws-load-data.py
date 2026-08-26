@@ -84,6 +84,7 @@ REDIS_TOKEN_HASH_PATTERN = re.compile(r"^[a-f0-9]{64}$")
 POSTGRES_CLIENT_IMAGE = "postgres:17-alpine"
 REDIS_CLIENT_IMAGE = "redis:7-alpine"
 EXPECTED_TIMELINE_ITEMS_PER_PLANNER = 3
+MAX_SYNTHETIC_USERS = 320
 
 
 class SeedError(RuntimeError):
@@ -691,8 +692,8 @@ def main() -> int:
     args = parse_args()
     if not RUN_ID_PATTERN.fullmatch(args.run_id):
         raise SeedError("--run-id must be 1-40 chars of [A-Za-z0-9-]")
-    if args.users < 1 or args.users > 200:
-        raise SeedError("--users must be between 1 and 200")
+    if args.users < 1 or args.users > MAX_SYNTHETIC_USERS:
+        raise SeedError(f"--users must be between 1 and {MAX_SYNTHETIC_USERS}")
     if not FIXTURE_ID_PATTERN.fullmatch(args.fixture_id):
         raise SeedError("--fixture-id must be 1-64 chars of [A-Za-z0-9._-]")
     args.data_file = args.data_file.resolve()
