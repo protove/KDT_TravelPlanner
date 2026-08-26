@@ -27,6 +27,9 @@ load-tests/**/__pycache__/
 scripts/loadtest/**/__pycache__/
 monitoring/**/__pycache__/
 
+# Synthetic plans created by scripts/eks offline contract tests.
+infra/environments/dev-eks/.offline-state-*-plan
+
 # Test evidence stays local. Compose rehearsals, AWS B-01 orchestration and the
 # AWS Recovery experiments all write here; the AWS bundles are also uploaded to
 # S3 by upload-aws-evidence.py. None of it is committed.
