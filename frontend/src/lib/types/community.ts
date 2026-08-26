@@ -96,6 +96,9 @@ export interface ItinerarySnapshot {
   unassigned: ItinerarySnapshotItem[];
 }
 
+/** GET /posts의 keyword 매칭 대상. 백엔드 CommunityPostService.VALID_SEARCH_SCOPES와 동일. */
+export type CommunityPostSearchScope = "ALL" | "TITLE" | "AUTHOR" | "CONTENT" | "TAG";
+
 /** 목록 카드(community-board / PostCard)용 요약. */
 export interface CommunityPostSummary {
   postId: string;

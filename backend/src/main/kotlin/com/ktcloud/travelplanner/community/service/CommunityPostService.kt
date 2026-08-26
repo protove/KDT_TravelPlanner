@@ -216,11 +216,14 @@ class CommunityPostService(
 	}
 
 	// community-api-contract.md 2절/3절 — 목록 조회. 인증 불필요.
+	// searchScope는 화이트리스트 밖 값(오타/구버전 클라이언트 등)이면 sort와 동일하게 조용히
+	// 기본값(ALL)으로 떨어뜨린다 — 존재하지 않는 sort 값을 에러 없이 기본 정렬로 처리하는 것과 같은 관용.
 	@Transactional(readOnly = true)
 	fun getPosts(
 		categoryCode: String?,
 		tagName: String?,
 		keyword: String?,
+		searchScope: String?,
 		sort: String?,
 		page: Int,
 		size: Int,
@@ -228,12 +231,26 @@ class CommunityPostService(
 		val normalizedCategoryCode = categoryCode?.trim()?.takeIf { it.isNotEmpty() }
 		val normalizedTagName = tagName?.trim()?.takeIf { it.isNotEmpty() }
 		val normalizedKeyword = keyword?.trim()?.takeIf { it.isNotEmpty() }
+		val normalizedSearchScope = searchScope?.trim()?.uppercase()?.takeIf { it in VALID_SEARCH_SCOPES }
+			?: DEFAULT_SEARCH_SCOPE
 		val pageable = PageRequest.of(page.coerceAtLeast(0), size.coerceIn(MIN_PAGE_SIZE, MAX_PAGE_SIZE))
 
 		val result = if (sort == SORT_POPULAR) {
-			communityPostRepository.findPostsOrderByPopularity(normalizedCategoryCode, normalizedTagName, normalizedKeyword, pageable)
+			communityPostRepository.findPostsOrderByPopularity(
+				normalizedCategoryCode,
+				normalizedTagName,
+				normalizedKeyword,
+				normalizedSearchScope,
+				pageable,
+			)
 		} else {
-			communityPostRepository.findPostsOrderByCreatedAt(normalizedCategoryCode, normalizedTagName, normalizedKeyword, pageable)
+			communityPostRepository.findPostsOrderByCreatedAt(
+				normalizedCategoryCode,
+				normalizedTagName,
+				normalizedKeyword,
+				normalizedSearchScope,
+				pageable,
+			)
 		}
 
 		val postIds = result.content.map { it.postId }
@@ -338,6 +355,8 @@ class CommunityPostService(
 		private const val TAG_NAME_MAX_LENGTH = 20
 		private const val BODY_PREVIEW_MAX_LENGTH = 120
 		private const val SORT_POPULAR = "popular"
+		private const val DEFAULT_SEARCH_SCOPE = "ALL"
+		private val VALID_SEARCH_SCOPES = setOf("ALL", "TITLE", "AUTHOR", "CONTENT", "TAG")
 		private const val MIN_PAGE_SIZE = 1
 		private const val MAX_PAGE_SIZE = 50
 	}

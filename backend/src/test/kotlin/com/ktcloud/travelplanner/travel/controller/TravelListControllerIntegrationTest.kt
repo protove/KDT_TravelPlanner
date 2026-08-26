@@ -1,6 +1,8 @@
 package com.ktcloud.travelplanner.travel.controller
 
 import com.ktcloud.travelplanner.global.security.JwtTokenService
+import com.ktcloud.travelplanner.location.repository.CityRepository
+import com.ktcloud.travelplanner.location.repository.CountryRepository
 import com.ktcloud.travelplanner.membership.model.TravelMember
 import com.ktcloud.travelplanner.membership.model.TravelRole
 import com.ktcloud.travelplanner.membership.repository.TravelMemberRepository
@@ -38,6 +40,8 @@ class TravelListControllerIntegrationTest(
 	@Autowired private val userRepository: UserRepository,
 	@Autowired private val travelRepository: TravelRepository,
 	@Autowired private val travelMemberRepository: TravelMemberRepository,
+	@Autowired private val countryRepository: CountryRepository,
+	@Autowired private val cityRepository: CityRepository,
 	@Autowired private val jwtTokenService: JwtTokenService,
 	@Autowired private val jdbcTemplate: JdbcTemplate,
 	@Autowired private val entityManager: EntityManager,
@@ -98,6 +102,67 @@ class TravelListControllerIntegrationTest(
 				jsonPath("$.data.content[0].permission", equalTo("OWNER"))
 				jsonPath("$.data.isLast", equalTo(true))
 			}
+	}
+
+	@Test
+	fun `keyword search also matches description, country name, and city name (not just title)`() {
+		val requester = saveUser("scope-requester")
+		val country = countryRepository.findByIdAndIsActiveTrue(SEED_COUNTRY_ID).orElseThrow()
+		val city = cityRepository.findByIdAndIsActiveTrue(SEED_CITY_ID).orElseThrow()
+
+		val byDescription = saveTravel(requester, "무제 일정 1", UUID.randomUUID())
+		byDescription.updateBasicInfo(
+			title = byDescription.title,
+			startDate = byDescription.startDate,
+			endDate = byDescription.endDate,
+			country = null,
+			city = null,
+			companionType = null,
+			participantCount = null,
+			comment = "친구들이랑 벚꽃 보러 가는 여행",
+		)
+		val byCountryAndCity = saveTravel(requester, "무제 일정 2", UUID.randomUUID())
+		byCountryAndCity.updateBasicInfo(
+			title = byCountryAndCity.title,
+			startDate = byCountryAndCity.startDate,
+			endDate = byCountryAndCity.endDate,
+			country = country,
+			city = city,
+			companionType = null,
+			participantCount = null,
+			comment = null,
+		)
+		saveTravel(requester, "전혀 무관한 일정", UUID.randomUUID())
+		travelRepository.saveAllAndFlush(listOf(byDescription, byCountryAndCity))
+
+		mockMvc.get("/api/v1/travels") {
+			header(HttpHeaders.AUTHORIZATION, bearer(requester))
+			param("keyword", "벚꽃")
+		}.andExpect {
+			status { isOk() }
+			jsonPath("$.data.totalElements", equalTo(1))
+			jsonPath("$.data.content[0].travelId", equalTo(byDescription.id.toString()))
+		}
+
+		// 국가명(한글, "일본")으로도 매칭된다.
+		mockMvc.get("/api/v1/travels") {
+			header(HttpHeaders.AUTHORIZATION, bearer(requester))
+			param("keyword", country.nameKo)
+		}.andExpect {
+			status { isOk() }
+			jsonPath("$.data.totalElements", equalTo(1))
+			jsonPath("$.data.content[0].travelId", equalTo(byCountryAndCity.id.toString()))
+		}
+
+		// 도시명(영문)으로도, 대소문자 무시하고 매칭된다.
+		mockMvc.get("/api/v1/travels") {
+			header(HttpHeaders.AUTHORIZATION, bearer(requester))
+			param("keyword", city.nameEn.lowercase())
+		}.andExpect {
+			status { isOk() }
+			jsonPath("$.data.totalElements", equalTo(1))
+			jsonPath("$.data.content[0].travelId", equalTo(byCountryAndCity.id.toString()))
+		}
 	}
 
 	@Test
@@ -193,6 +258,9 @@ class TravelListControllerIntegrationTest(
 	)
 
 	companion object {
+		// V3__seed_location_catalog.sql — country_table id=1(일본/Japan), city_table id=10(도쿄/Tokyo, country_id=1).
+		private val SEED_COUNTRY_ID: Short = 1
+		private val SEED_CITY_ID: Long = 10
 		private val OWNED_ID = UUID.fromString("00000000-0000-0000-0000-000000000180")
 		private val ACCEPTED_ID = UUID.fromString("00000000-0000-0000-0000-000000000181")
 		private val PENDING_ID = UUID.fromString("00000000-0000-0000-0000-000000000182")

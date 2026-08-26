@@ -28,18 +28,34 @@ interface TravelRepository : JpaRepository<Travel, UUID> {
                                 AND member.user.id = :userId
                                 AND member.status = com.ktcloud.travelplanner.membership.model.InvitationStatus.ACCEPTED
                         WHERE (travel.owner.id = :userId OR member.id IS NOT NULL)
-                                AND LOWER(travel.title) LIKE LOWER(CONCAT('%', :keyword, '%'))
+                                AND (
+                                        LOWER(travel.title) LIKE LOWER(CONCAT('%', :keyword, '%'))
+                                        OR LOWER(travel.comment) LIKE LOWER(CONCAT('%', :keyword, '%'))
+                                        OR LOWER(country.nameKo) LIKE LOWER(CONCAT('%', :keyword, '%'))
+                                        OR LOWER(country.nameEn) LIKE LOWER(CONCAT('%', :keyword, '%'))
+                                        OR LOWER(city.nameKo) LIKE LOWER(CONCAT('%', :keyword, '%'))
+                                        OR LOWER(city.nameEn) LIKE LOWER(CONCAT('%', :keyword, '%'))
+                                )
                         ORDER BY travel.updatedAt DESC, travel.id DESC
                 """,
                 countQuery = """
                         SELECT COUNT(travel)
                         FROM Travel travel
+                        LEFT JOIN travel.country country
+                        LEFT JOIN travel.city city
                         LEFT JOIN TravelMember member
                                 ON member.travel = travel
                                 AND member.user.id = :userId
                                 AND member.status = com.ktcloud.travelplanner.membership.model.InvitationStatus.ACCEPTED
                         WHERE (travel.owner.id = :userId OR member.id IS NOT NULL)
-                                AND LOWER(travel.title) LIKE LOWER(CONCAT('%', :keyword, '%'))
+                                AND (
+                                        LOWER(travel.title) LIKE LOWER(CONCAT('%', :keyword, '%'))
+                                        OR LOWER(travel.comment) LIKE LOWER(CONCAT('%', :keyword, '%'))
+                                        OR LOWER(country.nameKo) LIKE LOWER(CONCAT('%', :keyword, '%'))
+                                        OR LOWER(country.nameEn) LIKE LOWER(CONCAT('%', :keyword, '%'))
+                                        OR LOWER(city.nameKo) LIKE LOWER(CONCAT('%', :keyword, '%'))
+                                        OR LOWER(city.nameEn) LIKE LOWER(CONCAT('%', :keyword, '%'))
+                                )
                 """,
         )
         fun findAccessibleTravels(

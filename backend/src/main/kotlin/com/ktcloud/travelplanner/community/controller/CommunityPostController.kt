@@ -43,11 +43,13 @@ class CommunityPostController(
 		@RequestParam(required = false) category: String?,
 		@RequestParam(required = false) tag: String?,
 		@RequestParam(required = false) keyword: String?,
+		// keyword 매칭 대상. ALL(기본)/TITLE/AUTHOR/CONTENT/TAG — 화이트리스트 밖 값은 서비스에서 ALL로 처리.
+		@RequestParam(required = false) searchScope: String?,
 		@RequestParam(required = false) sort: String?,
 		@RequestParam(defaultValue = "0") page: Int,
 		@RequestParam(defaultValue = "10") size: Int,
 	): ApiResponse<PageResponse<CommunityPostSummaryResponse>> =
-		ApiResponse.success(communityPostService.getPosts(category, tag, keyword, sort, page, size))
+		ApiResponse.success(communityPostService.getPosts(category, tag, keyword, searchScope, sort, page, size))
 
 	// community-api-contract.md 2절 — 인증 불필요. 로그인 상태면 isMine 계산을 위해 principal을 사용한다.
 	@GetMapping("/{postId}")

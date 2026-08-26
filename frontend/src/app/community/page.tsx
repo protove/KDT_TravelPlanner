@@ -16,12 +16,20 @@ import { CommunityPostList } from "@/components/organisms/CommunityPostList";
 import { ListLayout } from "@/components/templates/ListLayout";
 import { useAuthStore } from "@/lib/stores/useAuthStore";
 import { getCategories, listPosts } from "@/lib/api/community";
-import type { CommunityCategory, CommunityPostSummary } from "@/lib/types/community";
+import type { CommunityCategory, CommunityPostSearchScope, CommunityPostSummary } from "@/lib/types/community";
 
 const ALL_CATEGORY = "ALL";
 const PAGE_SIZE = 10;
 
 type SortOption = "latest" | "popular";
+
+const SEARCH_SCOPE_OPTIONS: { value: CommunityPostSearchScope; label: string }[] = [
+  { value: "ALL", label: "전체" },
+  { value: "TITLE", label: "제목" },
+  { value: "AUTHOR", label: "사용자" },
+  { value: "CONTENT", label: "내용" },
+  { value: "TAG", label: "태그" },
+];
 
 export default function CommunityPage() {
   const router = useRouter();
@@ -31,6 +39,7 @@ export default function CommunityPage() {
   const [categoryTab, setCategoryTab] = React.useState(ALL_CATEGORY);
   const [sort, setSort] = React.useState<SortOption>("latest");
   const [keyword, setKeyword] = React.useState("");
+  const [searchScope, setSearchScope] = React.useState<CommunityPostSearchScope>("ALL");
 
   const [posts, setPosts] = React.useState<CommunityPostSummary[]>([]);
   const [page, setPage] = React.useState(0);
@@ -42,7 +51,7 @@ export default function CommunityPage() {
 
   const sentinelRef = React.useRef<HTMLDivElement>(null);
 
-  const requestKey = `${accessToken ?? ""}:${categoryTab}:${sort}:${keyword}:${refreshKey}`;
+  const requestKey = `${accessToken ?? ""}:${categoryTab}:${sort}:${keyword}:${searchScope}:${refreshKey}`;
   const isLoading = completedRequestKey !== requestKey;
 
   React.useEffect(() => {
@@ -56,6 +65,7 @@ export default function CommunityPage() {
     listPosts(accessToken, {
       category: categoryTab === ALL_CATEGORY ? undefined : categoryTab,
       keyword: keyword.trim() || undefined,
+      searchScope,
       sort: sort === "popular" ? "popular" : undefined,
       page: 0,
       size: PAGE_SIZE,
@@ -79,7 +89,7 @@ export default function CommunityPage() {
     return () => {
       isCurrentRequest = false;
     };
-  }, [accessToken, categoryTab, sort, keyword, refreshKey, requestKey]);
+  }, [accessToken, categoryTab, sort, keyword, searchScope, refreshKey, requestKey]);
 
   const loadMore = React.useCallback(() => {
     if (isLast || loadingMore || error || isLoading) return;
@@ -90,6 +100,7 @@ export default function CommunityPage() {
     listPosts(accessToken, {
       category: categoryTab === ALL_CATEGORY ? undefined : categoryTab,
       keyword: keyword.trim() || undefined,
+      searchScope,
       sort: sort === "popular" ? "popular" : undefined,
       page: nextPage,
       size: PAGE_SIZE,
@@ -101,7 +112,7 @@ export default function CommunityPage() {
       })
       .catch(() => setIsLast(true))
       .finally(() => setLoadingMore(false));
-  }, [accessToken, categoryTab, sort, keyword, page, isLast, loadingMore, error, isLoading]);
+  }, [accessToken, categoryTab, sort, keyword, searchScope, page, isLast, loadingMore, error, isLoading]);
 
   // 목록 하단의 sentinel이 화면에 보이면 다음 페이지를 불러온다.
   React.useEffect(() => {
@@ -129,6 +140,10 @@ export default function CommunityPage() {
     setKeyword(value);
   }
 
+  function changeSearchScope(value: string) {
+    setSearchScope(value as CommunityPostSearchScope);
+  }
+
   function categoryName(code: string): string {
     return categories.find((c) => c.code === code)?.name ?? code;
   }
@@ -142,12 +157,26 @@ export default function CommunityPage() {
         <Button onClick={() => router.push("/community/write")}>+ 새 글 작성</Button>
       }
     >
-      <SearchBar
-        placeholder="키워드로 커뮤니티 글 검색"
-        value={keyword}
-        onChange={(e) => changeKeyword(e.target.value)}
-        containerClassName="mb-4"
-      />
+      <div className="mb-4 flex gap-2">
+        <Select value={searchScope} onValueChange={changeSearchScope}>
+          <SelectTrigger className="w-24 shrink-0">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {SEARCH_SCOPE_OPTIONS.map((option) => (
+              <SelectItem key={option.value} value={option.value}>
+                {option.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <SearchBar
+          placeholder="키워드로 커뮤니티 글 검색"
+          value={keyword}
+          onChange={(e) => changeKeyword(e.target.value)}
+          containerClassName="flex-1"
+        />
+      </div>
 
       <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
         <Tabs value={categoryTab} onValueChange={changeCategory}>

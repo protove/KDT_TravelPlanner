@@ -575,6 +575,59 @@ class CommunityPostControllerIntegrationTest(
 	}
 
 	@Test
+	fun `list endpoint keyword search respects searchScope (TITLE, AUTHOR, CONTENT, TAG, ALL)`() {
+		val author1 = saveUserWithNickname("search-author1", "김바다")
+		val author2 = saveUserWithNickname("search-author2", "박여행")
+
+		val titleMatch = savePost(author2, title = "부산 여행 후기 대박", bodyPreview = "평범한 본문입니다")
+		val authorMatch = savePost(author1, title = "일반 제목", bodyPreview = "평범한 본문입니다")
+		val contentMatch = savePost(author2, title = "일반 제목2", bodyPreview = "대박 맛집 발견했어요")
+		val tagMatch = savePost(author2, title = "일반 제목3", bodyPreview = "평범한 본문입니다", tags = setOf("대박태그"))
+		savePost(author2, title = "무관한 글", bodyPreview = "무관한 내용")
+
+		mockMvc.get("/api/v1/community/posts") {
+			param("keyword", "대박")
+			param("searchScope", "TITLE")
+		}.andExpect {
+			jsonPath("$.data.content.length()", equalTo(1))
+			jsonPath("$.data.content[0].postId", equalTo(titleMatch.id.toString()))
+		}
+
+		// 소문자로 보내도 서비스에서 대문자로 정규화되어 동일하게 동작해야 한다.
+		mockMvc.get("/api/v1/community/posts") {
+			param("keyword", "김바다")
+			param("searchScope", "author")
+		}.andExpect {
+			jsonPath("$.data.content.length()", equalTo(1))
+			jsonPath("$.data.content[0].postId", equalTo(authorMatch.id.toString()))
+		}
+
+		mockMvc.get("/api/v1/community/posts") {
+			param("keyword", "대박")
+			param("searchScope", "CONTENT")
+		}.andExpect {
+			jsonPath("$.data.content.length()", equalTo(1))
+			jsonPath("$.data.content[0].postId", equalTo(contentMatch.id.toString()))
+		}
+
+		mockMvc.get("/api/v1/community/posts") {
+			param("keyword", "대박")
+			param("searchScope", "TAG")
+		}.andExpect {
+			jsonPath("$.data.content.length()", equalTo(1))
+			jsonPath("$.data.content[0].postId", equalTo(tagMatch.id.toString()))
+		}
+
+		// searchScope를 안 보내면(기본 ALL) title/author/content/tag 전부를 OR로 훑는다 —
+		// 여기서는 authorMatch(닉네임에만 매치)를 뺀 3건이 "대박"에 걸린다.
+		mockMvc.get("/api/v1/community/posts") {
+			param("keyword", "대박")
+		}.andExpect {
+			jsonPath("$.data.content.length()", equalTo(3))
+		}
+	}
+
+	@Test
 	fun `list endpoint accepts sort=popular without authentication and clamps size above 50`() {
 		val author = saveUser("popular-author")
 		val older = savePost(author, title = "오래된 글")
@@ -606,6 +659,7 @@ class CommunityPostControllerIntegrationTest(
 		tags: Set<String> = emptySet(),
 		title: String = "상세 조회 테스트",
 		categoryCode: String = "TRAVEL_REVIEW",
+		bodyPreview: String = "본문",
 	): CommunityPost {
 		val category = communityCategoryRepository.findByCodeAndIsActiveTrue(categoryCode)!!
 		val bodyJson = objectMapper.readTree(
@@ -616,12 +670,21 @@ class CommunityPostControllerIntegrationTest(
 			category = category,
 			title = title,
 			bodyJson = bodyJson.toString(),
-			bodyPreview = "본문",
+			bodyPreview = bodyPreview,
 			sourceTravelId = null,
 			itinerarySnapshotJson = null,
 		)
 		post.assignTags(tags.map { name -> communityTagRepository.findByName(name) ?: saveTag(name) }.toSet())
 		return communityPostRepository.saveAndFlush(post)
+	}
+
+	private fun saveUserWithNickname(
+		suffix: String,
+		nickname: String,
+	): User {
+		val user = saveUser(suffix)
+		user.assignGeneratedNickname(nickname)
+		return userRepository.saveAndFlush(user)
 	}
 
 	private fun setCreatedAt(

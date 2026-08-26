@@ -11,6 +11,9 @@ import java.util.UUID
 
 interface CommunityPostRepository : JpaRepository<CommunityPost, UUID> {
 	// community-api-contract.md 3절 — 기본 정렬. category/tag/keyword는 null이면 조건에서 제외된다.
+	// searchScope(ALL/TITLE/AUTHOR/CONTENT/TAG)로 keyword 매칭 대상을 고른다 — CONTENT는 본문 전체(jsonb)가
+	// 아니라 이미 평문으로 뽑아둔 bodyPreview(120자) 대상. searchScope 자체는 서비스에서 화이트리스트
+	// 검증 후 넘어오므로 여기서는 그대로 비교만 한다.
 	@Query(
 		value = """
 			SELECT new com.ktcloud.travelplanner.community.repository.CommunityPostListRow(
@@ -29,22 +32,46 @@ interface CommunityPostRepository : JpaRepository<CommunityPost, UUID> {
 			JOIN post.author author
 			WHERE (:categoryCode IS NULL OR category.code = :categoryCode)
 				AND (:tagName IS NULL OR EXISTS (SELECT 1 FROM post.tags t WHERE t.name = :tagName))
-				AND (:keyword IS NULL OR LOWER(post.title) LIKE LOWER(CONCAT('%', CAST(:keyword AS string), '%')))
+				AND (:keyword IS NULL OR (
+					(:searchScope = 'TITLE' AND LOWER(post.title) LIKE LOWER(CONCAT('%', CAST(:keyword AS string), '%')))
+					OR (:searchScope = 'AUTHOR' AND LOWER(author.nickname) LIKE LOWER(CONCAT('%', CAST(:keyword AS string), '%')))
+					OR (:searchScope = 'CONTENT' AND LOWER(post.bodyPreview) LIKE LOWER(CONCAT('%', CAST(:keyword AS string), '%')))
+					OR (:searchScope = 'TAG' AND EXISTS (SELECT 1 FROM post.tags st WHERE LOWER(st.name) LIKE LOWER(CONCAT('%', CAST(:keyword AS string), '%'))))
+					OR (:searchScope = 'ALL' AND (
+						LOWER(post.title) LIKE LOWER(CONCAT('%', CAST(:keyword AS string), '%'))
+						OR LOWER(author.nickname) LIKE LOWER(CONCAT('%', CAST(:keyword AS string), '%'))
+						OR LOWER(post.bodyPreview) LIKE LOWER(CONCAT('%', CAST(:keyword AS string), '%'))
+						OR EXISTS (SELECT 1 FROM post.tags st2 WHERE LOWER(st2.name) LIKE LOWER(CONCAT('%', CAST(:keyword AS string), '%')))
+					))
+				))
 			ORDER BY post.createdAt DESC
 		""",
 		countQuery = """
 			SELECT COUNT(post)
 			FROM CommunityPost post
 			JOIN post.category category
+			JOIN post.author author
 			WHERE (:categoryCode IS NULL OR category.code = :categoryCode)
 				AND (:tagName IS NULL OR EXISTS (SELECT 1 FROM post.tags t WHERE t.name = :tagName))
-				AND (:keyword IS NULL OR LOWER(post.title) LIKE LOWER(CONCAT('%', CAST(:keyword AS string), '%')))
+				AND (:keyword IS NULL OR (
+					(:searchScope = 'TITLE' AND LOWER(post.title) LIKE LOWER(CONCAT('%', CAST(:keyword AS string), '%')))
+					OR (:searchScope = 'AUTHOR' AND LOWER(author.nickname) LIKE LOWER(CONCAT('%', CAST(:keyword AS string), '%')))
+					OR (:searchScope = 'CONTENT' AND LOWER(post.bodyPreview) LIKE LOWER(CONCAT('%', CAST(:keyword AS string), '%')))
+					OR (:searchScope = 'TAG' AND EXISTS (SELECT 1 FROM post.tags st WHERE LOWER(st.name) LIKE LOWER(CONCAT('%', CAST(:keyword AS string), '%'))))
+					OR (:searchScope = 'ALL' AND (
+						LOWER(post.title) LIKE LOWER(CONCAT('%', CAST(:keyword AS string), '%'))
+						OR LOWER(author.nickname) LIKE LOWER(CONCAT('%', CAST(:keyword AS string), '%'))
+						OR LOWER(post.bodyPreview) LIKE LOWER(CONCAT('%', CAST(:keyword AS string), '%'))
+						OR EXISTS (SELECT 1 FROM post.tags st2 WHERE LOWER(st2.name) LIKE LOWER(CONCAT('%', CAST(:keyword AS string), '%')))
+					))
+				))
 		""",
 	)
 	fun findPostsOrderByCreatedAt(
 		@Param("categoryCode") categoryCode: String?,
 		@Param("tagName") tagName: String?,
 		@Param("keyword") keyword: String?,
+		@Param("searchScope") searchScope: String,
 		pageable: Pageable,
 	): Page<CommunityPostListRow>
 
@@ -69,22 +96,46 @@ interface CommunityPostRepository : JpaRepository<CommunityPost, UUID> {
 			JOIN post.author author
 			WHERE (:categoryCode IS NULL OR category.code = :categoryCode)
 				AND (:tagName IS NULL OR EXISTS (SELECT 1 FROM post.tags t WHERE t.name = :tagName))
-				AND (:keyword IS NULL OR LOWER(post.title) LIKE LOWER(CONCAT('%', CAST(:keyword AS string), '%')))
+				AND (:keyword IS NULL OR (
+					(:searchScope = 'TITLE' AND LOWER(post.title) LIKE LOWER(CONCAT('%', CAST(:keyword AS string), '%')))
+					OR (:searchScope = 'AUTHOR' AND LOWER(author.nickname) LIKE LOWER(CONCAT('%', CAST(:keyword AS string), '%')))
+					OR (:searchScope = 'CONTENT' AND LOWER(post.bodyPreview) LIKE LOWER(CONCAT('%', CAST(:keyword AS string), '%')))
+					OR (:searchScope = 'TAG' AND EXISTS (SELECT 1 FROM post.tags st WHERE LOWER(st.name) LIKE LOWER(CONCAT('%', CAST(:keyword AS string), '%'))))
+					OR (:searchScope = 'ALL' AND (
+						LOWER(post.title) LIKE LOWER(CONCAT('%', CAST(:keyword AS string), '%'))
+						OR LOWER(author.nickname) LIKE LOWER(CONCAT('%', CAST(:keyword AS string), '%'))
+						OR LOWER(post.bodyPreview) LIKE LOWER(CONCAT('%', CAST(:keyword AS string), '%'))
+						OR EXISTS (SELECT 1 FROM post.tags st2 WHERE LOWER(st2.name) LIKE LOWER(CONCAT('%', CAST(:keyword AS string), '%')))
+					))
+				))
 			ORDER BY (0 * 2 + 0) DESC, post.createdAt DESC
 		""",
 		countQuery = """
 			SELECT COUNT(post)
 			FROM CommunityPost post
 			JOIN post.category category
+			JOIN post.author author
 			WHERE (:categoryCode IS NULL OR category.code = :categoryCode)
 				AND (:tagName IS NULL OR EXISTS (SELECT 1 FROM post.tags t WHERE t.name = :tagName))
-				AND (:keyword IS NULL OR LOWER(post.title) LIKE LOWER(CONCAT('%', CAST(:keyword AS string), '%')))
+				AND (:keyword IS NULL OR (
+					(:searchScope = 'TITLE' AND LOWER(post.title) LIKE LOWER(CONCAT('%', CAST(:keyword AS string), '%')))
+					OR (:searchScope = 'AUTHOR' AND LOWER(author.nickname) LIKE LOWER(CONCAT('%', CAST(:keyword AS string), '%')))
+					OR (:searchScope = 'CONTENT' AND LOWER(post.bodyPreview) LIKE LOWER(CONCAT('%', CAST(:keyword AS string), '%')))
+					OR (:searchScope = 'TAG' AND EXISTS (SELECT 1 FROM post.tags st WHERE LOWER(st.name) LIKE LOWER(CONCAT('%', CAST(:keyword AS string), '%'))))
+					OR (:searchScope = 'ALL' AND (
+						LOWER(post.title) LIKE LOWER(CONCAT('%', CAST(:keyword AS string), '%'))
+						OR LOWER(author.nickname) LIKE LOWER(CONCAT('%', CAST(:keyword AS string), '%'))
+						OR LOWER(post.bodyPreview) LIKE LOWER(CONCAT('%', CAST(:keyword AS string), '%'))
+						OR EXISTS (SELECT 1 FROM post.tags st2 WHERE LOWER(st2.name) LIKE LOWER(CONCAT('%', CAST(:keyword AS string), '%')))
+					))
+				))
 		""",
 	)
 	fun findPostsOrderByPopularity(
 		@Param("categoryCode") categoryCode: String?,
 		@Param("tagName") tagName: String?,
 		@Param("keyword") keyword: String?,
+		@Param("searchScope") searchScope: String,
 		pageable: Pageable,
 	): Page<CommunityPostListRow>
 

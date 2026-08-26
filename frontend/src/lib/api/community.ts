@@ -7,6 +7,7 @@ import type {
   CommunityPostCreateRequest,
   CommunityPostDetail,
   CommunityPostReactionResponse,
+  CommunityPostSearchScope,
   CommunityPostSummary,
   CommunityPostUpdatePatch,
 } from "@/lib/types/community";
@@ -89,6 +90,8 @@ export interface ListPostsParams {
   category?: string;
   tag?: string;
   keyword?: string;
+  /** keyword 매칭 대상. 생략하면 서버 기본값(ALL). */
+  searchScope?: CommunityPostSearchScope;
   sort?: "popular";
   page?: number;
   size?: number;
@@ -103,6 +106,7 @@ export async function listPosts(
   if (params.category) searchParams.set("category", params.category);
   if (params.tag) searchParams.set("tag", params.tag);
   if (params.keyword) searchParams.set("keyword", params.keyword);
+  if (params.searchScope) searchParams.set("searchScope", params.searchScope);
   if (params.sort) searchParams.set("sort", params.sort);
   if (params.page != null) searchParams.set("page", String(params.page));
   if (params.size != null) searchParams.set("size", String(params.size));

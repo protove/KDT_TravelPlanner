@@ -28,7 +28,10 @@ export interface FetchTravelsParams {
   size?: number;
 }
 
-/** 현재 사용자가 소유하거나 참여 중인 여행 목록을 페이지 단위로 조회한다. keyword를 넘기면 제목으로 검색한다. */
+/**
+ * 현재 사용자가 소유하거나 참여 중인 여행 목록을 페이지 단위로 조회한다. keyword를 넘기면
+ * 제목/설명/국가명/도시명(한글·영문)을 OR로 훑어 검색한다.
+ */
 export async function fetchTravels(
   accessToken: string,
   params: FetchTravelsParams = {},
