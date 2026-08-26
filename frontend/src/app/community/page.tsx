@@ -49,8 +49,13 @@ function CommunityPageContent() {
   // 선택했던 카테고리 탭이 "전체"로 초기화되지 않도록 URL 쿼리(?category=)로 상태를 남긴다.
   const [categoryTab, setCategoryTab] = React.useState(() => searchParams.get("category") ?? ALL_CATEGORY);
   const [sort, setSort] = React.useState<SortOption>("latest");
+  // keyword/searchScope는 실제 조회에 쓰이는 "확정된" 값이고, keywordDraft/searchScopeDraft는
+  // 입력 중인 값이다 — 타이핑할 때마다, 혹은 스코프 드롭다운만 바꿔도 매번 서버로 요청이 나가는 걸
+  // 막기 위해 검색창에서 Enter를 눌러야 확정값에 반영되고 그때 비로소 재조회가 일어난다.
   const [keyword, setKeyword] = React.useState("");
   const [searchScope, setSearchScope] = React.useState<CommunityPostSearchScope>("ALL");
+  const [keywordDraft, setKeywordDraft] = React.useState("");
+  const [searchScopeDraft, setSearchScopeDraft] = React.useState<CommunityPostSearchScope>("ALL");
 
   const [posts, setPosts] = React.useState<CommunityPostSummary[]>([]);
   const [page, setPage] = React.useState(0);
@@ -150,12 +155,13 @@ function CommunityPageContent() {
     setSort(value as SortOption);
   }
 
-  function changeKeyword(value: string) {
-    setKeyword(value);
+  function commitSearch() {
+    setKeyword(keywordDraft);
+    setSearchScope(searchScopeDraft);
   }
 
-  function changeSearchScope(value: string) {
-    setSearchScope(value as CommunityPostSearchScope);
+  function handleSearchKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
+    if (e.key === "Enter") commitSearch();
   }
 
   function categoryName(code: string): string {
@@ -172,7 +178,7 @@ function CommunityPageContent() {
       }
     >
       <div className="mb-4 flex gap-2">
-        <Select value={searchScope} onValueChange={changeSearchScope}>
+        <Select value={searchScopeDraft} onValueChange={(v) => setSearchScopeDraft(v as CommunityPostSearchScope)}>
           <SelectTrigger className="w-24 shrink-0">
             <SelectValue />
           </SelectTrigger>
@@ -185,9 +191,10 @@ function CommunityPageContent() {
           </SelectContent>
         </Select>
         <SearchBar
-          placeholder="키워드로 커뮤니티 글 검색"
-          value={keyword}
-          onChange={(e) => changeKeyword(e.target.value)}
+          placeholder="키워드로 커뮤니티 글 검색 (Enter로 검색)"
+          value={keywordDraft}
+          onChange={(e) => setKeywordDraft(e.target.value)}
+          onKeyDown={handleSearchKeyDown}
           containerClassName="flex-1"
         />
       </div>
