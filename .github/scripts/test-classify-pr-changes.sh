@@ -79,6 +79,10 @@ assert_case k8s 'k8s/backend-deployment.yaml' \
   'run_k8s=true' 'run_backend=false' 'run_compose=false' \
   'classification_error=false'
 
+assert_case eks-automation $'scripts/eks/deploy-dev-eks.sh\nscripts/eks/render-action-time.py' \
+  'run_terraform=true' 'run_k8s=true' 'run_monitoring=true' \
+  'run_backend=false' 'classification_error=false' 'changed_count=2'
+
 assert_case compose 'compose.yml' \
   'run_compose=true' 'run_backend_dev_image=true' 'run_backend=false' \
   'classification_error=false'

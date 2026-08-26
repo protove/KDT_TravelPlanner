@@ -97,6 +97,13 @@ classify_path() {
     k8s/*)
       run_k8s=true
       ;;
+    scripts/eks/*)
+      # EKS automation crosses Terraform outputs, private Kubernetes stages
+      # and monitoring manifests; route all three checks explicitly.
+      run_terraform=true
+      run_k8s=true
+      run_monitoring=true
+      ;;
     compose.monitoring.yml|compose.monitoring.dev.yml|compose.monitoring.diagnostic.yml|compose.monitoring.sql-diagnostic.yml)
       run_monitoring=true
       run_compose=true
