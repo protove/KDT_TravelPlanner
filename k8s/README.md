@@ -32,6 +32,7 @@ k8s/
 ├── backend-service.yaml          ClusterIP, 8080(app) + 9091(actuator)
 ├── metrics-server.yaml           kind 전용 패치 포함 (하단 HPA 섹션 참고)
 ├── hpa.yaml                      backend HorizontalPodAutoscaler
+├── backend-pdb.yaml              backend PodDisruptionBudget (하단 PDB 섹션 참고)
 └── scripts/
     ├── setup.sh                  클러스터 생성 → 이미지 빌드/로드 → apply 전체 자동화
     ├── setup-hpa.sh               setup.sh 이후 추가로 실행하는 HPA 애드온 스크립트
@@ -151,6 +152,86 @@ kubectl delete pod load-gen-1 load-gen-2 -n travel-planner
 ```
 
 정리 후 기본 down-scale stabilization window(5분)가 지나면 REPLICAS가 다시 `minReplicas`(2)로 줄어든다.
+
+## PodDisruptionBudget 검증
+
+**이것도 메커니즘 검증이지 실제 장애 대응 훈련은 아니다.** PDB는 "여러 Pod 중 최소 개수가 항상 유지되는지"를 확인하는 리소스라, HPA(`minReplicas: 2`)로 replicas가 1개 고정이 아니게 된 뒤에야 의미가 생겼다. CI(`k8s-verify.yml`)에는 포함하지 않는다(HPA와 같은 이유로 탐색적 검증, 매 PR 자동화 대상 아님).
+
+**PDB는 Eviction API만 막고 `kubectl delete pod`는 막지 않는다 — 실제로 확인함.** PDB(`minAvailable: 2`, 즉 모든 축출을 막는 상태)를 걸어두고 같은 Pod에 대해 두 경로를 비교했다:
+
+- Eviction API(`POST /api/v1/namespaces/travel-planner/pods/<pod>/eviction`, `kubectl proxy` 경유 `curl`로 직접 호출) → `429 TooManyRequests`, `"Cannot evict pod as it would violate the pod's disruption budget."`로 즉시 차단됨.
+- 같은 상태에서 `kubectl delete pod <pod>` → PDB와 무관하게 즉시 삭제되고 컨트롤러가 새 Pod를 만듦.
+
+즉 "자가치유"(`kubectl delete pod`로 강제 종료 후 재생성 확인)와 PDB는 애초에 서로 다른 API 경로를 검증하는 것이라 기술적으로 겹치지 않는다.
+
+**단일 노드에서 `kubectl drain`은 쓰지 않기로 했다 — 실제로 돌려보고 확인함.** `--pod-selector=app=backend`로 backend Pod만 골라 축출하는 것 자체는 가능하다(postgres/redis는 건드리지 않음, dry-run으로 확인). 문제는 `drain`이 대상 Pod 선택과 무관하게 **노드 자체를 cordon**한다는 것 — 단일 노드 kind 클러스터에서는 이게 그 노드가 클러스터의 유일한 스케줄 대상이라는 뜻이라, PDB에 막혀 축출이 안 된 Pod는 그렇다 쳐도 **먼저 축출에 성공한 Pod의 대체 Pod조차 갈 곳이 없어 `Pending`으로 멈춘다** (재현 결과: `backend-f48bd8774-8tw4h`가 30초 넘게 `Pending`, `NODE <none>`). 검증이 끝나도 `kubectl uncordon`을 잊으면 클러스터가 계속 새 Pod를 못 받는 상태로 남는다. `kubectl proxy` + Eviction API 직접 호출은 노드를 건드리지 않아 이 문제가 없고, Pod 단위로 성공/실패를 정밀하게 관찰할 수 있어 이 방법을 최종 채택했다.
+
+**PDB는 ASG에 깔끔하게 대응하는 개념이 없다 — HPA 때와 다른 결론.** `infra/modules/backend_service/main.tf`의 `instance_refresh.preferences.min_healthy_percentage`가 형태상 가장 비슷하지만, 이건 **의도적인 Instance Refresh(롤아웃) 도중에만** 적용되는 값이라 개념적으로는 Rolling Update의 `maxUnavailable`에 대응하지, PDB가 막는 대상인 "누군가(노드 유지보수, 오토스케일러 등)의 임의 축출"과는 범위가 다르다. ASG에 그 자체의 스케일인으로부터 개별 인스턴스를 보호하는 `protect_from_scale_in` 같은 기능이 있지만 이 프로젝트에서는 쓰고 있지 않다(grep 결과 없음). 그래서 HPA/Rolling Update 때처럼 ASG-k8s 대조표를 만들지 않았다 — 대응하는 실측 설정이 없다.
+
+`minAvailable: 1`(절대값)을 쓴다 — HPA `minReplicas: 2`가 항상 보장되는 하한이라, "2개 중 1개는 항상 떠 있어야 한다"는 뜻과 정확히 맞는다. 퍼센트(`50%`)로 써도 2 replica에서는 결과가 같지만, `maxReplicas: 4`까지 스케일업된 상태에서 퍼센트는 허용 축출 개수가 더 커지는 차이가 생겨(예: `50%` → 4개 중 2개까지 축출 허용) 의도("최소 1개는 항상 보장")가 흐려진다. 절대값이 이 프로젝트의 목적에 더 명확하다.
+
+### 사용법
+
+`setup.sh`로 기본 클러스터를 띄운 뒤(HPA로 backend `replicas: 2`가 이미 반영되어 있음), PDB를 apply한다:
+
+```bash
+./k8s/scripts/setup.sh
+kubectl apply -f k8s/backend-pdb.yaml
+kubectl get pdb -n travel-planner   # MIN AVAILABLE 1, ALLOWED DISRUPTIONS 1
+```
+
+Eviction API를 직접 호출하려면 `kubectl proxy`가 필요하다:
+
+```bash
+kubectl proxy --port=8001 &
+```
+
+Pod 이름 확인 후, 첫 번째 Pod를 evict(성공해야 함):
+
+```bash
+NS=travel-planner
+POD1=$(kubectl get pods -n $NS -l app=backend -o jsonpath='{.items[0].metadata.name}')
+curl -s -X POST "localhost:8001/api/v1/namespaces/$NS/pods/$POD1/eviction" \
+  -H "Content-Type: application/json" \
+  -d "{\"apiVersion\":\"policy/v1\",\"kind\":\"Eviction\",\"metadata\":{\"name\":\"$POD1\",\"namespace\":\"$NS\"}}" \
+  -w "\nHTTP_STATUS:%{http_code}\n"
+```
+
+`kubectl get pdb -n travel-planner`로 `ALLOWED DISRUPTIONS`가 `1 → 0`으로 줄어든 걸 확인한 뒤, 남은(원래 있던) Pod를 다시 evict 시도(차단되어야 함):
+
+```bash
+POD2=<evict하지 않은 나머지 Pod 이름>
+curl -s -X POST "localhost:8001/api/v1/namespaces/$NS/pods/$POD2/eviction" \
+  -H "Content-Type: application/json" \
+  -d "{\"apiVersion\":\"policy/v1\",\"kind\":\"Eviction\",\"metadata\":{\"name\":\"$POD2\",\"namespace\":\"$NS\"}}" \
+  -w "\nHTTP_STATUS:%{http_code}\n"
+```
+
+### 관찰
+
+```bash
+kubectl get pdb -n travel-planner -w      # ALLOWED DISRUPTIONS 실시간 관찰
+kubectl get pods -n travel-planner -l app=backend -o wide
+```
+
+### 결과
+
+| 시나리오 | 요청 | 결과 |
+|---|---|---|
+| `minAvailable: 2`(모든 축출 차단) 상태에서 Eviction API 호출 | `POST .../eviction` | `429 TooManyRequests`, `"Cannot evict pod as it would violate the pod's disruption budget."` |
+| 같은 상태에서 `kubectl delete pod` | `DELETE` | PDB 무관하게 즉시 삭제, 컨트롤러가 새 Pod 생성 — Eviction API와 다른 경로임을 확인 |
+| `minAvailable: 1`, 2 replica 모두 Ready 상태에서 Pod 1개 evict | `POST .../eviction` | `201 Success`, `ALLOWED DISRUPTIONS`가 `1 → 0`으로 감소 |
+| 위 상태(남은 Pod 1개, 대체 Pod는 아직 기동 중)에서 나머지 Pod evict | `POST .../eviction` | `429 TooManyRequests`, `"The disruption budget backend needs 1 healthy pods and has 1 currently"` — 목표 시나리오대로 차단 확인 |
+| `kubectl drain <node> --pod-selector=app=backend` (참고용, 채택 안 함) | `drain` | selector로 backend만 골라내는 것 자체는 동작. 하지만 node 전체가 cordon되어, 축출에 성공한 Pod의 대체 Pod가 스케줄될 곳이 없어 `Pending`으로 멈춤(단일 노드라 발생하는 부작용). PDB에 막힌 나머지 Pod는 5초 간격으로 재시도하다가 `--timeout`에 도달하면 실패 |
+
+### 검증용 리소스 정리
+
+```bash
+# kubectl proxy를 foreground로 띄웠다면 Ctrl-C, background라면:
+kill %1   # 또는 실제 PID로 kill
+
+kubectl delete -f k8s/backend-pdb.yaml
+```
 
 ## 다음 단계로 넘어가는 조건
 
