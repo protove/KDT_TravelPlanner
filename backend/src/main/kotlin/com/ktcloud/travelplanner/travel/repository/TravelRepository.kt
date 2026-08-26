@@ -7,6 +7,9 @@ import org.springframework.data.jpa.repository.Query
 import org.springframework.data.repository.query.Param
 import java.util.UUID
 interface TravelRepository : JpaRepository<Travel, UUID> {
+        // searchScope(ALL/TITLE/DESCRIPTION/DESTINATION)로 keyword 매칭 대상을 고른다 — community의
+        // CommunityPostRepository와 동일한 패턴. DESTINATION은 국가명/도시명(한글·영문)을 함께 훑는다.
+        // keyword가 빈 문자열이면(검색어 없음) 아래 LIKE 조건들이 전부 '%%'로 항상 참이 되어 필터링되지 않는다.
         @Query(
                 value = """
                         SELECT new com.ktcloud.travelplanner.travel.repository.TravelListRow(
@@ -29,12 +32,22 @@ interface TravelRepository : JpaRepository<Travel, UUID> {
                                 AND member.status = com.ktcloud.travelplanner.membership.model.InvitationStatus.ACCEPTED
                         WHERE (travel.owner.id = :userId OR member.id IS NOT NULL)
                                 AND (
-                                        LOWER(travel.title) LIKE LOWER(CONCAT('%', :keyword, '%'))
-                                        OR LOWER(travel.comment) LIKE LOWER(CONCAT('%', :keyword, '%'))
-                                        OR LOWER(country.nameKo) LIKE LOWER(CONCAT('%', :keyword, '%'))
-                                        OR LOWER(country.nameEn) LIKE LOWER(CONCAT('%', :keyword, '%'))
-                                        OR LOWER(city.nameKo) LIKE LOWER(CONCAT('%', :keyword, '%'))
-                                        OR LOWER(city.nameEn) LIKE LOWER(CONCAT('%', :keyword, '%'))
+                                        (:searchScope = 'TITLE' AND LOWER(travel.title) LIKE LOWER(CONCAT('%', :keyword, '%')))
+                                        OR (:searchScope = 'DESCRIPTION' AND LOWER(travel.comment) LIKE LOWER(CONCAT('%', :keyword, '%')))
+                                        OR (:searchScope = 'DESTINATION' AND (
+                                                LOWER(country.nameKo) LIKE LOWER(CONCAT('%', :keyword, '%'))
+                                                OR LOWER(country.nameEn) LIKE LOWER(CONCAT('%', :keyword, '%'))
+                                                OR LOWER(city.nameKo) LIKE LOWER(CONCAT('%', :keyword, '%'))
+                                                OR LOWER(city.nameEn) LIKE LOWER(CONCAT('%', :keyword, '%'))
+                                        ))
+                                        OR (:searchScope = 'ALL' AND (
+                                                LOWER(travel.title) LIKE LOWER(CONCAT('%', :keyword, '%'))
+                                                OR LOWER(travel.comment) LIKE LOWER(CONCAT('%', :keyword, '%'))
+                                                OR LOWER(country.nameKo) LIKE LOWER(CONCAT('%', :keyword, '%'))
+                                                OR LOWER(country.nameEn) LIKE LOWER(CONCAT('%', :keyword, '%'))
+                                                OR LOWER(city.nameKo) LIKE LOWER(CONCAT('%', :keyword, '%'))
+                                                OR LOWER(city.nameEn) LIKE LOWER(CONCAT('%', :keyword, '%'))
+                                        ))
                                 )
                         ORDER BY travel.updatedAt DESC, travel.id DESC
                 """,
@@ -49,18 +62,29 @@ interface TravelRepository : JpaRepository<Travel, UUID> {
                                 AND member.status = com.ktcloud.travelplanner.membership.model.InvitationStatus.ACCEPTED
                         WHERE (travel.owner.id = :userId OR member.id IS NOT NULL)
                                 AND (
-                                        LOWER(travel.title) LIKE LOWER(CONCAT('%', :keyword, '%'))
-                                        OR LOWER(travel.comment) LIKE LOWER(CONCAT('%', :keyword, '%'))
-                                        OR LOWER(country.nameKo) LIKE LOWER(CONCAT('%', :keyword, '%'))
-                                        OR LOWER(country.nameEn) LIKE LOWER(CONCAT('%', :keyword, '%'))
-                                        OR LOWER(city.nameKo) LIKE LOWER(CONCAT('%', :keyword, '%'))
-                                        OR LOWER(city.nameEn) LIKE LOWER(CONCAT('%', :keyword, '%'))
+                                        (:searchScope = 'TITLE' AND LOWER(travel.title) LIKE LOWER(CONCAT('%', :keyword, '%')))
+                                        OR (:searchScope = 'DESCRIPTION' AND LOWER(travel.comment) LIKE LOWER(CONCAT('%', :keyword, '%')))
+                                        OR (:searchScope = 'DESTINATION' AND (
+                                                LOWER(country.nameKo) LIKE LOWER(CONCAT('%', :keyword, '%'))
+                                                OR LOWER(country.nameEn) LIKE LOWER(CONCAT('%', :keyword, '%'))
+                                                OR LOWER(city.nameKo) LIKE LOWER(CONCAT('%', :keyword, '%'))
+                                                OR LOWER(city.nameEn) LIKE LOWER(CONCAT('%', :keyword, '%'))
+                                        ))
+                                        OR (:searchScope = 'ALL' AND (
+                                                LOWER(travel.title) LIKE LOWER(CONCAT('%', :keyword, '%'))
+                                                OR LOWER(travel.comment) LIKE LOWER(CONCAT('%', :keyword, '%'))
+                                                OR LOWER(country.nameKo) LIKE LOWER(CONCAT('%', :keyword, '%'))
+                                                OR LOWER(country.nameEn) LIKE LOWER(CONCAT('%', :keyword, '%'))
+                                                OR LOWER(city.nameKo) LIKE LOWER(CONCAT('%', :keyword, '%'))
+                                                OR LOWER(city.nameEn) LIKE LOWER(CONCAT('%', :keyword, '%'))
+                                        ))
                                 )
                 """,
         )
         fun findAccessibleTravels(
                 @Param("userId") userId: UUID,
                 @Param("keyword") keyword: String,
+                @Param("searchScope") searchScope: String,
                 pageable: Pageable,
         ): Page<TravelListRow>
 

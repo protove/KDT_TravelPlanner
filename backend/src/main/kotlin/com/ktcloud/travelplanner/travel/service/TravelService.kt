@@ -38,20 +38,31 @@ class TravelService(
 		return TravelCreateResponse.from(travelRepository.save(travel))
 	}
 
+	// searchScope는 화이트리스트 밖 값(오타/구버전 클라이언트 등)이면 조용히 기본값(ALL)으로
+	// 떨어뜨린다 — CommunityPostService.getPosts와 동일한 관용.
 	@Transactional(readOnly = true)
 	fun getTravels(
 		userId: UUID,
 		keyword: String?,
+		searchScope: String?,
 		page: Int,
 		size: Int,
 	): PageResponse<TravelSummaryResponse> {
 		val normalizedKeyword = keyword?.trim().orEmpty()
+		val normalizedSearchScope = searchScope?.trim()?.uppercase()?.takeIf { it in VALID_SEARCH_SCOPES }
+			?: DEFAULT_SEARCH_SCOPE
 		val result = travelRepository.findAccessibleTravels(
 			userId = userId,
 			keyword = normalizedKeyword,
+			searchScope = normalizedSearchScope,
 			pageable = PageRequest.of(page, size),
 		)
 		return PageResponse.from(result.map(TravelSummaryResponse::from))
+	}
+
+	companion object {
+		private const val DEFAULT_SEARCH_SCOPE = "ALL"
+		private val VALID_SEARCH_SCOPES = setOf("ALL", "TITLE", "DESCRIPTION", "DESTINATION")
 	}
 
 	@Transactional

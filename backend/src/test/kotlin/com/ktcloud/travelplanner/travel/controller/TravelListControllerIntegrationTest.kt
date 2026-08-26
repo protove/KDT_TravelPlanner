@@ -166,6 +166,70 @@ class TravelListControllerIntegrationTest(
 	}
 
 	@Test
+	fun `searchScope narrows keyword matching to the requested field`() {
+		val requester = saveUser("scope-narrow-requester")
+		val country = countryRepository.findByIdAndIsActiveTrue(SEED_COUNTRY_ID).orElseThrow()
+		val city = cityRepository.findByIdAndIsActiveTrue(SEED_CITY_ID).orElseThrow()
+
+		val byTitle = saveTravel(requester, "벚꽃 여행", UUID.randomUUID())
+		val byDescription = saveTravel(requester, "무제 일정", UUID.randomUUID())
+		byDescription.updateBasicInfo(
+			title = byDescription.title,
+			startDate = byDescription.startDate,
+			endDate = byDescription.endDate,
+			country = null,
+			city = null,
+			companionType = null,
+			participantCount = null,
+			comment = "벚꽃 보러 가는 여행",
+		)
+		val byDestination = saveTravel(requester, "무제 일정 2", UUID.randomUUID())
+		byDestination.updateBasicInfo(
+			title = byDestination.title,
+			startDate = byDestination.startDate,
+			endDate = byDestination.endDate,
+			country = country,
+			city = city,
+			companionType = null,
+			participantCount = null,
+			comment = null,
+		)
+		travelRepository.saveAllAndFlush(listOf(byDescription, byDestination))
+
+		// searchScope=TITLE이면 제목에만 매칭되는 것을 찾고, 설명에만 있는 키워드는 걸러진다.
+		mockMvc.get("/api/v1/travels") {
+			header(HttpHeaders.AUTHORIZATION, bearer(requester))
+			param("keyword", "벚꽃")
+			param("searchScope", "TITLE")
+		}.andExpect {
+			status { isOk() }
+			jsonPath("$.data.totalElements", equalTo(1))
+			jsonPath("$.data.content[0].travelId", equalTo(byTitle.id.toString()))
+		}
+
+		// searchScope=DESTINATION이면 국가/도시명에만 매칭되고, 제목/설명은 걸러진다.
+		mockMvc.get("/api/v1/travels") {
+			header(HttpHeaders.AUTHORIZATION, bearer(requester))
+			param("keyword", country.nameKo)
+			param("searchScope", "DESTINATION")
+		}.andExpect {
+			status { isOk() }
+			jsonPath("$.data.totalElements", equalTo(1))
+			jsonPath("$.data.content[0].travelId", equalTo(byDestination.id.toString()))
+		}
+
+		// 알 수 없는 searchScope 값은 ALL로 취급돼 세 필드 모두 훑는다.
+		mockMvc.get("/api/v1/travels") {
+			header(HttpHeaders.AUTHORIZATION, bearer(requester))
+			param("keyword", "벚꽃")
+			param("searchScope", "invalid-scope")
+		}.andExpect {
+			status { isOk() }
+			jsonPath("$.data.totalElements", equalTo(2))
+		}
+	}
+
+	@Test
 	fun `rejects unauthenticated and invalid pagination requests`() {
 		mockMvc.get("/api/v1/travels")
 			.andExpect {

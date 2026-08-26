@@ -46,10 +46,11 @@ class TravelController(
 	fun getTravels(
 		@AuthenticationPrincipal principal: AuthenticatedUserPrincipal,
 		@RequestParam(required = false) keyword: String?,
+		@RequestParam(required = false) searchScope: String?,
 		@RequestParam(defaultValue = "0") @Min(0) page: Int,
 		@RequestParam(defaultValue = "20") @Min(1) @Max(100) size: Int,
 	): ApiResponse<PageResponse<TravelSummaryResponse>> =
-		ApiResponse.success(travelService.getTravels(principal.userId, keyword, page, size))
+		ApiResponse.success(travelService.getTravels(principal.userId, keyword, searchScope, page, size))
 
 	@GetMapping("/{travelId}")
 	fun getTravelDetail(
