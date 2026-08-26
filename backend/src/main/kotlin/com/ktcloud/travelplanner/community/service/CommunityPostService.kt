@@ -258,7 +258,8 @@ class CommunityPostService(
 		return buildSummaryPage(result)
 	}
 
-	// 마이페이지 "내가 쓴 글" 탭 — 카테고리/검색 필터 없이 본인 글만 작성일 역순으로.
+	// 마이페이지 "내가 쓴 글" 탭 — 카테고리/검색 필터 없이 본인 글만 작성일 역순으로, 본인이
+	// 소프트 삭제한 글도 함께 보여준다(deletedAt 채워서 내려주고 삭제 표시는 프론트에서).
 	@Transactional(readOnly = true)
 	fun getMyPosts(
 		authorId: UUID,
@@ -266,7 +267,21 @@ class CommunityPostService(
 		size: Int,
 	): PageResponse<CommunityPostSummaryResponse> {
 		val pageable = PageRequest.of(page.coerceAtLeast(0), size.coerceIn(MIN_PAGE_SIZE, MAX_PAGE_SIZE))
-		val result = communityPostRepository.findByAuthorIdOrderByCreatedAtDesc(authorId, pageable)
+		val result = communityPostRepository.findByAuthorIdIncludingDeletedOrderByCreatedAtDesc(authorId, pageable)
+			.map { row ->
+				CommunityPostListRow(
+					postId = row.postId,
+					categoryCode = row.categoryCode,
+					title = row.title,
+					bodyPreview = row.bodyPreview,
+					authorNickname = row.authorNickname,
+					authorProfileImageUrl = row.authorProfileImageUrl,
+					viewCount = row.viewCount,
+					sourceTravelId = row.sourceTravelId,
+					createdAt = row.createdAt,
+					deletedAt = row.deletedAt,
+				)
+			}
 		return buildSummaryPage(result)
 	}
 

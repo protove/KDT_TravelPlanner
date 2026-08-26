@@ -12,6 +12,8 @@ import com.ktcloud.travelplanner.user.model.User
 import com.ktcloud.travelplanner.user.repository.UserRepository
 import jakarta.persistence.EntityManager
 import org.hamcrest.Matchers.equalTo
+import org.hamcrest.Matchers.notNullValue
+import org.hamcrest.Matchers.nullValue
 import org.junit.jupiter.api.Test
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc
@@ -22,6 +24,7 @@ import org.springframework.http.MediaType
 import org.springframework.jdbc.core.JdbcTemplate
 import org.springframework.test.context.ActiveProfiles
 import org.springframework.test.web.servlet.MockMvc
+import org.springframework.test.web.servlet.delete
 import org.springframework.test.web.servlet.get
 import org.springframework.test.web.servlet.post
 import org.springframework.transaction.annotation.Transactional
@@ -67,6 +70,30 @@ class MyCommunityControllerIntegrationTest(
 	}
 
 	@Test
+	fun `GET me posts includes the requester's own soft deleted posts with deletedAt set`() {
+		val requester = saveUser("me-posts-deleted-requester")
+		val kept = savePost(requester, "안 지운 글")
+		val deleted = savePost(requester, "내가 지운 글")
+		setCreatedAt(kept.id, Instant.parse("2026-08-01T00:00:00Z"))
+		setCreatedAt(deleted.id, Instant.parse("2026-08-02T00:00:00Z"))
+
+		mockMvc.delete("/api/v1/community/posts/${deleted.id}") {
+			header(HttpHeaders.AUTHORIZATION, bearer(requester))
+		}.andExpect { status { isOk() } }
+
+		mockMvc.get("/api/v1/community/me/posts") {
+			header(HttpHeaders.AUTHORIZATION, bearer(requester))
+		}.andExpect {
+			status { isOk() }
+			jsonPath("$.data.totalElements", equalTo(2))
+			jsonPath("$.data.content[0].title", equalTo("내가 지운 글"))
+			jsonPath("$.data.content[0].deletedAt", notNullValue())
+			jsonPath("$.data.content[1].title", equalTo("안 지운 글"))
+			jsonPath("$.data.content[1].deletedAt", nullValue())
+		}
+	}
+
+	@Test
 	fun `GET me posts requires authentication`() {
 		mockMvc.get("/api/v1/community/me/posts")
 			.andExpect {
@@ -105,8 +132,8 @@ class MyCommunityControllerIntegrationTest(
 	}
 
 	@Test
-	fun `GET me comments excludes comments on a soft deleted post`() {
-		val requester = saveUser("me-comments-deleted-requester")
+	fun `GET me comments includes comments on a soft deleted post, with the comment's own deletedAt null`() {
+		val requester = saveUser("me-comments-deleted-post-requester")
 		val post = savePost(requester, "곧 삭제될 글")
 
 		mockMvc.post("/api/v1/community/posts/${post.id}/comments") {
@@ -122,7 +149,36 @@ class MyCommunityControllerIntegrationTest(
 			header(HttpHeaders.AUTHORIZATION, bearer(requester))
 		}.andExpect {
 			status { isOk() }
-			jsonPath("$.data.totalElements", equalTo(0))
+			jsonPath("$.data.totalElements", equalTo(1))
+			jsonPath("$.data.content[0].postTitle", equalTo("곧 삭제될 글"))
+			jsonPath("$.data.content[0].deletedAt", nullValue())
+			jsonPath("$.data.content[0].postDeletedAt", notNullValue())
+		}
+	}
+
+	@Test
+	fun `GET me comments includes the requester's own soft deleted comment with deletedAt set`() {
+		val requester = saveUser("me-comments-own-deleted-requester")
+		val post = savePost(requester, "댓글 달릴 글")
+
+		val response = mockMvc.post("/api/v1/community/posts/${post.id}/comments") {
+			header(HttpHeaders.AUTHORIZATION, bearer(requester))
+			contentType = MediaType.APPLICATION_JSON
+			content = """{"content": "지울 댓글"}"""
+		}.andExpect { status { isOk() } }.andReturn()
+		val commentId = objectMapper.readTree(response.response.contentAsString)["data"]["commentId"].asText()
+
+		mockMvc.delete("/api/v1/community/comments/$commentId") {
+			header(HttpHeaders.AUTHORIZATION, bearer(requester))
+		}.andExpect { status { isOk() } }
+
+		mockMvc.get("/api/v1/community/me/comments") {
+			header(HttpHeaders.AUTHORIZATION, bearer(requester))
+		}.andExpect {
+			status { isOk() }
+			jsonPath("$.data.totalElements", equalTo(1))
+			jsonPath("$.data.content[0].content", equalTo("지울 댓글"))
+			jsonPath("$.data.content[0].deletedAt", notNullValue())
 		}
 	}
 

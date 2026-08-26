@@ -134,7 +134,8 @@ class CommunityCommentService(
 		)
 	}
 
-	// 마이페이지 "내가 쓴 댓글" 탭 — 필터 없이 본인 댓글만 작성일 역순으로.
+	// 마이페이지 "내가 쓴 댓글" 탭 — 필터 없이 본인 댓글만 작성일 역순으로, 본인이 삭제한 댓글도
+	// 함께 보여준다.
 	@Transactional(readOnly = true)
 	fun getMyComments(
 		authorId: UUID,
@@ -142,7 +143,7 @@ class CommunityCommentService(
 		size: Int,
 	): PageResponse<MyCommentResponse> {
 		val pageable = PageRequest.of(page.coerceAtLeast(0), size.coerceIn(MIN_PAGE_SIZE, MAX_PAGE_SIZE))
-		val result = communityCommentRepository.findByAuthorIdOrderByCreatedAtDesc(authorId, pageable)
+		val result = communityCommentRepository.findByAuthorIdIncludingDeletedOrderByCreatedAtDesc(authorId, pageable)
 		return PageResponse.from(result.map(MyCommentResponse::from))
 	}
 

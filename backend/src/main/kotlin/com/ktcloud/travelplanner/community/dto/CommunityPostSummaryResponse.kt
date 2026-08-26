@@ -18,6 +18,9 @@ data class CommunityPostSummaryResponse(
 	val reactionCount: Long,
 	val sourceTravelId: UUID?,
 	val createdAt: Instant,
+	// 공개 목록(getPosts)에서는 @SQLRestriction 때문에 절대 채워지지 않아 항상 null이고,
+	// 마이페이지 "내가 쓴 글"(getMyPosts)에서만 본인이 소프트 삭제한 글에 실제 값이 들어간다.
+	val deletedAt: Instant? = null,
 ) {
 	companion object {
 		fun from(
@@ -38,6 +41,7 @@ data class CommunityPostSummaryResponse(
 			reactionCount = reactionCount,
 			sourceTravelId = row.sourceTravelId,
 			createdAt = row.createdAt,
+			deletedAt = row.deletedAt,
 		)
 	}
 }

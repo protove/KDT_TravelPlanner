@@ -13,6 +13,11 @@ data class MyCommentResponse(
 	val content: String,
 	val createdAt: Instant,
 	val updatedAt: Instant?,
+	// 본인이 삭제한 댓글이면 값이 들어간다.
+	val deletedAt: Instant?,
+	// 댓글은 안 지웠는데 글이 삭제된 경우 값이 들어간다 — 프론트에서 상세 링크로 못 들어가게
+	// 막는 용도(삭제된 글의 상세 조회는 404).
+	val postDeletedAt: Instant?,
 ) {
 	companion object {
 		fun from(row: MyCommentRow): MyCommentResponse = MyCommentResponse(
@@ -22,6 +27,8 @@ data class MyCommentResponse(
 			content = row.content,
 			createdAt = row.createdAt,
 			updatedAt = row.updatedAt,
+			deletedAt = row.deletedAt,
+			postDeletedAt = row.postDeletedAt,
 		)
 	}
 }

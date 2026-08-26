@@ -81,26 +81,30 @@ interface CommunityCommentRepository : JpaRepository<CommunityComment, UUID> {
 	): List<UUID>
 
 	// 마이페이지 "내가 쓴 댓글" 탭 — 어느 글에 달았는지 보여줘야 해서 post.title까지 함께 가져온다.
-	// @SQLRestriction("deleted_at IS NULL")이 CommunityComment/CommunityPost 양쪽에 걸려 있어
-	// 삭제된 댓글이나 삭제된 글에 달린 댓글은 JOIN 단계에서 자동 제외된다.
+	// 본인이 삭제한 댓글, 그리고 본인이 삭제한 글에 달린(댓글 자체는 안 지워진) 댓글까지 함께
+	// 보여주기 위해 CommunityComment/CommunityPost 양쪽의 @SQLRestriction을 우회하는 네이티브
+	// 쿼리로 조회한다(CommunityPostRepository.findByAuthorIdIncludingDeletedOrderByCreatedAtDesc와
+	// 동일한 패턴).
 	@Query(
 		value = """
-			SELECT new com.ktcloud.travelplanner.community.repository.MyCommentRow(
-				comment.id,
-				post.id,
-				post.title,
-				comment.content,
-				comment.createdAt,
-				comment.updatedAt
-			)
-			FROM CommunityComment comment
-			JOIN comment.post post
-			WHERE comment.author.id = :authorId
-			ORDER BY comment.createdAt DESC
+			SELECT
+				comment.id AS commentId,
+				post.id AS postId,
+				post.title AS postTitle,
+				comment.content AS content,
+				comment.created_at AS createdAt,
+				comment.updated_at AS updatedAt,
+				comment.deleted_at AS deletedAt,
+				post.deleted_at AS postDeletedAt
+			FROM community_comment comment
+			JOIN community_post post ON post.id = comment.post_id
+			WHERE comment.author_id = :authorId
+			ORDER BY comment.created_at DESC
 		""",
-		countQuery = "SELECT COUNT(comment) FROM CommunityComment comment WHERE comment.author.id = :authorId",
+		countQuery = "SELECT COUNT(*) FROM community_comment WHERE author_id = :authorId",
+		nativeQuery = true,
 	)
-	fun findByAuthorIdOrderByCreatedAtDesc(
+	fun findByAuthorIdIncludingDeletedOrderByCreatedAtDesc(
 		@Param("authorId") authorId: UUID,
 		pageable: Pageable,
 	): Page<MyCommentRow>
@@ -113,11 +117,16 @@ interface CommentReactionCountRow {
 	val reactionCount: Long
 }
 
-data class MyCommentRow(
-	val commentId: UUID,
-	val postId: UUID,
-	val postTitle: String,
-	val content: String,
-	val createdAt: Instant,
-	val updatedAt: Instant?,
-)
+// findByAuthorIdIncludingDeletedOrderByCreatedAtDesc 네이티브 쿼리 프로젝션 — 프로퍼티 이름이
+// 쿼리의 컬럼 별칭과 대소문자 무시로 매칭된다.
+interface MyCommentRow {
+	val commentId: UUID
+	val postId: UUID
+	val postTitle: String
+	val content: String
+	val createdAt: Instant
+	val updatedAt: Instant?
+	val deletedAt: Instant?
+	// 댓글 자체는 안 지워졌는데 글이 삭제된 경우를 프론트가 구분해 상세로 못 들어가게 막을 수 있도록.
+	val postDeletedAt: Instant?
+}

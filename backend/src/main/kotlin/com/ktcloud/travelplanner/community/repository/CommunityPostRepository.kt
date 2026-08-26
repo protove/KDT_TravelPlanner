@@ -223,32 +223,36 @@ interface CommunityPostRepository : JpaRepository<CommunityPost, UUID> {
 		@Param("postIds") postIds: List<UUID>,
 	): List<PostReactionCountRow>
 
-	// 마이페이지 "내가 쓴 글" 탭 — 카테고리/키워드 필터 없이 본인 글만 작성일 역순으로.
+	// 마이페이지 "내가 쓴 글" 탭 — 카테고리/키워드 필터 없이 본인 글만 작성일 역순으로, 본인이
+	// 소프트 삭제한 글도 함께 보여준다. CommunityPost의 @SQLRestriction("deleted_at IS NULL")은
+	// JPQL로는(findById 포함) 절대 우회할 수 없어서, countActiveComments 등과 동일하게 네이티브
+	// 쿼리로 우회한다.
 	@Query(
 		value = """
-			SELECT new com.ktcloud.travelplanner.community.repository.CommunityPostListRow(
-				post.id,
-				category.code,
-				post.title,
-				post.bodyPreview,
-				author.nickname,
-				author.profileImageUrl,
-				post.viewCount,
-				post.sourceTravelId,
-				post.createdAt
-			)
-			FROM CommunityPost post
-			JOIN post.category category
-			JOIN post.author author
-			WHERE author.id = :authorId
-			ORDER BY post.createdAt DESC
+			SELECT
+				post.id AS postId,
+				category.code AS categoryCode,
+				post.title AS title,
+				post.body_preview AS bodyPreview,
+				author.nickname AS authorNickname,
+				author.profile_image_url AS authorProfileImageUrl,
+				post.view_count AS viewCount,
+				post.source_travel_id AS sourceTravelId,
+				post.created_at AS createdAt,
+				post.deleted_at AS deletedAt
+			FROM community_post post
+			JOIN community_category category ON category.id = post.category_id
+			JOIN user_table author ON author.id = post.author_id
+			WHERE post.author_id = :authorId
+			ORDER BY post.created_at DESC
 		""",
-		countQuery = "SELECT COUNT(post) FROM CommunityPost post WHERE post.author.id = :authorId",
+		countQuery = "SELECT COUNT(*) FROM community_post WHERE author_id = :authorId",
+		nativeQuery = true,
 	)
-	fun findByAuthorIdOrderByCreatedAtDesc(
+	fun findByAuthorIdIncludingDeletedOrderByCreatedAtDesc(
 		@Param("authorId") authorId: UUID,
 		pageable: Pageable,
-	): Page<CommunityPostListRow>
+	): Page<MyPostRow>
 }
 
 interface PostCommentCountRow {
