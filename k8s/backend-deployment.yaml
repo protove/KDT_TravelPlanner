@@ -4,7 +4,12 @@ metadata:
   name: backend
   namespace: travel-planner
 spec:
-  replicas: 1
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
   selector:
     matchLabels:
       app: backend
@@ -22,6 +27,13 @@ spec:
               containerPort: 8080
             - name: actuator
               containerPort: 9091
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
           envFrom:
             - configMapRef:
                 name: backend-config
@@ -76,6 +88,10 @@ spec:
                   name: backend-secret
                   key: GOOGLE_MAPS_API_KEY
                   optional: true
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sh", "-c", "sleep 5"]
           readinessProbe:
             httpGet:
               path: /actuator/health/readiness

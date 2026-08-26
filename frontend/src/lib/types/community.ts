@@ -107,15 +107,25 @@ export interface CommunityPostUpdatePatch {
   version: number;
 }
 
+// community-api-contract.md 1절 CommentResponse 기반 + 댓글 좋아요/수정 기능 추가로 확장한 필드
+// (updatedAt/reactionCount/isReacted — 계약 문서에는 아직 반영 안 됨, backend CommentResponse.kt와 동일).
 export interface CommentResponse {
   commentId: string;
   authorNickname: string;
   authorProfileImageUrl: string | null;
   content: string;
   createdAt: string;
+  /** null이면 한 번도 수정되지 않은 댓글. */
+  updatedAt: string | null;
+  reactionCount: number;
+  /** 로그인한 요청자가 이 댓글에 좋아요를 눌렀는지. 비로그인 조회 시 항상 false. */
+  isReacted: boolean;
   isMine: boolean;
 }
 
 export interface CommentCreateRequest {
   content: string;
 }
+
+/** PATCH /comments/{commentId} 요청. 필드가 CommentCreateRequest와 동일해서 별도 타입을 만들지 않고 재사용한다. */
+export type CommentUpdateRequest = CommentCreateRequest;
