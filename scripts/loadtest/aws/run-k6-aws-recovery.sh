@@ -112,7 +112,11 @@ metadata.update({
     "scenarioId": scenario_id,
     "scenario": "recovery-steady",
     "platform": platform,
-    "startedAtUtc": started_at,
+    # The orchestrator writes immutable preflight metadata and RUN_START
+    # before invoking this runner.  Preserve that boundary so the fixed
+    # evidence range contains the complete recorded run rather than starting
+    # after the first event.
+    "startedAtUtc": metadata.get("startedAtUtc") or started_at,
     "target": "sanitized-approved-runtime-input",
     "region": region,
     "environment": environment,
@@ -236,7 +240,10 @@ from pathlib import Path
 
 path = Path(sys.argv[1])
 metadata = json.loads(path.read_text(encoding="utf-8"))
-metadata["endedAtUtc"] = datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+# RUN_END is recorded immediately before this block.  Keep millisecond
+# precision so the fixed export range contains the event itself; truncating
+# to whole seconds can place a sub-second RUN_END just outside the range.
+metadata["endedAtUtc"] = datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 path.write_text(json.dumps(metadata, indent=2) + chr(10), encoding="utf-8")
 PY
 echo "[k6-recovery] run directory: $RUN_DIR"
