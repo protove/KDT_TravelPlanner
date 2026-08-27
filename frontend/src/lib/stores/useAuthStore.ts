@@ -27,6 +27,8 @@ interface AuthState {
    */
   isInitializing: boolean;
   setSession: (accessToken: string, user: AuthUser) => void;
+  /** apiFetch가 401을 만나 조용히 재발급받은 access token만 반영할 때 쓴다(user는 그대로 유지). */
+  setAccessToken: (accessToken: string) => void;
   logout: () => void;
   finishInitializing: () => void;
   updateProfile: (
@@ -45,6 +47,7 @@ export const useAuthStore = create<AuthState>((set) => ({
     document.cookie = "logged_in=1; path=/; max-age=604800";
     set({ isLoggedIn: true, accessToken, user });
   },
+  setAccessToken: (accessToken) => set({ accessToken }),
   logout: () => {
     document.cookie = "logged_in=; path=/; max-age=0";
     set({ isLoggedIn: false, user: null, accessToken: null });

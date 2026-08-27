@@ -1,6 +1,8 @@
 package com.ktcloud.travelplanner.travel.controller
 
 import com.ktcloud.travelplanner.global.security.JwtTokenService
+import com.ktcloud.travelplanner.location.repository.CityRepository
+import com.ktcloud.travelplanner.location.repository.CountryRepository
 import com.ktcloud.travelplanner.membership.model.TravelMember
 import com.ktcloud.travelplanner.membership.model.TravelRole
 import com.ktcloud.travelplanner.membership.repository.TravelMemberRepository
@@ -38,6 +40,8 @@ class TravelListControllerIntegrationTest(
 	@Autowired private val userRepository: UserRepository,
 	@Autowired private val travelRepository: TravelRepository,
 	@Autowired private val travelMemberRepository: TravelMemberRepository,
+	@Autowired private val countryRepository: CountryRepository,
+	@Autowired private val cityRepository: CityRepository,
 	@Autowired private val jwtTokenService: JwtTokenService,
 	@Autowired private val jdbcTemplate: JdbcTemplate,
 	@Autowired private val entityManager: EntityManager,
@@ -98,6 +102,178 @@ class TravelListControllerIntegrationTest(
 				jsonPath("$.data.content[0].permission", equalTo("OWNER"))
 				jsonPath("$.data.isLast", equalTo(true))
 			}
+	}
+
+	@Test
+	fun `keyword search also matches description, country name, and city name (not just title)`() {
+		val requester = saveUser("scope-requester")
+		val country = countryRepository.findByIdAndIsActiveTrue(SEED_COUNTRY_ID).orElseThrow()
+		val city = cityRepository.findByIdAndIsActiveTrue(SEED_CITY_ID).orElseThrow()
+
+		val byDescription = saveTravel(requester, "무제 일정 1", UUID.randomUUID())
+		byDescription.updateBasicInfo(
+			title = byDescription.title,
+			startDate = byDescription.startDate,
+			endDate = byDescription.endDate,
+			country = null,
+			city = null,
+			companionType = null,
+			participantCount = null,
+			comment = "친구들이랑 벚꽃 보러 가는 여행",
+		)
+		val byCountryAndCity = saveTravel(requester, "무제 일정 2", UUID.randomUUID())
+		byCountryAndCity.updateBasicInfo(
+			title = byCountryAndCity.title,
+			startDate = byCountryAndCity.startDate,
+			endDate = byCountryAndCity.endDate,
+			country = country,
+			city = city,
+			companionType = null,
+			participantCount = null,
+			comment = null,
+		)
+		saveTravel(requester, "전혀 무관한 일정", UUID.randomUUID())
+		travelRepository.saveAllAndFlush(listOf(byDescription, byCountryAndCity))
+
+		mockMvc.get("/api/v1/travels") {
+			header(HttpHeaders.AUTHORIZATION, bearer(requester))
+			param("keyword", "벚꽃")
+		}.andExpect {
+			status { isOk() }
+			jsonPath("$.data.totalElements", equalTo(1))
+			jsonPath("$.data.content[0].travelId", equalTo(byDescription.id.toString()))
+		}
+
+		// 국가명(한글, "일본")으로도 매칭된다.
+		mockMvc.get("/api/v1/travels") {
+			header(HttpHeaders.AUTHORIZATION, bearer(requester))
+			param("keyword", country.nameKo)
+		}.andExpect {
+			status { isOk() }
+			jsonPath("$.data.totalElements", equalTo(1))
+			jsonPath("$.data.content[0].travelId", equalTo(byCountryAndCity.id.toString()))
+		}
+
+		// 도시명(영문)으로도, 대소문자 무시하고 매칭된다.
+		mockMvc.get("/api/v1/travels") {
+			header(HttpHeaders.AUTHORIZATION, bearer(requester))
+			param("keyword", city.nameEn.lowercase())
+		}.andExpect {
+			status { isOk() }
+			jsonPath("$.data.totalElements", equalTo(1))
+			jsonPath("$.data.content[0].travelId", equalTo(byCountryAndCity.id.toString()))
+		}
+	}
+
+	@Test
+	fun `searchScope narrows keyword matching to the requested field`() {
+		val requester = saveUser("scope-narrow-requester")
+		val country = countryRepository.findByIdAndIsActiveTrue(SEED_COUNTRY_ID).orElseThrow()
+		val city = cityRepository.findByIdAndIsActiveTrue(SEED_CITY_ID).orElseThrow()
+
+		val byTitle = saveTravel(requester, "벚꽃 여행", UUID.randomUUID())
+		val byDescription = saveTravel(requester, "무제 일정", UUID.randomUUID())
+		byDescription.updateBasicInfo(
+			title = byDescription.title,
+			startDate = byDescription.startDate,
+			endDate = byDescription.endDate,
+			country = null,
+			city = null,
+			companionType = null,
+			participantCount = null,
+			comment = "벚꽃 보러 가는 여행",
+		)
+		val byDestination = saveTravel(requester, "무제 일정 2", UUID.randomUUID())
+		byDestination.updateBasicInfo(
+			title = byDestination.title,
+			startDate = byDestination.startDate,
+			endDate = byDestination.endDate,
+			country = country,
+			city = city,
+			companionType = null,
+			participantCount = null,
+			comment = null,
+		)
+		travelRepository.saveAllAndFlush(listOf(byDescription, byDestination))
+
+		// searchScope=TITLE이면 제목에만 매칭되는 것을 찾고, 설명에만 있는 키워드는 걸러진다.
+		mockMvc.get("/api/v1/travels") {
+			header(HttpHeaders.AUTHORIZATION, bearer(requester))
+			param("keyword", "벚꽃")
+			param("searchScope", "TITLE")
+		}.andExpect {
+			status { isOk() }
+			jsonPath("$.data.totalElements", equalTo(1))
+			jsonPath("$.data.content[0].travelId", equalTo(byTitle.id.toString()))
+		}
+
+		// searchScope=DESTINATION이면 국가/도시명에만 매칭되고, 제목/설명은 걸러진다.
+		mockMvc.get("/api/v1/travels") {
+			header(HttpHeaders.AUTHORIZATION, bearer(requester))
+			param("keyword", country.nameKo)
+			param("searchScope", "DESTINATION")
+		}.andExpect {
+			status { isOk() }
+			jsonPath("$.data.totalElements", equalTo(1))
+			jsonPath("$.data.content[0].travelId", equalTo(byDestination.id.toString()))
+		}
+
+		// 알 수 없는 searchScope 값은 ALL로 취급돼 세 필드 모두 훑는다.
+		mockMvc.get("/api/v1/travels") {
+			header(HttpHeaders.AUTHORIZATION, bearer(requester))
+			param("keyword", "벚꽃")
+			param("searchScope", "invalid-scope")
+		}.andExpect {
+			status { isOk() }
+			jsonPath("$.data.totalElements", equalTo(2))
+		}
+	}
+
+	@Test
+	fun `periodStart and periodEnd narrow results to travels whose own date range overlaps the query period`() {
+		val requester = saveUser("period-requester")
+		val inside = saveTravel(
+			requester,
+			"기간 안에 있는 여행",
+			UUID.randomUUID(),
+			startDate = LocalDate.parse("2026-08-10"),
+			endDate = LocalDate.parse("2026-08-15"),
+		)
+		// 여행 기간이 조회 구간과 걸쳐만 있어도(겹침) 포함돼야 한다 — 완전 포함이 아니어도 됨.
+		val overlapping = saveTravel(
+			requester,
+			"겹치기만 하는 여행",
+			UUID.randomUUID(),
+			startDate = LocalDate.parse("2026-07-28"),
+			endDate = LocalDate.parse("2026-08-02"),
+		)
+		saveTravel(
+			requester,
+			"기간 밖 여행",
+			UUID.randomUUID(),
+			startDate = LocalDate.parse("2026-09-01"),
+			endDate = LocalDate.parse("2026-09-05"),
+		)
+
+		mockMvc.get("/api/v1/travels") {
+			header(HttpHeaders.AUTHORIZATION, bearer(requester))
+			param("periodStart", "2026-08-01")
+			param("periodEnd", "2026-08-31")
+		}.andExpect {
+			status { isOk() }
+			jsonPath("$.data.totalElements", equalTo(2))
+			jsonPath("$.data.content[*].travelId") {
+				org.hamcrest.Matchers.containsInAnyOrder(inside.id.toString(), overlapping.id.toString())
+			}
+		}
+
+		// 기간 파라미터를 아예 안 보내면(전체 기간) 셋 다 나온다.
+		mockMvc.get("/api/v1/travels") {
+			header(HttpHeaders.AUTHORIZATION, bearer(requester))
+		}.andExpect {
+			status { isOk() }
+			jsonPath("$.data.totalElements", equalTo(3))
+		}
 	}
 
 	@Test
@@ -182,17 +358,22 @@ class TravelListControllerIntegrationTest(
 		owner: User,
 		title: String,
 		travelId: UUID,
+		startDate: LocalDate = LocalDate.parse("2026-08-01"),
+		endDate: LocalDate = LocalDate.parse("2026-08-04"),
 	): Travel = travelRepository.saveAndFlush(
 		Travel(
 			id = travelId,
 			owner = owner,
 			title = title,
-			startDate = LocalDate.parse("2026-08-01"),
-			endDate = LocalDate.parse("2026-08-04"),
+			startDate = startDate,
+			endDate = endDate,
 		),
 	)
 
 	companion object {
+		// V3__seed_location_catalog.sql — country_table id=1(일본/Japan), city_table id=10(도쿄/Tokyo, country_id=1).
+		private val SEED_COUNTRY_ID: Short = 1
+		private val SEED_CITY_ID: Long = 10
 		private val OWNED_ID = UUID.fromString("00000000-0000-0000-0000-000000000180")
 		private val ACCEPTED_ID = UUID.fromString("00000000-0000-0000-0000-000000000181")
 		private val PENDING_ID = UUID.fromString("00000000-0000-0000-0000-000000000182")

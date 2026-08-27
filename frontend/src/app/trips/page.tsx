@@ -4,18 +4,34 @@ import * as React from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/atoms/Button";
 import { Tabs, TabsList, TabsTrigger } from "@/components/atoms/Tabs";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/atoms/Select";
 import { TripList } from "@/components/organisms/TripList";
 import { NewTripModal } from "@/components/organisms/NewTripModal";
 import { SearchBar } from "@/components/molecules/SearchBar";
+import { SearchPeriodSelect } from "@/components/molecules/SearchPeriodSelect";
 import { ListLayout } from "@/components/templates/ListLayout";
 import { TripsPageSkeleton } from "@/components/templates/TripsPageSkeleton";
 import { useAuthStore } from "@/lib/stores/useAuthStore";
-import { fetchTravels, type TravelSummary } from "@/lib/api/travel";
+import { fetchTravels, type TravelSearchScope, type TravelSummary } from "@/lib/api/travel";
+import { resolveSearchPeriod, type SearchPeriodPreset } from "@/lib/utils/searchPeriod";
 import type { TripListItem } from "@/components/organisms/TripList";
 
 type ListTab = "mine" | "shared";
 
 const PAGE_SIZE = 20;
+
+const SEARCH_SCOPE_OPTIONS: { value: TravelSearchScope; label: string }[] = [
+  { value: "ALL", label: "전체" },
+  { value: "TITLE", label: "제목" },
+  { value: "DESCRIPTION", label: "설명" },
+  { value: "DESTINATION", label: "여행지" },
+];
 const PREVIEW_THUMBNAILS = [
   "/images/trips/tokyo-thumbnail.png",
   "/images/trips/busan-thumbnail.png",
@@ -87,7 +103,18 @@ export default function TripsPage() {
   const accessToken = useAuthStore((s) => s.accessToken);
 
   const [tab, setTab] = React.useState<ListTab>("mine");
+  // query/searchScope는 실제 조회에 쓰이는 "확정된" 값이고, queryDraft/searchScopeDraft는 입력
+  // 중인 값이다 — 타이핑할 때마다, 혹은 스코프 드롭다운만 바꿔도 매번 서버로 요청이 나가는 걸 막기
+  // 위해 검색창에서 Enter를 눌러야 확정값에 반영되고 그때 비로소 재조회가 일어난다.
   const [query, setQuery] = React.useState("");
+  const [searchScope, setSearchScope] = React.useState<TravelSearchScope>("ALL");
+  const [queryDraft, setQueryDraft] = React.useState("");
+  const [searchScopeDraft, setSearchScopeDraft] = React.useState<TravelSearchScope>("ALL");
+  // 커뮤니티/마이페이지와 달리 기본값은 "전체 기간"으로 둔다 — 여기서 "기간"은 작성일이 아니라
+  // 여행 자체의 날짜(startDate~endDate)라서, 과거 N개월로 기본값을 좁히면 이미 만들어둔 예정된
+  // 미래 여행이 기본 목록에서 안 보이는 더 나쁜 문제가 생긴다. 개인 여행 목록은 개수 자체도
+  // 게시글/댓글처럼 무한정 쌓이지 않아 "전체 기간 조회"의 부담도 상대적으로 작다.
+  const [period, setPeriod] = React.useState<SearchPeriodPreset>("ALL");
   const [travels, setTravels] = React.useState<TravelSummary[]>([]);
   const [error, setError] = React.useState<string | null>(null);
   const [page, setPage] = React.useState(0);
@@ -102,7 +129,8 @@ export default function TripsPage() {
 
   const sentinelRef = React.useRef<HTMLDivElement>(null);
 
-  const requestKey = `${accessToken ?? ""}:${query}:${refreshKey}`;
+  const { periodStart, periodEnd } = resolveSearchPeriod(period);
+  const requestKey = `${accessToken ?? ""}:${query}:${searchScope}:${period}:${refreshKey}`;
   const isLoading = isPreview
     ? isPreviewLoading
     : completedRequestKey !== requestKey;
@@ -144,6 +172,9 @@ export default function TripsPage() {
 
     fetchTravels(accessToken, {
       keyword: query.trim() || undefined,
+      searchScope,
+      periodStart,
+      periodEnd,
       page: 0,
       size: PAGE_SIZE,
     })
@@ -170,7 +201,8 @@ export default function TripsPage() {
     return () => {
       isCurrentRequest = false;
     };
-  }, [accessToken, query, requestKey]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [accessToken, query, searchScope, requestKey]);
 
   const loadMore = React.useCallback(() => {
     if (!accessToken || isLast || loadingMore || error) return;
@@ -180,6 +212,9 @@ export default function TripsPage() {
 
     fetchTravels(accessToken, {
       keyword: query.trim() || undefined,
+      searchScope,
+      periodStart,
+      periodEnd,
       page: nextPage,
       size: PAGE_SIZE,
     })
@@ -190,7 +225,18 @@ export default function TripsPage() {
       })
       .catch(() => setIsLast(true))
       .finally(() => setLoadingMore(false));
-  }, [accessToken, query, page, isLast, loadingMore, error]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [accessToken, query, searchScope, period, page, isLast, loadingMore, error]);
+
+  function commitSearch() {
+    setError(null);
+    setQuery(queryDraft);
+    setSearchScope(searchScopeDraft);
+  }
+
+  function handleSearchKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
+    if (e.key === "Enter") commitSearch();
+  }
 
   // 리스트 하단의 sentinel이 화면에 보이면 다음 페이지를 불러온다.
   React.useEffect(() => {
@@ -236,26 +282,41 @@ export default function TripsPage() {
         </Button>
       }
     >
-      <SearchBar
-        placeholder="일정 검색"
-        value={query}
-        onChange={(e) =>{
-          setError(null);
-          setQuery(e.target.value);
-        }}
-        containerClassName="mb-4"
-      />
+      <div className="mb-4 flex gap-2">
+        <Select
+          value={searchScopeDraft}
+          onValueChange={(v) => setSearchScopeDraft(v as TravelSearchScope)}
+        >
+          <SelectTrigger className="w-24 shrink-0">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {SEARCH_SCOPE_OPTIONS.map((option) => (
+              <SelectItem key={option.value} value={option.value}>
+                {option.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <SearchBar
+          placeholder="일정 검색 (Enter로 검색)"
+          value={queryDraft}
+          onChange={(e) => setQueryDraft(e.target.value)}
+          onKeyDown={handleSearchKeyDown}
+          containerClassName="flex-1"
+        />
+      </div>
 
-      <Tabs
-        value={tab}
-        onValueChange={(v) => setTab(v as ListTab)}
-        className="mb-5 w-fit"
-      >
-        <TabsList>
-          <TabsTrigger value="mine">내 일정</TabsTrigger>
-          <TabsTrigger value="shared">공유받은 일정</TabsTrigger>
-        </TabsList>
-      </Tabs>
+      <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
+        <Tabs value={tab} onValueChange={(v) => setTab(v as ListTab)}>
+          <TabsList>
+            <TabsTrigger value="mine">내 일정</TabsTrigger>
+            <TabsTrigger value="shared">공유받은 일정</TabsTrigger>
+          </TabsList>
+        </Tabs>
+
+        <SearchPeriodSelect value={period} onValueChange={setPeriod} />
+      </div>
 
       {error ? (
         <div

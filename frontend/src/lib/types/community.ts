@@ -96,6 +96,9 @@ export interface ItinerarySnapshot {
   unassigned: ItinerarySnapshotItem[];
 }
 
+/** GET /posts의 keyword 매칭 대상. 백엔드 CommunityPostService.VALID_SEARCH_SCOPES와 동일. */
+export type CommunityPostSearchScope = "ALL" | "TITLE" | "AUTHOR" | "CONTENT" | "TAG";
+
 /** 목록 카드(community-board / PostCard)용 요약. */
 export interface CommunityPostSummary {
   postId: string;
@@ -110,6 +113,11 @@ export interface CommunityPostSummary {
   reactionCount: number;
   sourceTravelId: string | null;
   createdAt: string;
+  /**
+   * 공개 목록(GET /posts)에서는 소프트 삭제된 글이 아예 안 내려와서 항상 null이고, 마이페이지
+   * "내가 쓴 글"(GET /community/me/posts)에서만 본인이 삭제한 글에 실제 값이 들어간다.
+   */
+  deletedAt?: string | null;
 }
 
 /** 상세(community-detail) 응답. 목록 요약 필드 + 본문 + 내 글 여부. */
@@ -121,6 +129,16 @@ export interface CommunityPostDetail extends CommunityPostSummary {
    */
   itinerarySnapshotJson: ItinerarySnapshot | null;
   isMine: boolean;
+  /** 로그인한 요청자가 이 게시글에 좋아요를 눌렀는지. 비로그인 조회 시 항상 false. */
+  isReacted: boolean;
+  /** PATCH /posts/{postId}의 낙관적 락에 그대로 되돌려 보내야 하는 값. */
+  version: number;
+}
+
+/** PUT /posts/{postId}/reactions/LIKE 응답. */
+export interface CommunityPostReactionResponse {
+  reactionCount: number;
+  isReacted: boolean;
 }
 
 /** 작성(community-write 등 공통) 요청. */
@@ -167,3 +185,21 @@ export interface CommentCreateRequest {
 
 /** PATCH /comments/{commentId} 요청. 필드가 CommentCreateRequest와 동일해서 별도 타입을 만들지 않고 재사용한다. */
 export type CommentUpdateRequest = CommentCreateRequest;
+
+/**
+ * 마이페이지 "내가 쓴 댓글" 탭 전용 응답(GET /community/me/comments). 어느 글에 단 댓글인지
+ * 보여줘야 해서 postId/postTitle을 들고 있다 — 댓글 목록 API의 CommentResponse와는 다른 형태.
+ */
+export interface MyCommentResponse {
+  commentId: string;
+  postId: string;
+  postTitle: string;
+  content: string;
+  createdAt: string;
+  /** null이면 한 번도 수정되지 않은 댓글. */
+  updatedAt: string | null;
+  /** 본인이 삭제한 댓글이면 값이 들어간다. */
+  deletedAt: string | null;
+  /** 댓글은 안 지웠는데 글이 삭제된 경우 값이 들어간다(상세로 못 들어가게 막는 용도). */
+  postDeletedAt: string | null;
+}

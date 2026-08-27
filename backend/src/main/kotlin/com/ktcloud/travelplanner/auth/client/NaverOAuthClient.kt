@@ -39,17 +39,20 @@ class NaverOAuthClient(
 ) : OAuthProviderClient {
 	override val provider: OAuthProvider = OAuthProvider.NAVER
 
-	override fun createAuthorizationUrl(state: String): URI {
+	override fun createAuthorizationUrl(
+		state: String,
+		forceAccountSelection: Boolean,
+	): URI {
 		properties.requireConfigured()
-		return UriComponentsBuilder.fromUri(properties.authorizationUri)
+		val builder = UriComponentsBuilder.fromUri(properties.authorizationUri)
 			.queryParam("client_id", properties.clientId)
 			.queryParam("redirect_uri", properties.redirectUri)
 			.queryParam("response_type", "code")
 			.queryParam("state", state)
-			.queryParam("auth_type", "reprompt")
-			.build()
-			.encode()
-			.toUri()
+		if (forceAccountSelection) {
+			builder.queryParam("auth_type", "reprompt")
+		}
+		return builder.build().encode().toUri()
 	}
 
 	override fun fetchUserProfile(grant: OAuthAuthorizationGrant): OAuthUserProfile {

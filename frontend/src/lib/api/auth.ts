@@ -57,11 +57,7 @@ export async function exchangeCodeForToken(code: string): Promise<string> {
   return body.data.accessToken;
 }
 
-/**
- * httpOnly refresh_token 쿠키로 새 access token을 조용히 재발급받는다.
- * 쿠키가 없거나 만료됐으면 null을 반환한다 (에러를 던지지 않음 — 비로그인 상태는 정상 케이스).
- */
-export async function refreshAccessToken(): Promise<string | null> {
+async function performTokenRefresh(): Promise<string | null> {
   try {
     const res = await fetch(`${API_BASE_URL}/api/v1/auth/token/refresh`, {
       method: "POST",
@@ -73,6 +69,27 @@ export async function refreshAccessToken(): Promise<string | null> {
   } catch {
     return null;
   }
+}
+
+// refresh_token은 매 재발급마다 회전(rotate)되는 1회용 토큰이라, 같은 refresh_token으로
+// 동시에 두 번 재발급을 시도하면 뒤에 도착하는 요청은 "이미 회전된(재사용된) 토큰"으로
+// 인식돼 토큰 패밀리 전체가 강제 로그아웃될 수 있다(RefreshTokenService.kt의 재사용 탐지).
+// AuthProvider(앱 부팅 시 1회), apiFetch(401 감지 시), 마이페이지/알림 스토어가 각자
+// refreshAccessToken을 부르더라도 실제 네트워크 요청은 항상 하나만 나가도록 모듈 스코프
+// 프라미스로 dedup한다 — 그 사이 호출자들은 같은 결과를 공유해서 기다린다.
+let refreshPromise: Promise<string | null> | null = null;
+
+/**
+ * httpOnly refresh_token 쿠키로 새 access token을 조용히 재발급받는다.
+ * 쿠키가 없거나 만료됐으면 null을 반환한다 (에러를 던지지 않음 — 비로그인 상태는 정상 케이스).
+ */
+export function refreshAccessToken(): Promise<string | null> {
+  if (!refreshPromise) {
+    refreshPromise = performTokenRefresh().finally(() => {
+      refreshPromise = null;
+    });
+  }
+  return refreshPromise;
 }
 
 /** access token으로 로그인한 유저의 프로필을 조회해 AuthUser 형태로 변환한다. */

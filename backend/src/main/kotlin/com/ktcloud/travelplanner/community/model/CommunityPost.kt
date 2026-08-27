@@ -87,4 +87,23 @@ class CommunityPost(
 	fun assignTags(tags: Set<CommunityTag>) {
 		this.tags = tags.toMutableSet()
 	}
+
+	// PATCH /posts/{postId} — PatchField 방식이라 호출부가 "보낸 필드"만 골라 넘긴다(null=미변경).
+	// categoryCode/sourceTravelId/itinerarySnapshotJson은 계약상 수정 대상이 아니라 여기서 다루지 않는다.
+	fun edit(
+		title: String? = null,
+		bodyJson: String? = null,
+		bodyPreview: String? = null,
+	) {
+		if (title != null) this.title = title
+		if (bodyJson != null) {
+			this.bodyJson = bodyJson
+			this.bodyPreview = bodyPreview
+		}
+	}
+
+	fun softDelete(deletedAt: Instant) {
+		require(this.deletedAt == null) { "Post is already deleted." }
+		this.deletedAt = deletedAt
+	}
 }

@@ -32,8 +32,11 @@ import org.springframework.http.MediaType
 import org.springframework.jdbc.core.JdbcTemplate
 import org.springframework.test.context.ActiveProfiles
 import org.springframework.test.web.servlet.MockMvc
+import org.springframework.test.web.servlet.delete
 import org.springframework.test.web.servlet.get
+import org.springframework.test.web.servlet.patch
 import org.springframework.test.web.servlet.post
+import org.springframework.test.web.servlet.put
 import org.springframework.transaction.annotation.Transactional
 import java.sql.Timestamp
 import java.time.Instant
@@ -341,6 +344,169 @@ class CommunityPostControllerIntegrationTest(
 	}
 
 	@Test
+	fun `PATCH updates title and bodyJson for the author`() {
+		val author = saveUser("patch-author")
+		val post = savePost(author)
+		// 실제 클라이언트와 동일하게 상세 조회로 현재 version을 읽어와 PATCH에 그대로 되돌려 보낸다
+		// (저장 직후 in-memory 값을 그대로 가정하지 않음 — insert 경로에 따라 달라질 수 있음).
+		val currentVersion = mockMvc.get("/api/v1/community/posts/${post.id}")
+			.andReturn().response.contentAsString
+			.let { Regex("\"version\":(\\d+)").find(it)!!.groupValues[1].toInt() }
+
+		mockMvc.patch("/api/v1/community/posts/${post.id}") {
+			header(HttpHeaders.AUTHORIZATION, bearer(author))
+			contentType = MediaType.APPLICATION_JSON
+			content = """
+				{
+					"title": "수정된 제목",
+					"bodyJson": {"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"수정된 본문"}]}]},
+					"version": $currentVersion
+				}
+			""".trimIndent()
+		}
+			.andExpect {
+				status { isOk() }
+				jsonPath("$.data.title", equalTo("수정된 제목"))
+				jsonPath("$.data.bodyJson.content[0].content[0].text", equalTo("수정된 본문"))
+				jsonPath("$.data.version", equalTo(currentVersion + 1))
+			}
+
+		mockMvc.get("/api/v1/community/posts/${post.id}")
+			.andExpect { jsonPath("$.data.title", equalTo("수정된 제목")) }
+	}
+
+	@Test
+	fun `PATCH returns 403 for a non-author requester without changing the post`() {
+		val author = saveUser("patch-owner")
+		val other = saveUser("patch-other")
+		val post = savePost(author)
+
+		mockMvc.patch("/api/v1/community/posts/${post.id}") {
+			header(HttpHeaders.AUTHORIZATION, bearer(other))
+			contentType = MediaType.APPLICATION_JSON
+			content = """{"title": "남의 글 수정 시도", "version": 0}"""
+		}
+			.andExpect {
+				status { isForbidden() }
+				jsonPath("$.code", equalTo("ACCESS_DENIED"))
+			}
+
+		mockMvc.get("/api/v1/community/posts/${post.id}")
+			.andExpect { jsonPath("$.data.title", equalTo("상세 조회 테스트")) }
+	}
+
+	@Test
+	fun `PATCH returns 409 when the requested version does not match the current version`() {
+		val author = saveUser("patch-conflict-author")
+		val post = savePost(author)
+
+		mockMvc.patch("/api/v1/community/posts/${post.id}") {
+			header(HttpHeaders.AUTHORIZATION, bearer(author))
+			contentType = MediaType.APPLICATION_JSON
+			content = """{"title": "버전 충돌", "version": 99}"""
+		}
+			.andExpect {
+				status { isConflict() }
+				jsonPath("$.code", equalTo("CONFLICT"))
+			}
+	}
+
+	@Test
+	fun `DELETE soft deletes the post for the author and it becomes 404 afterward`() {
+		val author = saveUser("delete-author")
+		val post = savePost(author)
+
+		mockMvc.delete("/api/v1/community/posts/${post.id}") {
+			header(HttpHeaders.AUTHORIZATION, bearer(author))
+		}.andExpect { status { isOk() } }
+
+		// 같은 트랜잭션(1차 캐시) 안에서는 findById가 방금 soft delete된 관리 엔티티를 그대로
+		// 돌려줄 수 있어(@SQLRestriction은 새로 나가는 SQL에만 적용됨) flush+clear로 강제 재조회시킨다.
+		// deletePost()는 REQUIRED 전파라 이 테스트 트랜잭션에 합류할 뿐 자체적으로 커밋/플러시하지
+		// 않으므로, clear()만 하면 아직 반영 안 된 소프트 삭제 변경분이 그대로 유실된다.
+		entityManager.flush()
+		entityManager.clear()
+
+		mockMvc.get("/api/v1/community/posts/${post.id}")
+			.andExpect {
+				status { isNotFound() }
+				jsonPath("$.code", equalTo("RESOURCE_NOT_FOUND"))
+			}
+	}
+
+	@Test
+	fun `DELETE returns 403 for a non-author requester without deleting`() {
+		val author = saveUser("delete-owner")
+		val other = saveUser("delete-other")
+		val post = savePost(author)
+
+		mockMvc.delete("/api/v1/community/posts/${post.id}") {
+			header(HttpHeaders.AUTHORIZATION, bearer(other))
+		}.andExpect {
+			status { isForbidden() }
+			jsonPath("$.code", equalTo("ACCESS_DENIED"))
+		}
+
+		mockMvc.get("/api/v1/community/posts/${post.id}")
+			.andExpect { status { isOk() } }
+	}
+
+	@Test
+	fun `PUT reactions LIKE toggles reactionCount and isReacted, and detail reflects it`() {
+		val author = saveUser("react-author")
+		val liker = saveUser("react-liker")
+		val post = savePost(author)
+
+		mockMvc.put("/api/v1/community/posts/${post.id}/reactions/LIKE") {
+			header(HttpHeaders.AUTHORIZATION, bearer(liker))
+		}
+			.andExpect {
+				status { isOk() }
+				jsonPath("$.data.reactionCount", equalTo(1))
+				jsonPath("$.data.isReacted", equalTo(true))
+			}
+
+		mockMvc.get("/api/v1/community/posts/${post.id}") {
+			header(HttpHeaders.AUTHORIZATION, bearer(liker))
+		}.andExpect {
+			jsonPath("$.data.reactionCount", equalTo(1))
+			jsonPath("$.data.isReacted", equalTo(true))
+		}
+
+		mockMvc.put("/api/v1/community/posts/${post.id}/reactions/LIKE") {
+			header(HttpHeaders.AUTHORIZATION, bearer(liker))
+		}
+			.andExpect {
+				status { isOk() }
+				jsonPath("$.data.reactionCount", equalTo(0))
+				jsonPath("$.data.isReacted", equalTo(false))
+			}
+	}
+
+	@Test
+	fun `PUT reactions with an unsupported type is rejected with 400`() {
+		val author = saveUser("react-bad-author")
+		val post = savePost(author)
+
+		mockMvc.put("/api/v1/community/posts/${post.id}/reactions/DISLIKE") {
+			header(HttpHeaders.AUTHORIZATION, bearer(author))
+		}
+			.andExpect {
+				status { isBadRequest() }
+				jsonPath("$.code", equalTo("VALIDATION_ERROR"))
+			}
+	}
+
+	@Test
+	fun `PUT reactions without authentication returns 401`() {
+		val author = saveUser("react-anon-author")
+		val post = savePost(author)
+
+		mockMvc.put("/api/v1/community/posts/${post.id}/reactions/LIKE")
+			.andExpect { status { isUnauthorized() } }
+	}
+
+	@Test
 	fun `list endpoint filters by category, tag, and keyword and defaults to createdAt desc order`() {
 		val author = saveUser("list-author")
 		val busan = savePost(author, tags = setOf("부산"), title = "부산 여행 후기")
@@ -383,6 +549,85 @@ class CommunityPostControllerIntegrationTest(
 	}
 
 	@Test
+	fun `list endpoint reflects real commentCount and reactionCount instead of the previous hardcoded 0`() {
+		val author = saveUser("count-author")
+		val commenter = saveUser("count-commenter")
+		val liker = saveUser("count-liker")
+		val post = savePost(author, title = "카운트 집계 테스트")
+
+		mockMvc.post("/api/v1/community/posts/${post.id}/comments") {
+			header(HttpHeaders.AUTHORIZATION, bearer(commenter))
+			contentType = MediaType.APPLICATION_JSON
+			content = """{"content": "댓글1"}"""
+		}.andExpect { status { isOk() } }
+
+		mockMvc.put("/api/v1/community/posts/${post.id}/reactions/LIKE") {
+			header(HttpHeaders.AUTHORIZATION, bearer(liker))
+		}.andExpect { status { isOk() } }
+
+		mockMvc.get("/api/v1/community/posts") {
+			param("keyword", "카운트 집계 테스트")
+		}.andExpect {
+			status { isOk() }
+			jsonPath("$.data.content[0].commentCount", equalTo(1))
+			jsonPath("$.data.content[0].reactionCount", equalTo(1))
+		}
+	}
+
+	@Test
+	fun `list endpoint keyword search respects searchScope (TITLE, AUTHOR, CONTENT, TAG, ALL)`() {
+		val author1 = saveUserWithNickname("search-author1", "김바다")
+		val author2 = saveUserWithNickname("search-author2", "박여행")
+
+		val titleMatch = savePost(author2, title = "부산 여행 후기 대박", bodyPreview = "평범한 본문입니다")
+		val authorMatch = savePost(author1, title = "일반 제목", bodyPreview = "평범한 본문입니다")
+		val contentMatch = savePost(author2, title = "일반 제목2", bodyPreview = "대박 맛집 발견했어요")
+		val tagMatch = savePost(author2, title = "일반 제목3", bodyPreview = "평범한 본문입니다", tags = setOf("대박태그"))
+		savePost(author2, title = "무관한 글", bodyPreview = "무관한 내용")
+
+		mockMvc.get("/api/v1/community/posts") {
+			param("keyword", "대박")
+			param("searchScope", "TITLE")
+		}.andExpect {
+			jsonPath("$.data.content.length()", equalTo(1))
+			jsonPath("$.data.content[0].postId", equalTo(titleMatch.id.toString()))
+		}
+
+		// 소문자로 보내도 서비스에서 대문자로 정규화되어 동일하게 동작해야 한다.
+		mockMvc.get("/api/v1/community/posts") {
+			param("keyword", "김바다")
+			param("searchScope", "author")
+		}.andExpect {
+			jsonPath("$.data.content.length()", equalTo(1))
+			jsonPath("$.data.content[0].postId", equalTo(authorMatch.id.toString()))
+		}
+
+		mockMvc.get("/api/v1/community/posts") {
+			param("keyword", "대박")
+			param("searchScope", "CONTENT")
+		}.andExpect {
+			jsonPath("$.data.content.length()", equalTo(1))
+			jsonPath("$.data.content[0].postId", equalTo(contentMatch.id.toString()))
+		}
+
+		mockMvc.get("/api/v1/community/posts") {
+			param("keyword", "대박")
+			param("searchScope", "TAG")
+		}.andExpect {
+			jsonPath("$.data.content.length()", equalTo(1))
+			jsonPath("$.data.content[0].postId", equalTo(tagMatch.id.toString()))
+		}
+
+		// searchScope를 안 보내면(기본 ALL) title/author/content/tag 전부를 OR로 훑는다 —
+		// 여기서는 authorMatch(닉네임에만 매치)를 뺀 3건이 "대박"에 걸린다.
+		mockMvc.get("/api/v1/community/posts") {
+			param("keyword", "대박")
+		}.andExpect {
+			jsonPath("$.data.content.length()", equalTo(3))
+		}
+	}
+
+	@Test
 	fun `list endpoint accepts sort=popular without authentication and clamps size above 50`() {
 		val author = saveUser("popular-author")
 		val older = savePost(author, title = "오래된 글")
@@ -406,6 +651,73 @@ class CommunityPostControllerIntegrationTest(
 		}
 	}
 
+	@Test
+	fun `sort=popular ranks a less recent but more liked and commented post above a newer untouched one`() {
+		val author = saveUser("popular-ranking-author")
+		val reactor = saveUser("popular-ranking-reactor")
+		val older = savePost(author, title = "좋아요 많은 오래된 글")
+		val newer = savePost(author, title = "아무도 안 건드린 최신 글")
+		setCreatedAt(older.id, Instant.parse("2026-08-01T00:00:00Z"))
+		setCreatedAt(newer.id, Instant.parse("2026-08-05T00:00:00Z"))
+
+		mockMvc.put("/api/v1/community/posts/${older.id}/reactions/LIKE") {
+			header(HttpHeaders.AUTHORIZATION, bearer(reactor))
+		}.andExpect { status { isOk() } }
+
+		mockMvc.post("/api/v1/community/posts/${older.id}/comments") {
+			header(HttpHeaders.AUTHORIZATION, bearer(reactor))
+			contentType = MediaType.APPLICATION_JSON
+			content = """{"content": "댓글"}"""
+		}.andExpect { status { isOk() } }
+
+		mockMvc.get("/api/v1/community/posts") {
+			param("sort", "popular")
+		}.andExpect {
+			status { isOk() }
+			jsonPath("$.data.content[0].title", equalTo("좋아요 많은 오래된 글"))
+			jsonPath("$.data.content[0].reactionCount", equalTo(1))
+			jsonPath("$.data.content[0].commentCount", equalTo(1))
+			jsonPath("$.data.content[1].title", equalTo("아무도 안 건드린 최신 글"))
+		}
+
+		// 최신순은 좋아요/댓글과 무관하게 createdAt DESC 그대로.
+		mockMvc.get("/api/v1/community/posts") {
+			param("sort", "latest")
+		}.andExpect {
+			status { isOk() }
+			jsonPath("$.data.content[0].title", equalTo("아무도 안 건드린 최신 글"))
+			jsonPath("$.data.content[1].title", equalTo("좋아요 많은 오래된 글"))
+		}
+	}
+
+	@Test
+	fun `periodStart and periodEnd narrow the public list to posts created within that window`() {
+		val author = saveUser("period-author")
+		val inside = savePost(author, title = "기간 안 글")
+		val outside = savePost(author, title = "기간 밖 글")
+		setCreatedAt(inside.id, Instant.parse("2026-08-15T00:00:00Z"))
+		setCreatedAt(outside.id, Instant.parse("2026-09-15T00:00:00Z"))
+
+		mockMvc.get("/api/v1/community/posts") {
+			param("periodStart", "2026-08-01")
+			param("periodEnd", "2026-08-31")
+		}.andExpect {
+			status { isOk() }
+			jsonPath("$.data.totalElements", equalTo(1))
+			jsonPath("$.data.content[0].title", equalTo("기간 안 글"))
+		}
+
+		mockMvc.get("/api/v1/community/posts") {
+			param("sort", "popular")
+			param("periodStart", "2026-08-01")
+			param("periodEnd", "2026-08-31")
+		}.andExpect {
+			status { isOk() }
+			jsonPath("$.data.totalElements", equalTo(1))
+			jsonPath("$.data.content[0].title", equalTo("기간 안 글"))
+		}
+	}
+
 	private fun bearer(user: User): String =
 		"Bearer ${jwtTokenService.issueAccessToken(requireNotNull(user.id)).value}"
 
@@ -414,6 +726,7 @@ class CommunityPostControllerIntegrationTest(
 		tags: Set<String> = emptySet(),
 		title: String = "상세 조회 테스트",
 		categoryCode: String = "TRAVEL_REVIEW",
+		bodyPreview: String = "본문",
 	): CommunityPost {
 		val category = communityCategoryRepository.findByCodeAndIsActiveTrue(categoryCode)!!
 		val bodyJson = objectMapper.readTree(
@@ -424,12 +737,21 @@ class CommunityPostControllerIntegrationTest(
 			category = category,
 			title = title,
 			bodyJson = bodyJson.toString(),
-			bodyPreview = "본문",
+			bodyPreview = bodyPreview,
 			sourceTravelId = null,
 			itinerarySnapshotJson = null,
 		)
 		post.assignTags(tags.map { name -> communityTagRepository.findByName(name) ?: saveTag(name) }.toSet())
 		return communityPostRepository.saveAndFlush(post)
+	}
+
+	private fun saveUserWithNickname(
+		suffix: String,
+		nickname: String,
+	): User {
+		val user = saveUser(suffix)
+		user.assignGeneratedNickname(nickname)
+		return userRepository.saveAndFlush(user)
 	}
 
 	private fun setCreatedAt(

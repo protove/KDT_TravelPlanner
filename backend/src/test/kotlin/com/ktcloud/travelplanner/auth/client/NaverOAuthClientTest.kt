@@ -41,14 +41,22 @@ class NaverOAuthClientTest {
 	}
 
 	@Test
-	fun `creates Naver authorization URL with required parameters`() {
-		val authorizationUrl = client.createAuthorizationUrl("opaque-state")
+	fun `creates Naver authorization URL with required parameters and no forced reprompt by default`() {
+		val authorizationUrl = client.createAuthorizationUrl("opaque-state", forceAccountSelection = false)
 		val parameters = UriComponentsBuilder.fromUri(authorizationUrl).build().queryParams
 
 		assertEquals("test-client-id", parameters.getFirst("client_id"))
 		assertEquals(CALLBACK_URL, parameters.getFirst("redirect_uri"))
 		assertEquals("code", parameters.getFirst("response_type"))
 		assertEquals("opaque-state", parameters.getFirst("state"))
+		assertEquals(null, parameters.getFirst("auth_type"))
+	}
+
+	@Test
+	fun `adds auth_type=reprompt only when forceAccountSelection is true`() {
+		val authorizationUrl = client.createAuthorizationUrl("opaque-state", forceAccountSelection = true)
+		val parameters = UriComponentsBuilder.fromUri(authorizationUrl).build().queryParams
+
 		assertEquals("reprompt", parameters.getFirst("auth_type"))
 	}
 
@@ -154,7 +162,7 @@ class NaverOAuthClientTest {
 		)
 
 		assertThrows<OAuthProviderException> {
-			unconfiguredClient.createAuthorizationUrl("state")
+			unconfiguredClient.createAuthorizationUrl("state", forceAccountSelection = false)
 		}
 	}
 

@@ -74,30 +74,60 @@ class TravelServiceTest {
 			row(title = "도쿄 소유 여행", memberRole = null),
 			row(title = "도쿄 공유 여행", memberRole = TravelRole.READ_ONLY),
 		)
-		`when`(travelRepository.findAccessibleTravels(userId, "도쿄", pageable))
+		`when`(travelRepository.findAccessibleTravels(userId, "도쿄", "ALL", "0001-01-01", "9999-12-31", pageable))
 			.thenReturn(PageImpl(rows, pageable, 5))
 
-		val response = service.getTravels(userId, "  도쿄  ", 1, 2)
+		val response = service.getTravels(userId, "  도쿄  ", null, null, null, 1, 2)
 
 		assertEquals(1, response.page)
 		assertEquals(2, response.size)
 		assertEquals(5, response.totalElements)
 		assertEquals(3, response.totalPages)
 		assertEquals(listOf(TravelPermission.OWNER, TravelPermission.READ_ONLY), response.content.map { it.permission })
-		verify(travelRepository).findAccessibleTravels(userId, "도쿄", pageable)
+		verify(travelRepository).findAccessibleTravels(userId, "도쿄", "ALL", "0001-01-01", "9999-12-31", pageable)
 	}
 
 	@Test
 	fun `null and blank keywords use non-null empty search condition`() {
 		val userId = UUID.randomUUID()
 		val pageable = PageRequest.of(0, 20)
-		`when`(travelRepository.findAccessibleTravels(userId, "", pageable))
+		`when`(travelRepository.findAccessibleTravels(userId, "", "ALL", "0001-01-01", "9999-12-31", pageable))
 			.thenReturn(PageImpl(emptyList(), pageable, 0))
 
-		service.getTravels(userId, null, 0, 20)
-		service.getTravels(userId, "  ", 0, 20)
+		service.getTravels(userId, null, null, null, null, 0, 20)
+		service.getTravels(userId, "  ", null, null, null, 0, 20)
 
-		verify(travelRepository, times(2)).findAccessibleTravels(userId, "", pageable)
+		verify(travelRepository, times(2)).findAccessibleTravels(userId, "", "ALL", "0001-01-01", "9999-12-31", pageable)
+	}
+
+	@Test
+	fun `unknown search scope silently falls back to ALL and known scopes pass through uppercased`() {
+		val userId = UUID.randomUUID()
+		val pageable = PageRequest.of(0, 20)
+		`when`(travelRepository.findAccessibleTravels(userId, "keyword", "ALL", "0001-01-01", "9999-12-31", pageable))
+			.thenReturn(PageImpl(emptyList(), pageable, 0))
+		`when`(travelRepository.findAccessibleTravels(userId, "keyword", "DESTINATION", "0001-01-01", "9999-12-31", pageable))
+			.thenReturn(PageImpl(emptyList(), pageable, 0))
+
+		service.getTravels(userId, "keyword", "not-a-real-scope", null, null, 0, 20)
+		service.getTravels(userId, "keyword", "destination", null, null, 0, 20)
+
+		verify(travelRepository).findAccessibleTravels(userId, "keyword", "ALL", "0001-01-01", "9999-12-31", pageable)
+		verify(travelRepository).findAccessibleTravels(userId, "keyword", "DESTINATION", "0001-01-01", "9999-12-31", pageable)
+	}
+
+	@Test
+	fun `passes period bounds through to the repository unchanged`() {
+		val userId = UUID.randomUUID()
+		val pageable = PageRequest.of(0, 20)
+		val start = LocalDate.parse("2026-08-01")
+		val end = LocalDate.parse("2026-08-31")
+		`when`(travelRepository.findAccessibleTravels(userId, "", "ALL", "2026-08-01", "2026-08-31", pageable))
+			.thenReturn(PageImpl(emptyList(), pageable, 0))
+
+		service.getTravels(userId, null, null, start, end, 0, 20)
+
+		verify(travelRepository).findAccessibleTravels(userId, "", "ALL", "2026-08-01", "2026-08-31", pageable)
 	}
 
 	@Test

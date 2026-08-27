@@ -40,8 +40,8 @@ class GoogleOAuthClientTest {
 	}
 
 	@Test
-	fun `creates Google authorization URL with required OIDC parameters`() {
-		val authorizationUrl = client.createAuthorizationUrl("opaque-state")
+	fun `creates Google authorization URL with required OIDC parameters and no forced prompt by default`() {
+		val authorizationUrl = client.createAuthorizationUrl("opaque-state", forceAccountSelection = false)
 		val parameters = UriComponentsBuilder.fromUri(authorizationUrl).build().queryParams
 
 		assertEquals("test-client-id", parameters.getFirst("client_id"))
@@ -49,6 +49,14 @@ class GoogleOAuthClientTest {
 		assertEquals("code", parameters.getFirst("response_type"))
 		assertEquals("openid%20email%20profile", parameters.getFirst("scope"))
 		assertEquals("opaque-state", parameters.getFirst("state"))
+		assertEquals(null, parameters.getFirst("prompt"))
+	}
+
+	@Test
+	fun `adds prompt=select_account only when forceAccountSelection is true`() {
+		val authorizationUrl = client.createAuthorizationUrl("opaque-state", forceAccountSelection = true)
+		val parameters = UriComponentsBuilder.fromUri(authorizationUrl).build().queryParams
+
 		assertEquals("select_account", parameters.getFirst("prompt"))
 	}
 
@@ -145,7 +153,7 @@ class GoogleOAuthClientTest {
 		)
 
 		assertThrows<OAuthProviderException> {
-			unconfiguredClient.createAuthorizationUrl("state")
+			unconfiguredClient.createAuthorizationUrl("state", forceAccountSelection = false)
 		}
 	}
 

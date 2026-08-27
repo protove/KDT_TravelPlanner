@@ -9,6 +9,8 @@ export const PLACE_NOTE_MAX_LENGTH = 200;
 export const DESCRIPTION_MAX_LENGTH = 500;
 // 커뮤니티 댓글은 백엔드 CommentCreateRequest.kt의 @Size(max = 1000)과 동일하게 맞춘다.
 export const COMMENT_MAX_LENGTH = 1000;
+// 커뮤니티 게시글 본문(Tiptap)은 백엔드 TiptapBodyJsonValidator.MAX_TEXT_LENGTH와 동일하게 맞춘다.
+export const BODY_MAX_LENGTH = 10_000;
 
 // 같은 문자(기호·영문·숫자·한글 문단 전부 포함)가 5회 이상 연속되면 도배로 간주한다.
 // "!!!!!", "-----", "ㄱㄱㄱㄱㄱ" 처럼 종류를 가리지 않고 반복 자체를 잡아낸다.

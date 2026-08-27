@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { Button } from "@/components/atoms/Button";
 import { Tabs, TabsList, TabsTrigger } from "@/components/atoms/Tabs";
 import {
@@ -12,25 +12,55 @@ import {
   SelectValue,
 } from "@/components/atoms/Select";
 import { SearchBar } from "@/components/molecules/SearchBar";
+import { SearchPeriodSelect } from "@/components/molecules/SearchPeriodSelect";
 import { CommunityPostList } from "@/components/organisms/CommunityPostList";
 import { ListLayout } from "@/components/templates/ListLayout";
 import { useAuthStore } from "@/lib/stores/useAuthStore";
 import { getCategories, listPosts } from "@/lib/api/community";
-import type { CommunityCategory, CommunityPostSummary } from "@/lib/types/community";
+import { DEFAULT_SEARCH_PERIOD, resolveSearchPeriod, type SearchPeriodPreset } from "@/lib/utils/searchPeriod";
+import type { CommunityCategory, CommunityPostSearchScope, CommunityPostSummary } from "@/lib/types/community";
 
 const ALL_CATEGORY = "ALL";
 const PAGE_SIZE = 10;
 
 type SortOption = "latest" | "popular";
 
+const SEARCH_SCOPE_OPTIONS: { value: CommunityPostSearchScope; label: string }[] = [
+  { value: "ALL", label: "전체" },
+  { value: "TITLE", label: "제목" },
+  { value: "AUTHOR", label: "사용자" },
+  { value: "CONTENT", label: "내용" },
+  { value: "TAG", label: "태그" },
+];
+
 export default function CommunityPage() {
+  return (
+    <React.Suspense fallback={null}>
+      <CommunityPageContent />
+    </React.Suspense>
+  );
+}
+
+function CommunityPageContent() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const accessToken = useAuthStore((s) => s.accessToken);
 
   const [categories, setCategories] = React.useState<CommunityCategory[]>([]);
-  const [categoryTab, setCategoryTab] = React.useState(ALL_CATEGORY);
+  // 상세로 갔다가 뒤로가기(브라우저 back, 상세 화면의 "커뮤니티" 링크)로 돌아왔을 때
+  // 선택했던 카테고리 탭이 "전체"로 초기화되지 않도록 URL 쿼리(?category=)로 상태를 남긴다.
+  const [categoryTab, setCategoryTab] = React.useState(() => searchParams.get("category") ?? ALL_CATEGORY);
   const [sort, setSort] = React.useState<SortOption>("latest");
+  // 카테고리/정렬처럼 선택 즉시 반영 — "전체 기간"으로 무제한 조회하는 걸 막기 위해 기본값을
+  // 최근 3개월로 좁혀둔다(SearchPeriodSelect 참고).
+  const [period, setPeriod] = React.useState<SearchPeriodPreset>(DEFAULT_SEARCH_PERIOD);
+  // keyword/searchScope는 실제 조회에 쓰이는 "확정된" 값이고, keywordDraft/searchScopeDraft는
+  // 입력 중인 값이다 — 타이핑할 때마다, 혹은 스코프 드롭다운만 바꿔도 매번 서버로 요청이 나가는 걸
+  // 막기 위해 검색창에서 Enter를 눌러야 확정값에 반영되고 그때 비로소 재조회가 일어난다.
   const [keyword, setKeyword] = React.useState("");
+  const [searchScope, setSearchScope] = React.useState<CommunityPostSearchScope>("ALL");
+  const [keywordDraft, setKeywordDraft] = React.useState("");
+  const [searchScopeDraft, setSearchScopeDraft] = React.useState<CommunityPostSearchScope>("ALL");
 
   const [posts, setPosts] = React.useState<CommunityPostSummary[]>([]);
   const [page, setPage] = React.useState(0);
@@ -42,7 +72,9 @@ export default function CommunityPage() {
 
   const sentinelRef = React.useRef<HTMLDivElement>(null);
 
-  const requestKey = `${accessToken ?? ""}:${categoryTab}:${sort}:${keyword}:${refreshKey}`;
+  const { periodStart, periodEnd } = resolveSearchPeriod(period);
+  const requestKey =
+    `${accessToken ?? ""}:${categoryTab}:${sort}:${keyword}:${searchScope}:${period}:${refreshKey}`;
   const isLoading = completedRequestKey !== requestKey;
 
   React.useEffect(() => {
@@ -56,7 +88,10 @@ export default function CommunityPage() {
     listPosts(accessToken, {
       category: categoryTab === ALL_CATEGORY ? undefined : categoryTab,
       keyword: keyword.trim() || undefined,
+      searchScope,
       sort: sort === "popular" ? "popular" : undefined,
+      periodStart,
+      periodEnd,
       page: 0,
       size: PAGE_SIZE,
     })
@@ -79,7 +114,10 @@ export default function CommunityPage() {
     return () => {
       isCurrentRequest = false;
     };
-  }, [accessToken, categoryTab, sort, keyword, refreshKey, requestKey]);
+    // periodStart/periodEnd는 requestKey에 이미 period 문자열로 반영돼 있어 의존성 배열에
+    // 추가하지 않는다(resolveSearchPeriod가 매 렌더 새 객체를 반환해 추가하면 무한루프됨).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [accessToken, categoryTab, sort, keyword, searchScope, refreshKey, requestKey]);
 
   const loadMore = React.useCallback(() => {
     if (isLast || loadingMore || error || isLoading) return;
@@ -90,7 +128,10 @@ export default function CommunityPage() {
     listPosts(accessToken, {
       category: categoryTab === ALL_CATEGORY ? undefined : categoryTab,
       keyword: keyword.trim() || undefined,
+      searchScope,
       sort: sort === "popular" ? "popular" : undefined,
+      periodStart,
+      periodEnd,
       page: nextPage,
       size: PAGE_SIZE,
     })
@@ -101,7 +142,8 @@ export default function CommunityPage() {
       })
       .catch(() => setIsLast(true))
       .finally(() => setLoadingMore(false));
-  }, [accessToken, categoryTab, sort, keyword, page, isLast, loadingMore, error, isLoading]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [accessToken, categoryTab, sort, keyword, searchScope, period, page, isLast, loadingMore, error, isLoading]);
 
   // 목록 하단의 sentinel이 화면에 보이면 다음 페이지를 불러온다.
   React.useEffect(() => {
@@ -119,14 +161,22 @@ export default function CommunityPage() {
 
   function changeCategory(value: string) {
     setCategoryTab(value);
+    router.replace(value === ALL_CATEGORY ? "/community" : `/community?category=${value}`, {
+      scroll: false,
+    });
   }
 
   function changeSort(value: string) {
     setSort(value as SortOption);
   }
 
-  function changeKeyword(value: string) {
-    setKeyword(value);
+  function commitSearch() {
+    setKeyword(keywordDraft);
+    setSearchScope(searchScopeDraft);
+  }
+
+  function handleSearchKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
+    if (e.key === "Enter") commitSearch();
   }
 
   function categoryName(code: string): string {
@@ -142,12 +192,27 @@ export default function CommunityPage() {
         <Button onClick={() => router.push("/community/write")}>+ 새 글 작성</Button>
       }
     >
-      <SearchBar
-        placeholder="키워드로 커뮤니티 글 검색"
-        value={keyword}
-        onChange={(e) => changeKeyword(e.target.value)}
-        containerClassName="mb-4"
-      />
+      <div className="mb-4 flex gap-2">
+        <Select value={searchScopeDraft} onValueChange={(v) => setSearchScopeDraft(v as CommunityPostSearchScope)}>
+          <SelectTrigger className="w-24 shrink-0">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {SEARCH_SCOPE_OPTIONS.map((option) => (
+              <SelectItem key={option.value} value={option.value}>
+                {option.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <SearchBar
+          placeholder="키워드로 커뮤니티 글 검색 (Enter로 검색)"
+          value={keywordDraft}
+          onChange={(e) => setKeywordDraft(e.target.value)}
+          onKeyDown={handleSearchKeyDown}
+          containerClassName="flex-1"
+        />
+      </div>
 
       <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
         <Tabs value={categoryTab} onValueChange={changeCategory}>
@@ -161,15 +226,18 @@ export default function CommunityPage() {
           </TabsList>
         </Tabs>
 
-        <Select value={sort} onValueChange={changeSort}>
-          <SelectTrigger className="w-28">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="latest">최신순</SelectItem>
-            <SelectItem value="popular">인기순</SelectItem>
-          </SelectContent>
-        </Select>
+        <div className="flex items-center gap-2">
+          <SearchPeriodSelect value={period} onValueChange={setPeriod} />
+          <Select value={sort} onValueChange={changeSort}>
+            <SelectTrigger className="w-28">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="latest">최신순</SelectItem>
+              <SelectItem value="popular">인기순</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
       </div>
 
       {error ? (

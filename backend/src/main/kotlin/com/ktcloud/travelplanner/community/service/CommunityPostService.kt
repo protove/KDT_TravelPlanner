@@ -5,22 +5,32 @@ import com.fasterxml.jackson.databind.ObjectMapper
 import com.ktcloud.travelplanner.community.dto.CommunityPostCreateRequest
 import com.ktcloud.travelplanner.community.dto.CommunityPostCreateResponse
 import com.ktcloud.travelplanner.community.dto.CommunityPostDetailResponse
+import com.ktcloud.travelplanner.community.dto.CommunityPostReactionResponse
 import com.ktcloud.travelplanner.community.dto.CommunityPostSummaryResponse
+import com.ktcloud.travelplanner.community.dto.CommunityPostUpdateRequest
 import com.ktcloud.travelplanner.community.model.CommunityPost
 import com.ktcloud.travelplanner.community.model.CommunityTag
 import com.ktcloud.travelplanner.community.repository.CommunityCategoryRepository
+import com.ktcloud.travelplanner.community.repository.CommunityPostListRow
 import com.ktcloud.travelplanner.community.repository.CommunityPostRepository
 import com.ktcloud.travelplanner.community.repository.CommunityTagRepository
 import com.ktcloud.travelplanner.community.validation.TiptapBodyJsonValidator
 import com.ktcloud.travelplanner.global.exception.DomainException
 import com.ktcloud.travelplanner.global.exception.ErrorCode
 import com.ktcloud.travelplanner.global.response.PageResponse
+import com.ktcloud.travelplanner.global.util.toExclusiveEndOfDayInstant
+import com.ktcloud.travelplanner.global.util.toStartOfDayInstant
 import com.ktcloud.travelplanner.membership.repository.TravelMemberRepository
 import com.ktcloud.travelplanner.travel.repository.TravelRepository
+import com.ktcloud.travelplanner.user.dto.PatchField
 import com.ktcloud.travelplanner.user.repository.UserRepository
+import org.springframework.dao.OptimisticLockingFailureException
+import org.springframework.data.domain.Page
 import org.springframework.data.domain.PageRequest
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
+import java.time.Instant
+import java.time.LocalDate
 import java.util.UUID
 
 @Service
@@ -85,6 +95,7 @@ class CommunityPostService(
 		val post = communityPostRepository.findById(postId).orElseThrow(::CommunityPostNotFoundException)
 		val commentCount = communityPostRepository.countActiveComments(postId)
 		val reactionCount = communityPostRepository.countReactions(postId)
+		val isReacted = requesterId != null && communityPostRepository.existsReaction(postId, requesterId)
 
 		val response = CommunityPostDetailResponse.from(
 			post = post,
@@ -94,41 +105,253 @@ class CommunityPostService(
 			commentCount = commentCount,
 			reactionCount = reactionCount,
 			isMine = requesterId != null && requesterId == post.author.id,
+			isReacted = isReacted,
 		)
 		communityPostRepository.incrementViewCount(postId)
 		return response
 	}
 
+	// community-api-contract.md 2절 — PATCH, 작성자 본인만, version 낙관적 락(불일치 시 409).
+	// categoryCode/sourceTravelId/itinerarySnapshotJson은 계약상 수정 대상이 아니라 건드리지 않는다.
+	// version 사전 비교 + saveAndFlush 시점의 OptimisticLockingFailureException 둘 다 잡는다
+	// (TravelUpdateService.updateTravel과 동일한 이중 방어 패턴) — 사전 비교가 대부분 걸러주고,
+	// flush 시점 예외는 두 요청이 사전 비교를 동시에 통과하는 경합을 막는 안전망이다.
+	@Transactional
+	fun updatePost(
+		postId: UUID,
+		requesterId: UUID,
+		request: CommunityPostUpdateRequest,
+	): CommunityPostDetailResponse {
+		val post = communityPostRepository.findById(postId).orElseThrow(::CommunityPostNotFoundException)
+		if (post.author.id != requesterId) {
+			throw CommunityPostAccessDeniedException()
+		}
+		if (post.version != request.version) {
+			throw CommunityPostVersionConflictException()
+		}
+
+		val newTitle = when (val field = request.title) {
+			PatchField.Absent -> null
+			is PatchField.Present -> {
+				val value = field.value?.trim()
+				if (value.isNullOrBlank() || value.length > TITLE_MAX_LENGTH) {
+					throw InvalidCommunityPostUpdateException()
+				}
+				value
+			}
+		}
+
+		val newBodyJson = when (val field = request.bodyJson) {
+			PatchField.Absent -> null
+			is PatchField.Present -> field.value ?: throw InvalidCommunityPostUpdateException()
+		}
+		if (newBodyJson != null) {
+			TiptapBodyJsonValidator.validate(newBodyJson)
+		}
+
+		val newTags = when (val field = request.tags) {
+			PatchField.Absent -> null
+			is PatchField.Present -> field.value ?: throw InvalidCommunityPostUpdateException()
+		}
+
+		try {
+			post.edit(
+				title = newTitle,
+				bodyJson = newBodyJson?.toString(),
+				bodyPreview = newBodyJson?.let(::buildBodyPreview),
+			)
+			if (newTags != null) {
+				post.assignTags(normalizeTagNames(newTags).map(::findOrCreateTag).toSet())
+			}
+			val saved = communityPostRepository.saveAndFlush(post)
+
+			val commentCount = communityPostRepository.countActiveComments(postId)
+			val reactionCount = communityPostRepository.countReactions(postId)
+			val isReacted = communityPostRepository.existsReaction(postId, requesterId)
+			return CommunityPostDetailResponse.from(
+				post = saved,
+				bodyJson = objectMapper.readTree(saved.bodyJson),
+				itinerarySnapshotJson = saved.itinerarySnapshotJson?.let(objectMapper::readTree),
+				viewCount = saved.viewCount,
+				commentCount = commentCount,
+				reactionCount = reactionCount,
+				isMine = true,
+				isReacted = isReacted,
+			)
+		} catch (_: OptimisticLockingFailureException) {
+			throw CommunityPostVersionConflictException()
+		}
+	}
+
+	// community-api-contract.md 2절 — 좋아요 토글, 로그인 필요. type은 현재 LIKE만.
+	// CommunityCommentService.toggleReaction과 동일한 패턴(이미 눌렀으면 취소, 아니면 등록).
+	@Transactional
+	fun toggleReaction(
+		postId: UUID,
+		requesterId: UUID,
+		type: String,
+	): CommunityPostReactionResponse {
+		if (type != SUPPORTED_REACTION_TYPE) {
+			throw UnsupportedCommunityReactionTypeException()
+		}
+		communityPostRepository.findById(postId).orElseThrow(::CommunityPostNotFoundException)
+
+		val alreadyReacted = communityPostRepository.existsReaction(postId, requesterId)
+		if (alreadyReacted) {
+			communityPostRepository.deleteReaction(postId, requesterId)
+		} else {
+			communityPostRepository.insertReaction(postId, requesterId)
+		}
+
+		val reactionCount = communityPostRepository.countReactions(postId)
+		return CommunityPostReactionResponse(reactionCount = reactionCount, isReacted = !alreadyReacted)
+	}
+
+	// community-api-contract.md 2절 — DELETE, 작성자 본인만, 소프트 삭제(community_comment와 동일 컨벤션).
+	@Transactional
+	fun deletePost(
+		postId: UUID,
+		requesterId: UUID,
+	) {
+		val post = communityPostRepository.findById(postId).orElseThrow(::CommunityPostNotFoundException)
+		if (post.author.id != requesterId) {
+			throw CommunityPostAccessDeniedException()
+		}
+		post.softDelete(Instant.now())
+	}
+
 	// community-api-contract.md 2절/3절 — 목록 조회. 인증 불필요.
+	// searchScope는 화이트리스트 밖 값(오타/구버전 클라이언트 등)이면 sort와 동일하게 조용히
+	// 기본값(ALL)으로 떨어뜨린다 — 존재하지 않는 sort 값을 에러 없이 기본 정렬로 처리하는 것과 같은 관용.
+	// periodStart/periodEnd(둘 다 LocalDate, 달력 날짜 그대로)는 UTC 자정 기준으로 [start, end+1일)
+	// 반open 구간으로 변환해 post.createdAt과 비교한다 — 둘 다 null이면 필터 없음(전체 기간).
 	@Transactional(readOnly = true)
 	fun getPosts(
 		categoryCode: String?,
 		tagName: String?,
 		keyword: String?,
+		searchScope: String?,
 		sort: String?,
+		periodStart: LocalDate?,
+		periodEnd: LocalDate?,
 		page: Int,
 		size: Int,
 	): PageResponse<CommunityPostSummaryResponse> {
 		val normalizedCategoryCode = categoryCode?.trim()?.takeIf { it.isNotEmpty() }
 		val normalizedTagName = tagName?.trim()?.takeIf { it.isNotEmpty() }
 		val normalizedKeyword = keyword?.trim()?.takeIf { it.isNotEmpty() }
+		val normalizedSearchScope = searchScope?.trim()?.uppercase()?.takeIf { it in VALID_SEARCH_SCOPES }
+			?: DEFAULT_SEARCH_SCOPE
+		val periodStartParam = periodStart?.toStartOfDayInstant()
+		val periodEndParam = periodEnd?.toExclusiveEndOfDayInstant()
 		val pageable = PageRequest.of(page.coerceAtLeast(0), size.coerceIn(MIN_PAGE_SIZE, MAX_PAGE_SIZE))
 
 		val result = if (sort == SORT_POPULAR) {
-			communityPostRepository.findPostsOrderByPopularity(normalizedCategoryCode, normalizedTagName, normalizedKeyword, pageable)
+			communityPostRepository.findPostsOrderByPopularity(
+				normalizedCategoryCode,
+				normalizedTagName,
+				normalizedKeyword,
+				normalizedSearchScope,
+				periodStartParam,
+				periodEndParam,
+				pageable,
+			).map { row ->
+				CommunityPostListRow(
+					postId = row.postId,
+					categoryCode = row.categoryCode,
+					title = row.title,
+					bodyPreview = row.bodyPreview,
+					authorNickname = row.authorNickname,
+					authorProfileImageUrl = row.authorProfileImageUrl,
+					viewCount = row.viewCount,
+					sourceTravelId = row.sourceTravelId,
+					createdAt = row.createdAt,
+				)
+			}
 		} else {
-			communityPostRepository.findPostsOrderByCreatedAt(normalizedCategoryCode, normalizedTagName, normalizedKeyword, pageable)
+			communityPostRepository.findPostsOrderByCreatedAt(
+				normalizedCategoryCode,
+				normalizedTagName,
+				normalizedKeyword,
+				normalizedSearchScope,
+				periodStartParam,
+				periodEndParam,
+				pageable,
+			)
 		}
 
+		return buildSummaryPage(result)
+	}
+
+	// 마이페이지 "내가 쓴 글" 탭 — 본인 글만 작성일 역순으로. includeDeleted=true일 때만 본인이
+	// 소프트 삭제한 글도 함께 보여준다(기본값 false — 삭제한 글은 숨김). 포함될 때는 deletedAt을
+	// 채워서 내려주고 삭제 표시는 프론트에서 한다. keyword/기간 필터는 getPosts와 동일한 관례
+	// (둘 다 null이면 필터 없음).
+	@Transactional(readOnly = true)
+	fun getMyPosts(
+		authorId: UUID,
+		keyword: String?,
+		periodStart: LocalDate?,
+		periodEnd: LocalDate?,
+		includeDeleted: Boolean,
+		page: Int,
+		size: Int,
+	): PageResponse<CommunityPostSummaryResponse> {
+		val normalizedKeyword = keyword?.trim()?.takeIf { it.isNotEmpty() }
+		val pageable = PageRequest.of(page.coerceAtLeast(0), size.coerceIn(MIN_PAGE_SIZE, MAX_PAGE_SIZE))
+		val result = communityPostRepository.findByAuthorIdIncludingDeletedOrderByCreatedAtDesc(
+			authorId,
+			normalizedKeyword,
+			periodStart?.toStartOfDayInstant(),
+			periodEnd?.toExclusiveEndOfDayInstant(),
+			includeDeleted,
+			pageable,
+		)
+			.map { row ->
+				CommunityPostListRow(
+					postId = row.postId,
+					categoryCode = row.categoryCode,
+					title = row.title,
+					bodyPreview = row.bodyPreview,
+					authorNickname = row.authorNickname,
+					authorProfileImageUrl = row.authorProfileImageUrl,
+					viewCount = row.viewCount,
+					sourceTravelId = row.sourceTravelId,
+					createdAt = row.createdAt,
+					deletedAt = row.deletedAt,
+				)
+			}
+		return buildSummaryPage(result)
+	}
+
+	// 게시글마다 countActiveComments/countReactions를 따로 부르면 N+1이라 배치로 한 번에 가져온다
+	// (CommunityCommentService.getComments와 동일한 패턴). getPosts/getMyPosts가 공유.
+	private fun buildSummaryPage(result: Page<CommunityPostListRow>): PageResponse<CommunityPostSummaryResponse> {
 		val postIds = result.content.map { it.postId }
-		val tagsByPostId = if (postIds.isEmpty()) {
-			emptyMap()
+		val tagsByPostId: Map<UUID, List<String>>
+		val commentCountByPostId: Map<UUID, Long>
+		val reactionCountByPostId: Map<UUID, Long>
+		if (postIds.isEmpty()) {
+			tagsByPostId = emptyMap()
+			commentCountByPostId = emptyMap()
+			reactionCountByPostId = emptyMap()
 		} else {
-			communityPostRepository.findTagNamesByPostIds(postIds).groupBy({ it.postId }, { it.tagName })
+			tagsByPostId = communityPostRepository.findTagNamesByPostIds(postIds).groupBy({ it.postId }, { it.tagName })
+			commentCountByPostId = communityPostRepository.countActiveCommentsByPostIds(postIds)
+				.associate { it.postId to it.commentCount }
+			reactionCountByPostId = communityPostRepository.countReactionsByPostIds(postIds)
+				.associate { it.postId to it.reactionCount }
 		}
 
 		return PageResponse.from(
-			result.map { row -> CommunityPostSummaryResponse.from(row, tagsByPostId[row.postId].orEmpty()) },
+			result.map { row ->
+				CommunityPostSummaryResponse.from(
+					row = row,
+					tags = tagsByPostId[row.postId].orEmpty(),
+					commentCount = commentCountByPostId[row.postId] ?: 0L,
+					reactionCount = reactionCountByPostId[row.postId] ?: 0L,
+				)
+			},
 		)
 	}
 
@@ -196,11 +419,16 @@ class CommunityPostService(
 
 	companion object {
 		private const val NOTICE_CATEGORY_CODE = "NOTICE"
+		// CommunityPostCreateRequest.title의 @Size(max = 200)과 동일하게 맞춘다.
+		private const val TITLE_MAX_LENGTH = 200
+		private const val SUPPORTED_REACTION_TYPE = "LIKE"
 		private const val MAX_TAG_COUNT = 5
 		private const val TAG_NAME_MIN_LENGTH = 1
 		private const val TAG_NAME_MAX_LENGTH = 20
 		private const val BODY_PREVIEW_MAX_LENGTH = 120
 		private const val SORT_POPULAR = "popular"
+		private const val DEFAULT_SEARCH_SCOPE = "ALL"
+		private val VALID_SEARCH_SCOPES = setOf("ALL", "TITLE", "AUTHOR", "CONTENT", "TAG")
 		private const val MIN_PAGE_SIZE = 1
 		private const val MAX_PAGE_SIZE = 50
 	}
@@ -218,6 +446,18 @@ class CommunityPostNotFoundException : DomainException(ErrorCode.RESOURCE_NOT_FO
 class CommunityPostSourceTravelNotFoundException : DomainException(ErrorCode.RESOURCE_NOT_FOUND)
 
 class CommunityPostSourceTravelAccessDeniedException : DomainException(ErrorCode.ACCESS_DENIED)
+
+class CommunityPostAccessDeniedException :
+	DomainException(ErrorCode.ACCESS_DENIED, "본인 게시글만 수정·삭제할 수 있습니다.")
+
+class CommunityPostVersionConflictException :
+	DomainException(ErrorCode.CONFLICT, "게시글이 다른 요청에 의해 변경되었습니다.")
+
+class InvalidCommunityPostUpdateException :
+	DomainException(ErrorCode.VALIDATION_ERROR, "수정값이 올바르지 않습니다.")
+
+class UnsupportedCommunityReactionTypeException :
+	DomainException(ErrorCode.VALIDATION_ERROR, "지원하지 않는 리액션 타입입니다.")
 
 class TooManyCommunityTagsException :
 	DomainException(ErrorCode.VALIDATION_ERROR, "태그는 최대 5개까지 등록할 수 있습니다.")
