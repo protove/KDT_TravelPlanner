@@ -97,6 +97,24 @@ class ObserverContractTests(unittest.TestCase):
         self.assertEqual(snapshot["sources"][-1], "cloudwatch-unavailable")
         self.assertIn("AWS/EC2:CPUUtilization:read-failed", snapshot["observationErrors"])
 
+    def test_stage_fields_follow_metadata_schedule(self):
+        metadata = {
+            "startedAtUtc": "2026-08-27T12:54:00Z",
+            "effectiveInputs": {
+                "baseRate": 16,
+                "stageMultipliers": [1, 2, 4, 8],
+                "stageDurations": ["5m", "8m", "8m", "8m"],
+            },
+        }
+        early = MODULE.stage_fields(metadata, MODULE.datetime.fromisoformat("2026-08-27T12:55:00+00:00"))
+        late = MODULE.stage_fields(metadata, MODULE.datetime.fromisoformat("2026-08-27T13:16:00+00:00"))
+        self.assertEqual(early["stageIndex"], 0)
+        self.assertEqual(early["stageMultiplier"], 1)
+        self.assertEqual(early["targetRate"], 16.0)
+        self.assertEqual(late["stageIndex"], 3)
+        self.assertEqual(late["stageMultiplier"], 8)
+        self.assertEqual(late["targetRate"], 128.0)
+
 
 if __name__ == "__main__":
     unittest.main()

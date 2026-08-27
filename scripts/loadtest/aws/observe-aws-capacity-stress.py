@@ -14,6 +14,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -41,6 +42,67 @@ def utc_now() -> datetime:
 
 def iso(value: datetime) -> str:
     return value.isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
+def metadata_timestamp(value: object) -> float | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return None
+
+
+def duration_seconds(value: object) -> float | None:
+    """Parse the profile's whole-unit stage duration without guessing."""
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return float(value) if value > 0 else None
+    if not isinstance(value, str):
+        return None
+    match = re.fullmatch(r"(\d+(?:\.\d+)?)([smh])", value.strip())
+    if not match:
+        return None
+    amount = float(match.group(1))
+    multiplier = {"s": 1.0, "m": 60.0, "h": 3600.0}[match.group(2)]
+    return amount * multiplier
+
+
+def stage_fields(metadata: Mapping[str, Any], now: datetime) -> dict[str, Any]:
+    """Resolve the fixed stress stage from run metadata and wall-clock time.
+
+    Stage labels are derived from the immutable k6 metadata written at run
+    start. This adds no control or AWS mutation; it only makes observer
+    snapshots joinable to the preregistered 1x/2x/4x/8x schedule.
+    """
+    inputs = metadata.get("effectiveInputs") if isinstance(metadata.get("effectiveInputs"), Mapping) else {}
+    multipliers = inputs.get("stageMultipliers")
+    durations = inputs.get("stageDurations")
+    started = metadata_timestamp(metadata.get("startedAtUtc"))
+    if not isinstance(multipliers, list) or not isinstance(durations, list) or len(multipliers) != len(durations) or started is None:
+        return {}
+    parsed = [duration_seconds(value) for value in durations]
+    if any(value is None for value in parsed):
+        return {}
+    elapsed = max(0.0, now.timestamp() - started)
+    cursor = 0.0
+    selected = len(multipliers) - 1
+    for index, duration in enumerate(parsed):
+        assert duration is not None
+        if elapsed < cursor + duration:
+            selected = index
+            break
+        cursor += duration
+    base_rate = inputs.get("baseRate")
+    try:
+        target_rate = float(base_rate) * float(multipliers[selected])
+    except (TypeError, ValueError, IndexError):
+        target_rate = None
+    return {
+        "stageIndex": selected,
+        "stageMultiplier": multipliers[selected],
+        "targetRate": target_rate,
+        "stageElapsedSeconds": round(elapsed, 3),
+    }
 
 
 class AwsReadOnly:
@@ -209,6 +271,10 @@ def collect_snapshot(args: argparse.Namespace, aws: AwsReadOnly) -> dict[str, An
         )
 
     slo = last_jsonl(args.slo_window_file)
+    metadata_path = getattr(args, "metadata_file", None)
+    if metadata_path is None and getattr(args, "run_dir", None) is not None:
+        metadata_path = args.run_dir / "metadata.json"
+    metadata = read_optional(metadata_path)
     snapshot = {
         "ts": iso(now),
         "platform": args.platform,
@@ -247,12 +313,14 @@ def collect_snapshot(args: argparse.Namespace, aws: AwsReadOnly) -> dict[str, An
             "cloudwatch" if cloudwatch and not observation_errors else "cloudwatch-unavailable" if observation_errors else "none",
         ],
     }
+    snapshot.update(stage_fields(metadata, now))
     return snapshot
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--run-dir", type=Path, required=True)
+    parser.add_argument("--metadata-file", type=Path, default=None)
     parser.add_argument("--platform", choices=("ec2", "eks"), required=True)
     parser.add_argument("--region", required=True)
     parser.add_argument("--profile", default=os.environ.get("AWS_PROFILE"))
