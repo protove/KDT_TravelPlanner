@@ -21,7 +21,7 @@ variable "subnet_ids" {
 variable "kubernetes_version" {
   type        = string
   description = "EKS control plane Kubernetes minor version."
-  default     = "1.31"
+  default     = "1.35"
 
   validation {
     condition     = can(regex("^1\\.[0-9]{2}$", var.kubernetes_version))
