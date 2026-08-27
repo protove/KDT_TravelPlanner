@@ -22,6 +22,7 @@ import org.springframework.web.bind.annotation.RequestBody
 import org.springframework.web.bind.annotation.RequestMapping
 import org.springframework.web.bind.annotation.RequestParam
 import org.springframework.web.bind.annotation.RestController
+import java.time.LocalDate
 import java.util.UUID
 
 // community-api-contract.md 2절 엔드포인트 표의 /api/v1/community/posts 그룹.
@@ -38,6 +39,8 @@ class CommunityPostController(
 		ApiResponse.success(communityPostService.createPost(principal.userId, request))
 
 	// community-api-contract.md 2절/3절 — 인증 불필요. size 기본 10/최대 50은 서비스에서 clamp한다.
+	// periodStart/periodEnd(YYYY-MM-DD)는 둘 다 없으면 전체 기간 조회 — 화면에서는 기본으로
+	// 좁힌 기간을 보내되, 계약 자체는 무제한 조회도 허용한다.
 	@GetMapping
 	fun getPosts(
 		@RequestParam(required = false) category: String?,
@@ -46,10 +49,24 @@ class CommunityPostController(
 		// keyword 매칭 대상. ALL(기본)/TITLE/AUTHOR/CONTENT/TAG — 화이트리스트 밖 값은 서비스에서 ALL로 처리.
 		@RequestParam(required = false) searchScope: String?,
 		@RequestParam(required = false) sort: String?,
+		@RequestParam(required = false) periodStart: LocalDate?,
+		@RequestParam(required = false) periodEnd: LocalDate?,
 		@RequestParam(defaultValue = "0") page: Int,
 		@RequestParam(defaultValue = "10") size: Int,
 	): ApiResponse<PageResponse<CommunityPostSummaryResponse>> =
-		ApiResponse.success(communityPostService.getPosts(category, tag, keyword, searchScope, sort, page, size))
+		ApiResponse.success(
+			communityPostService.getPosts(
+				category,
+				tag,
+				keyword,
+				searchScope,
+				sort,
+				periodStart,
+				periodEnd,
+				page,
+				size,
+			),
+		)
 
 	// community-api-contract.md 2절 — 인증 불필요. 로그인 상태면 isMine 계산을 위해 principal을 사용한다.
 	@GetMapping("/{postId}")

@@ -15,6 +15,7 @@ import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
 import java.time.Clock
 import java.time.Instant
+import java.time.LocalDate
 import java.util.UUID
 
 @Service
@@ -39,12 +40,16 @@ class TravelService(
 	}
 
 	// searchScope는 화이트리스트 밖 값(오타/구버전 클라이언트 등)이면 조용히 기본값(ALL)으로
-	// 떨어뜨린다 — CommunityPostService.getPosts와 동일한 관용.
+	// 떨어뜨린다 — CommunityPostService.getPosts와 동일한 관용. periodStart/periodEnd는 둘 다
+	// null이면(기간 필터 없음) 전체 기간을 그대로 조회한다 — 화면 쪽에서 기본값으로 좁혀서 보내는
+	// 것을 기대하지만, 백엔드 계약 자체는 "필터 없음"을 명시적으로 허용한다.
 	@Transactional(readOnly = true)
 	fun getTravels(
 		userId: UUID,
 		keyword: String?,
 		searchScope: String?,
+		periodStart: LocalDate?,
+		periodEnd: LocalDate?,
 		page: Int,
 		size: Int,
 	): PageResponse<TravelSummaryResponse> {
@@ -55,6 +60,8 @@ class TravelService(
 			userId = userId,
 			keyword = normalizedKeyword,
 			searchScope = normalizedSearchScope,
+			periodStart = (periodStart ?: MIN_PERIOD_DATE).toString(),
+			periodEnd = (periodEnd ?: MAX_PERIOD_DATE).toString(),
 			pageable = PageRequest.of(page, size),
 		)
 		return PageResponse.from(result.map(TravelSummaryResponse::from))
@@ -63,6 +70,12 @@ class TravelService(
 	companion object {
 		private const val DEFAULT_SEARCH_SCOPE = "ALL"
 		private val VALID_SEARCH_SCOPES = setOf("ALL", "TITLE", "DESCRIPTION", "DESTINATION")
+
+		// periodStart/periodEnd가 null(기간 필터 없음)일 때 항상 non-null 문자열만 바인딩되도록
+		// 채우는 사실상 무제한 경계값. LocalDate.MIN/MAX 대신 postgres date 타입 안전 범위 안의
+		// 값을 쓴다.
+		private val MIN_PERIOD_DATE: LocalDate = LocalDate.of(1, 1, 1)
+		private val MAX_PERIOD_DATE: LocalDate = LocalDate.of(9999, 12, 31)
 	}
 
 	@Transactional

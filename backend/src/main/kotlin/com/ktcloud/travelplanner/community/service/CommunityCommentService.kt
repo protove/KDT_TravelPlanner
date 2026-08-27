@@ -9,11 +9,14 @@ import com.ktcloud.travelplanner.community.repository.CommunityPostRepository
 import com.ktcloud.travelplanner.global.exception.DomainException
 import com.ktcloud.travelplanner.global.exception.ErrorCode
 import com.ktcloud.travelplanner.global.response.PageResponse
+import com.ktcloud.travelplanner.global.util.toExclusiveEndOfDayInstant
+import com.ktcloud.travelplanner.global.util.toStartOfDayInstant
 import com.ktcloud.travelplanner.user.repository.UserRepository
 import org.springframework.data.domain.PageRequest
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
 import java.time.Instant
+import java.time.LocalDate
 import java.util.UUID
 
 @Service
@@ -134,16 +137,26 @@ class CommunityCommentService(
 		)
 	}
 
-	// 마이페이지 "내가 쓴 댓글" 탭 — 필터 없이 본인 댓글만 작성일 역순으로, 본인이 삭제한 댓글도
-	// 함께 보여준다.
+	// 마이페이지 "내가 쓴 댓글" 탭 — 본인 댓글만 작성일 역순으로, 본인이 삭제한 댓글도 함께
+	// 보여준다. keyword/기간 필터는 CommunityPostService.getMyPosts와 동일한 관례.
 	@Transactional(readOnly = true)
 	fun getMyComments(
 		authorId: UUID,
+		keyword: String?,
+		periodStart: LocalDate?,
+		periodEnd: LocalDate?,
 		page: Int,
 		size: Int,
 	): PageResponse<MyCommentResponse> {
+		val normalizedKeyword = keyword?.trim()?.takeIf { it.isNotEmpty() }
 		val pageable = PageRequest.of(page.coerceAtLeast(0), size.coerceIn(MIN_PAGE_SIZE, MAX_PAGE_SIZE))
-		val result = communityCommentRepository.findByAuthorIdIncludingDeletedOrderByCreatedAtDesc(authorId, pageable)
+		val result = communityCommentRepository.findByAuthorIdIncludingDeletedOrderByCreatedAtDesc(
+			authorId,
+			normalizedKeyword,
+			periodStart?.toStartOfDayInstant(),
+			periodEnd?.toExclusiveEndOfDayInstant(),
+			pageable,
+		)
 		return PageResponse.from(result.map(MyCommentResponse::from))
 	}
 

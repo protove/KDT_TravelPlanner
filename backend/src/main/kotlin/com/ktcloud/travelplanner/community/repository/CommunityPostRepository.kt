@@ -32,6 +32,8 @@ interface CommunityPostRepository : JpaRepository<CommunityPost, UUID> {
 			JOIN post.author author
 			WHERE (:categoryCode IS NULL OR category.code = :categoryCode)
 				AND (:tagName IS NULL OR EXISTS (SELECT 1 FROM post.tags t WHERE t.name = :tagName))
+				AND (CAST(:periodStart AS timestamp) IS NULL OR post.createdAt >= CAST(:periodStart AS timestamp))
+				AND (CAST(:periodEnd AS timestamp) IS NULL OR post.createdAt < CAST(:periodEnd AS timestamp))
 				AND (:keyword IS NULL OR (
 					(:searchScope = 'TITLE' AND LOWER(post.title) LIKE LOWER(CONCAT('%', CAST(:keyword AS string), '%')))
 					OR (:searchScope = 'AUTHOR' AND LOWER(author.nickname) LIKE LOWER(CONCAT('%', CAST(:keyword AS string), '%')))
@@ -53,6 +55,8 @@ interface CommunityPostRepository : JpaRepository<CommunityPost, UUID> {
 			JOIN post.author author
 			WHERE (:categoryCode IS NULL OR category.code = :categoryCode)
 				AND (:tagName IS NULL OR EXISTS (SELECT 1 FROM post.tags t WHERE t.name = :tagName))
+				AND (CAST(:periodStart AS timestamp) IS NULL OR post.createdAt >= CAST(:periodStart AS timestamp))
+				AND (CAST(:periodEnd AS timestamp) IS NULL OR post.createdAt < CAST(:periodEnd AS timestamp))
 				AND (:keyword IS NULL OR (
 					(:searchScope = 'TITLE' AND LOWER(post.title) LIKE LOWER(CONCAT('%', CAST(:keyword AS string), '%')))
 					OR (:searchScope = 'AUTHOR' AND LOWER(author.nickname) LIKE LOWER(CONCAT('%', CAST(:keyword AS string), '%')))
@@ -72,6 +76,8 @@ interface CommunityPostRepository : JpaRepository<CommunityPost, UUID> {
 		@Param("tagName") tagName: String?,
 		@Param("keyword") keyword: String?,
 		@Param("searchScope") searchScope: String,
+		@Param("periodStart") periodStart: String?,
+		@Param("periodEnd") periodEnd: String?,
 		pageable: Pageable,
 	): Page<CommunityPostListRow>
 
@@ -102,6 +108,8 @@ interface CommunityPostRepository : JpaRepository<CommunityPost, UUID> {
 					JOIN community_tag t ON t.id = pt.tag_id
 					WHERE pt.post_id = post.id AND t.name = :tagName
 				))
+				AND (CAST(:periodStart AS timestamptz) IS NULL OR post.created_at >= CAST(:periodStart AS timestamptz))
+				AND (CAST(:periodEnd AS timestamptz) IS NULL OR post.created_at < CAST(:periodEnd AS timestamptz))
 				AND (:keyword IS NULL OR (
 					(:searchScope = 'TITLE' AND LOWER(post.title) LIKE LOWER(CONCAT('%', :keyword, '%')))
 					OR (:searchScope = 'AUTHOR' AND LOWER(author.nickname) LIKE LOWER(CONCAT('%', :keyword, '%')))
@@ -139,6 +147,8 @@ interface CommunityPostRepository : JpaRepository<CommunityPost, UUID> {
 					JOIN community_tag t ON t.id = pt.tag_id
 					WHERE pt.post_id = post.id AND t.name = :tagName
 				))
+				AND (CAST(:periodStart AS timestamptz) IS NULL OR post.created_at >= CAST(:periodStart AS timestamptz))
+				AND (CAST(:periodEnd AS timestamptz) IS NULL OR post.created_at < CAST(:periodEnd AS timestamptz))
 				AND (:keyword IS NULL OR (
 					(:searchScope = 'TITLE' AND LOWER(post.title) LIKE LOWER(CONCAT('%', :keyword, '%')))
 					OR (:searchScope = 'AUTHOR' AND LOWER(author.nickname) LIKE LOWER(CONCAT('%', :keyword, '%')))
@@ -167,6 +177,8 @@ interface CommunityPostRepository : JpaRepository<CommunityPost, UUID> {
 		@Param("tagName") tagName: String?,
 		@Param("keyword") keyword: String?,
 		@Param("searchScope") searchScope: String,
+		@Param("periodStart") periodStart: String?,
+		@Param("periodEnd") periodEnd: String?,
 		pageable: Pageable,
 	): Page<PostSummaryRow>
 
@@ -254,10 +266,10 @@ interface CommunityPostRepository : JpaRepository<CommunityPost, UUID> {
 		@Param("postIds") postIds: List<UUID>,
 	): List<PostReactionCountRow>
 
-	// 마이페이지 "내가 쓴 글" 탭 — 카테고리/키워드 필터 없이 본인 글만 작성일 역순으로, 본인이
-	// 소프트 삭제한 글도 함께 보여준다. CommunityPost의 @SQLRestriction("deleted_at IS NULL")은
-	// JPQL로는(findById 포함) 절대 우회할 수 없어서, countActiveComments 등과 동일하게 네이티브
-	// 쿼리로 우회한다.
+	// 마이페이지 "내가 쓴 글" 탭 — 본인 글만 작성일 역순으로, 본인이 소프트 삭제한 글도 함께
+	// 보여준다. CommunityPost의 @SQLRestriction("deleted_at IS NULL")은 JPQL로는(findById 포함)
+	// 절대 우회할 수 없어서, countActiveComments 등과 동일하게 네이티브 쿼리로 우회한다.
+	// keyword는 제목/본문 미리보기를 훑고, periodStart/periodEnd는 작성일(created_at) 기준.
 	@Query(
 		value = """
 			SELECT
@@ -275,13 +287,32 @@ interface CommunityPostRepository : JpaRepository<CommunityPost, UUID> {
 			JOIN community_category category ON category.id = post.category_id
 			JOIN user_table author ON author.id = post.author_id
 			WHERE post.author_id = :authorId
+				AND (CAST(:periodStart AS timestamptz) IS NULL OR post.created_at >= CAST(:periodStart AS timestamptz))
+				AND (CAST(:periodEnd AS timestamptz) IS NULL OR post.created_at < CAST(:periodEnd AS timestamptz))
+				AND (:keyword IS NULL OR (
+					LOWER(post.title) LIKE LOWER(CONCAT('%', :keyword, '%'))
+					OR LOWER(post.body_preview) LIKE LOWER(CONCAT('%', :keyword, '%'))
+				))
 			ORDER BY post.created_at DESC
 		""",
-		countQuery = "SELECT COUNT(*) FROM community_post WHERE author_id = :authorId",
+		countQuery = """
+			SELECT COUNT(*)
+			FROM community_post post
+			WHERE post.author_id = :authorId
+				AND (CAST(:periodStart AS timestamptz) IS NULL OR post.created_at >= CAST(:periodStart AS timestamptz))
+				AND (CAST(:periodEnd AS timestamptz) IS NULL OR post.created_at < CAST(:periodEnd AS timestamptz))
+				AND (:keyword IS NULL OR (
+					LOWER(post.title) LIKE LOWER(CONCAT('%', :keyword, '%'))
+					OR LOWER(post.body_preview) LIKE LOWER(CONCAT('%', :keyword, '%'))
+				))
+		""",
 		nativeQuery = true,
 	)
 	fun findByAuthorIdIncludingDeletedOrderByCreatedAtDesc(
 		@Param("authorId") authorId: UUID,
+		@Param("keyword") keyword: String?,
+		@Param("periodStart") periodStart: String?,
+		@Param("periodEnd") periodEnd: String?,
 		pageable: Pageable,
 	): Page<MyPostRow>
 }

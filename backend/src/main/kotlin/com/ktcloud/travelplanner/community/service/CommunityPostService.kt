@@ -18,6 +18,8 @@ import com.ktcloud.travelplanner.community.validation.TiptapBodyJsonValidator
 import com.ktcloud.travelplanner.global.exception.DomainException
 import com.ktcloud.travelplanner.global.exception.ErrorCode
 import com.ktcloud.travelplanner.global.response.PageResponse
+import com.ktcloud.travelplanner.global.util.toExclusiveEndOfDayInstant
+import com.ktcloud.travelplanner.global.util.toStartOfDayInstant
 import com.ktcloud.travelplanner.membership.repository.TravelMemberRepository
 import com.ktcloud.travelplanner.travel.repository.TravelRepository
 import com.ktcloud.travelplanner.user.dto.PatchField
@@ -28,6 +30,7 @@ import org.springframework.data.domain.PageRequest
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
 import java.time.Instant
+import java.time.LocalDate
 import java.util.UUID
 
 @Service
@@ -220,6 +223,8 @@ class CommunityPostService(
 	// community-api-contract.md 2절/3절 — 목록 조회. 인증 불필요.
 	// searchScope는 화이트리스트 밖 값(오타/구버전 클라이언트 등)이면 sort와 동일하게 조용히
 	// 기본값(ALL)으로 떨어뜨린다 — 존재하지 않는 sort 값을 에러 없이 기본 정렬로 처리하는 것과 같은 관용.
+	// periodStart/periodEnd(둘 다 LocalDate, 달력 날짜 그대로)는 UTC 자정 기준으로 [start, end+1일)
+	// 반open 구간으로 변환해 post.createdAt과 비교한다 — 둘 다 null이면 필터 없음(전체 기간).
 	@Transactional(readOnly = true)
 	fun getPosts(
 		categoryCode: String?,
@@ -227,6 +232,8 @@ class CommunityPostService(
 		keyword: String?,
 		searchScope: String?,
 		sort: String?,
+		periodStart: LocalDate?,
+		periodEnd: LocalDate?,
 		page: Int,
 		size: Int,
 	): PageResponse<CommunityPostSummaryResponse> {
@@ -235,6 +242,8 @@ class CommunityPostService(
 		val normalizedKeyword = keyword?.trim()?.takeIf { it.isNotEmpty() }
 		val normalizedSearchScope = searchScope?.trim()?.uppercase()?.takeIf { it in VALID_SEARCH_SCOPES }
 			?: DEFAULT_SEARCH_SCOPE
+		val periodStartParam = periodStart?.toStartOfDayInstant()
+		val periodEndParam = periodEnd?.toExclusiveEndOfDayInstant()
 		val pageable = PageRequest.of(page.coerceAtLeast(0), size.coerceIn(MIN_PAGE_SIZE, MAX_PAGE_SIZE))
 
 		val result = if (sort == SORT_POPULAR) {
@@ -243,6 +252,8 @@ class CommunityPostService(
 				normalizedTagName,
 				normalizedKeyword,
 				normalizedSearchScope,
+				periodStartParam,
+				periodEndParam,
 				pageable,
 			).map { row ->
 				CommunityPostListRow(
@@ -263,6 +274,8 @@ class CommunityPostService(
 				normalizedTagName,
 				normalizedKeyword,
 				normalizedSearchScope,
+				periodStartParam,
+				periodEndParam,
 				pageable,
 			)
 		}
@@ -270,16 +283,27 @@ class CommunityPostService(
 		return buildSummaryPage(result)
 	}
 
-	// 마이페이지 "내가 쓴 글" 탭 — 카테고리/검색 필터 없이 본인 글만 작성일 역순으로, 본인이
-	// 소프트 삭제한 글도 함께 보여준다(deletedAt 채워서 내려주고 삭제 표시는 프론트에서).
+	// 마이페이지 "내가 쓴 글" 탭 — 본인 글만 작성일 역순으로, 본인이 소프트 삭제한 글도 함께
+	// 보여준다(deletedAt 채워서 내려주고 삭제 표시는 프론트에서). keyword/기간 필터는 getPosts와
+	// 동일한 관례(둘 다 null이면 필터 없음).
 	@Transactional(readOnly = true)
 	fun getMyPosts(
 		authorId: UUID,
+		keyword: String?,
+		periodStart: LocalDate?,
+		periodEnd: LocalDate?,
 		page: Int,
 		size: Int,
 	): PageResponse<CommunityPostSummaryResponse> {
+		val normalizedKeyword = keyword?.trim()?.takeIf { it.isNotEmpty() }
 		val pageable = PageRequest.of(page.coerceAtLeast(0), size.coerceIn(MIN_PAGE_SIZE, MAX_PAGE_SIZE))
-		val result = communityPostRepository.findByAuthorIdIncludingDeletedOrderByCreatedAtDesc(authorId, pageable)
+		val result = communityPostRepository.findByAuthorIdIncludingDeletedOrderByCreatedAtDesc(
+			authorId,
+			normalizedKeyword,
+			periodStart?.toStartOfDayInstant(),
+			periodEnd?.toExclusiveEndOfDayInstant(),
+			pageable,
+		)
 			.map { row ->
 				CommunityPostListRow(
 					postId = row.postId,

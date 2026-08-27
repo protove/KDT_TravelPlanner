@@ -230,6 +230,53 @@ class TravelListControllerIntegrationTest(
 	}
 
 	@Test
+	fun `periodStart and periodEnd narrow results to travels whose own date range overlaps the query period`() {
+		val requester = saveUser("period-requester")
+		val inside = saveTravel(
+			requester,
+			"기간 안에 있는 여행",
+			UUID.randomUUID(),
+			startDate = LocalDate.parse("2026-08-10"),
+			endDate = LocalDate.parse("2026-08-15"),
+		)
+		// 여행 기간이 조회 구간과 걸쳐만 있어도(겹침) 포함돼야 한다 — 완전 포함이 아니어도 됨.
+		val overlapping = saveTravel(
+			requester,
+			"겹치기만 하는 여행",
+			UUID.randomUUID(),
+			startDate = LocalDate.parse("2026-07-28"),
+			endDate = LocalDate.parse("2026-08-02"),
+		)
+		saveTravel(
+			requester,
+			"기간 밖 여행",
+			UUID.randomUUID(),
+			startDate = LocalDate.parse("2026-09-01"),
+			endDate = LocalDate.parse("2026-09-05"),
+		)
+
+		mockMvc.get("/api/v1/travels") {
+			header(HttpHeaders.AUTHORIZATION, bearer(requester))
+			param("periodStart", "2026-08-01")
+			param("periodEnd", "2026-08-31")
+		}.andExpect {
+			status { isOk() }
+			jsonPath("$.data.totalElements", equalTo(2))
+			jsonPath("$.data.content[*].travelId") {
+				org.hamcrest.Matchers.containsInAnyOrder(inside.id.toString(), overlapping.id.toString())
+			}
+		}
+
+		// 기간 파라미터를 아예 안 보내면(전체 기간) 셋 다 나온다.
+		mockMvc.get("/api/v1/travels") {
+			header(HttpHeaders.AUTHORIZATION, bearer(requester))
+		}.andExpect {
+			status { isOk() }
+			jsonPath("$.data.totalElements", equalTo(3))
+		}
+	}
+
+	@Test
 	fun `rejects unauthenticated and invalid pagination requests`() {
 		mockMvc.get("/api/v1/travels")
 			.andExpect {
@@ -311,13 +358,15 @@ class TravelListControllerIntegrationTest(
 		owner: User,
 		title: String,
 		travelId: UUID,
+		startDate: LocalDate = LocalDate.parse("2026-08-01"),
+		endDate: LocalDate = LocalDate.parse("2026-08-04"),
 	): Travel = travelRepository.saveAndFlush(
 		Travel(
 			id = travelId,
 			owner = owner,
 			title = title,
-			startDate = LocalDate.parse("2026-08-01"),
-			endDate = LocalDate.parse("2026-08-04"),
+			startDate = startDate,
+			endDate = endDate,
 		),
 	)
 

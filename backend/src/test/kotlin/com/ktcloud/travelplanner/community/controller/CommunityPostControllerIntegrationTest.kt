@@ -690,6 +690,34 @@ class CommunityPostControllerIntegrationTest(
 		}
 	}
 
+	@Test
+	fun `periodStart and periodEnd narrow the public list to posts created within that window`() {
+		val author = saveUser("period-author")
+		val inside = savePost(author, title = "기간 안 글")
+		val outside = savePost(author, title = "기간 밖 글")
+		setCreatedAt(inside.id, Instant.parse("2026-08-15T00:00:00Z"))
+		setCreatedAt(outside.id, Instant.parse("2026-09-15T00:00:00Z"))
+
+		mockMvc.get("/api/v1/community/posts") {
+			param("periodStart", "2026-08-01")
+			param("periodEnd", "2026-08-31")
+		}.andExpect {
+			status { isOk() }
+			jsonPath("$.data.totalElements", equalTo(1))
+			jsonPath("$.data.content[0].title", equalTo("기간 안 글"))
+		}
+
+		mockMvc.get("/api/v1/community/posts") {
+			param("sort", "popular")
+			param("periodStart", "2026-08-01")
+			param("periodEnd", "2026-08-31")
+		}.andExpect {
+			status { isOk() }
+			jsonPath("$.data.totalElements", equalTo(1))
+			jsonPath("$.data.content[0].title", equalTo("기간 안 글"))
+		}
+	}
+
 	private fun bearer(user: User): String =
 		"Bearer ${jwtTokenService.issueAccessToken(requireNotNull(user.id)).value}"
 

@@ -489,7 +489,7 @@ class CommunityPostServiceTest {
 		val postId1 = UUID.randomUUID()
 		val postId2 = UUID.randomUUID()
 		val pageable = PageRequest.of(0, 10)
-		`when`(communityPostRepository.findPostsOrderByCreatedAt(null, null, null, "ALL", pageable))
+		`when`(communityPostRepository.findPostsOrderByCreatedAt(null, null, null, "ALL", null, null, pageable))
 			.thenReturn(PageImpl(listOf(listRow(postId1), listRow(postId2)), pageable, 2))
 		`when`(communityPostRepository.findTagNamesByPostIds(listOf(postId1, postId2)))
 			.thenReturn(
@@ -499,61 +499,61 @@ class CommunityPostServiceTest {
 				),
 			)
 
-		val response = service.getPosts(null, null, null, null, null, 0, 10)
+		val response = service.getPosts(null, null, null, null, null, null, null, 0, 10)
 
 		assertEquals(listOf("부산", "맛집"), response.content[0].tags)
 		assertEquals(emptyList(), response.content[1].tags)
 		assertEquals(0L, response.content[0].reactionCount)
 		assertEquals(0L, response.content[0].commentCount)
-		verify(communityPostRepository, never()).findPostsOrderByPopularity(null, null, null, "ALL", pageable)
+		verify(communityPostRepository, never()).findPostsOrderByPopularity(null, null, null, "ALL", null, null, pageable)
 	}
 
 	@Test
 	fun `getPosts orders by popularity when sort is popular`() {
 		val pageable = PageRequest.of(0, 10)
-		`when`(communityPostRepository.findPostsOrderByPopularity(null, null, null, "ALL", pageable))
+		`when`(communityPostRepository.findPostsOrderByPopularity(null, null, null, "ALL", null, null, pageable))
 			.thenReturn(PageImpl(emptyList(), pageable, 0))
 
-		service.getPosts(null, null, null, null, "popular", 0, 10)
+		service.getPosts(null, null, null, null, "popular", null, null, 0, 10)
 
-		verify(communityPostRepository).findPostsOrderByPopularity(null, null, null, "ALL", pageable)
-		verify(communityPostRepository, never()).findPostsOrderByCreatedAt(null, null, null, "ALL", pageable)
+		verify(communityPostRepository).findPostsOrderByPopularity(null, null, null, "ALL", null, null, pageable)
+		verify(communityPostRepository, never()).findPostsOrderByCreatedAt(null, null, null, "ALL", null, null, pageable)
 	}
 
 	@Test
 	fun `getPosts clamps size to the 1 to 50 range`() {
 		val minPageable = PageRequest.of(0, 1)
 		val maxPageable = PageRequest.of(0, 50)
-		`when`(communityPostRepository.findPostsOrderByCreatedAt(null, null, null, "ALL", minPageable))
+		`when`(communityPostRepository.findPostsOrderByCreatedAt(null, null, null, "ALL", null, null, minPageable))
 			.thenReturn(PageImpl(emptyList(), minPageable, 0))
-		`when`(communityPostRepository.findPostsOrderByCreatedAt(null, null, null, "ALL", maxPageable))
+		`when`(communityPostRepository.findPostsOrderByCreatedAt(null, null, null, "ALL", null, null, maxPageable))
 			.thenReturn(PageImpl(emptyList(), maxPageable, 0))
 
-		service.getPosts(null, null, null, null, null, 0, 0)
-		service.getPosts(null, null, null, null, null, 0, 999)
+		service.getPosts(null, null, null, null, null, null, null, 0, 0)
+		service.getPosts(null, null, null, null, null, null, null, 0, 999)
 
-		verify(communityPostRepository).findPostsOrderByCreatedAt(null, null, null, "ALL", minPageable)
-		verify(communityPostRepository).findPostsOrderByCreatedAt(null, null, null, "ALL", maxPageable)
+		verify(communityPostRepository).findPostsOrderByCreatedAt(null, null, null, "ALL", null, null, minPageable)
+		verify(communityPostRepository).findPostsOrderByCreatedAt(null, null, null, "ALL", null, null, maxPageable)
 	}
 
 	@Test
 	fun `getPosts trims blank filters down to null before querying`() {
 		val pageable = PageRequest.of(0, 10)
-		`when`(communityPostRepository.findPostsOrderByCreatedAt(null, null, null, "ALL", pageable))
+		`when`(communityPostRepository.findPostsOrderByCreatedAt(null, null, null, "ALL", null, null, pageable))
 			.thenReturn(PageImpl(emptyList(), pageable, 0))
 
-		service.getPosts("  ", "", "   ", null, null, 0, 10)
+		service.getPosts("  ", "", "   ", null, null, null, null, 0, 10)
 
-		verify(communityPostRepository).findPostsOrderByCreatedAt(null, null, null, "ALL", pageable)
+		verify(communityPostRepository).findPostsOrderByCreatedAt(null, null, null, "ALL", null, null, pageable)
 	}
 
 	@Test
 	fun `getPosts skips the tag lookup when there are no results`() {
 		val pageable = PageRequest.of(0, 10)
-		`when`(communityPostRepository.findPostsOrderByCreatedAt(null, null, null, "ALL", pageable))
+		`when`(communityPostRepository.findPostsOrderByCreatedAt(null, null, null, "ALL", null, null, pageable))
 			.thenReturn(PageImpl(emptyList(), pageable, 0))
 
-		service.getPosts(null, null, null, null, null, 0, 10)
+		service.getPosts(null, null, null, null, null, null, null, 0, 10)
 
 		verify(communityPostRepository, never()).findTagNamesByPostIds(emptyList())
 	}
@@ -561,23 +561,55 @@ class CommunityPostServiceTest {
 	@Test
 	fun `getPosts uppercases a valid searchScope before querying`() {
 		val pageable = PageRequest.of(0, 10)
-		`when`(communityPostRepository.findPostsOrderByCreatedAt(null, null, "부산", "AUTHOR", pageable))
+		`when`(communityPostRepository.findPostsOrderByCreatedAt(null, null, "부산", "AUTHOR", null, null, pageable))
 			.thenReturn(PageImpl(emptyList(), pageable, 0))
 
-		service.getPosts(null, null, "부산", "author", null, 0, 10)
+		service.getPosts(null, null, "부산", "author", null, null, null, 0, 10)
 
-		verify(communityPostRepository).findPostsOrderByCreatedAt(null, null, "부산", "AUTHOR", pageable)
+		verify(communityPostRepository).findPostsOrderByCreatedAt(null, null, "부산", "AUTHOR", null, null, pageable)
 	}
 
 	@Test
 	fun `getPosts falls back to ALL for a searchScope outside the whitelist`() {
 		val pageable = PageRequest.of(0, 10)
-		`when`(communityPostRepository.findPostsOrderByCreatedAt(null, null, "부산", "ALL", pageable))
+		`when`(communityPostRepository.findPostsOrderByCreatedAt(null, null, "부산", "ALL", null, null, pageable))
 			.thenReturn(PageImpl(emptyList(), pageable, 0))
 
-		service.getPosts(null, null, "부산", "unknown-scope", null, 0, 10)
+		service.getPosts(null, null, "부산", "unknown-scope", null, null, null, 0, 10)
 
-		verify(communityPostRepository).findPostsOrderByCreatedAt(null, null, "부산", "ALL", pageable)
+		verify(communityPostRepository).findPostsOrderByCreatedAt(null, null, "부산", "ALL", null, null, pageable)
+	}
+
+	@Test
+	fun `getPosts converts periodStart and periodEnd LocalDate bounds to UTC instant boundaries`() {
+		val pageable = PageRequest.of(0, 10)
+		val periodStart = java.time.LocalDate.parse("2026-08-01")
+		val periodEnd = java.time.LocalDate.parse("2026-08-31")
+		val expectedStartInstant = "2026-08-01T00:00:00Z"
+		val expectedEndInstant = "2026-09-01T00:00:00Z"
+		`when`(
+			communityPostRepository.findPostsOrderByCreatedAt(
+				null,
+				null,
+				null,
+				"ALL",
+				expectedStartInstant,
+				expectedEndInstant,
+				pageable,
+			),
+		).thenReturn(PageImpl(emptyList(), pageable, 0))
+
+		service.getPosts(null, null, null, null, null, periodStart, periodEnd, 0, 10)
+
+		verify(communityPostRepository).findPostsOrderByCreatedAt(
+			null,
+			null,
+			null,
+			"ALL",
+			expectedStartInstant,
+			expectedEndInstant,
+			pageable,
+		)
 	}
 
 	private fun listRow(

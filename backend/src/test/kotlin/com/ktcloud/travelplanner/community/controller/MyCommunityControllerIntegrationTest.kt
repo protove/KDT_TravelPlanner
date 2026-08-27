@@ -94,6 +94,43 @@ class MyCommunityControllerIntegrationTest(
 	}
 
 	@Test
+	fun `GET me posts filters by keyword across title and body preview`() {
+		val requester = saveUser("me-posts-keyword-requester")
+		val matchesTitle = savePost(requester, "부산 여행 후기")
+		val other = savePost(requester, "완전 무관한 글")
+		setCreatedAt(matchesTitle.id, Instant.parse("2026-08-01T00:00:00Z"))
+		setCreatedAt(other.id, Instant.parse("2026-08-02T00:00:00Z"))
+
+		mockMvc.get("/api/v1/community/me/posts") {
+			header(HttpHeaders.AUTHORIZATION, bearer(requester))
+			param("keyword", "부산")
+		}.andExpect {
+			status { isOk() }
+			jsonPath("$.data.totalElements", equalTo(1))
+			jsonPath("$.data.content[0].postId", equalTo(matchesTitle.id.toString()))
+		}
+	}
+
+	@Test
+	fun `GET me posts filters by periodStart and periodEnd against createdAt`() {
+		val requester = saveUser("me-posts-period-requester")
+		val inside = savePost(requester, "기간 안")
+		val outside = savePost(requester, "기간 밖")
+		setCreatedAt(inside.id, Instant.parse("2026-08-15T00:00:00Z"))
+		setCreatedAt(outside.id, Instant.parse("2026-09-15T00:00:00Z"))
+
+		mockMvc.get("/api/v1/community/me/posts") {
+			header(HttpHeaders.AUTHORIZATION, bearer(requester))
+			param("periodStart", "2026-08-01")
+			param("periodEnd", "2026-08-31")
+		}.andExpect {
+			status { isOk() }
+			jsonPath("$.data.totalElements", equalTo(1))
+			jsonPath("$.data.content[0].postId", equalTo(inside.id.toString()))
+		}
+	}
+
+	@Test
 	fun `GET me posts requires authentication`() {
 		mockMvc.get("/api/v1/community/me/posts")
 			.andExpect {
@@ -179,6 +216,35 @@ class MyCommunityControllerIntegrationTest(
 			jsonPath("$.data.totalElements", equalTo(1))
 			jsonPath("$.data.content[0].content", equalTo("지울 댓글"))
 			jsonPath("$.data.content[0].deletedAt", notNullValue())
+		}
+	}
+
+	@Test
+	fun `GET me comments filters by keyword across content and post title`() {
+		val requester = saveUser("me-comments-keyword-requester")
+		val post = savePost(requester, "부산 여행기")
+
+		mockMvc.post("/api/v1/community/posts/${post.id}/comments") {
+			header(HttpHeaders.AUTHORIZATION, bearer(requester))
+			contentType = MediaType.APPLICATION_JSON
+			content = """{"content": "완전 무관한 댓글"}"""
+		}.andExpect { status { isOk() } }
+
+		mockMvc.get("/api/v1/community/me/comments") {
+			header(HttpHeaders.AUTHORIZATION, bearer(requester))
+			param("keyword", "부산")
+		}.andExpect {
+			status { isOk() }
+			jsonPath("$.data.totalElements", equalTo(1))
+			jsonPath("$.data.content[0].postTitle", equalTo("부산 여행기"))
+		}
+
+		mockMvc.get("/api/v1/community/me/comments") {
+			header(HttpHeaders.AUTHORIZATION, bearer(requester))
+			param("keyword", "전혀-매치안됨")
+		}.andExpect {
+			status { isOk() }
+			jsonPath("$.data.totalElements", equalTo(0))
 		}
 	}
 

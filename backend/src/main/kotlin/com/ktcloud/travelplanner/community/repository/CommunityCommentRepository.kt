@@ -85,6 +85,7 @@ interface CommunityCommentRepository : JpaRepository<CommunityComment, UUID> {
 	// 보여주기 위해 CommunityComment/CommunityPost 양쪽의 @SQLRestriction을 우회하는 네이티브
 	// 쿼리로 조회한다(CommunityPostRepository.findByAuthorIdIncludingDeletedOrderByCreatedAtDesc와
 	// 동일한 패턴).
+	// keyword는 댓글 내용/글 제목을 훑고, periodStart/periodEnd는 댓글 작성일(created_at) 기준.
 	@Query(
 		value = """
 			SELECT
@@ -99,13 +100,33 @@ interface CommunityCommentRepository : JpaRepository<CommunityComment, UUID> {
 			FROM community_comment comment
 			JOIN community_post post ON post.id = comment.post_id
 			WHERE comment.author_id = :authorId
+				AND (CAST(:periodStart AS timestamptz) IS NULL OR comment.created_at >= CAST(:periodStart AS timestamptz))
+				AND (CAST(:periodEnd AS timestamptz) IS NULL OR comment.created_at < CAST(:periodEnd AS timestamptz))
+				AND (:keyword IS NULL OR (
+					LOWER(comment.content) LIKE LOWER(CONCAT('%', :keyword, '%'))
+					OR LOWER(post.title) LIKE LOWER(CONCAT('%', :keyword, '%'))
+				))
 			ORDER BY comment.created_at DESC
 		""",
-		countQuery = "SELECT COUNT(*) FROM community_comment WHERE author_id = :authorId",
+		countQuery = """
+			SELECT COUNT(*)
+			FROM community_comment comment
+			JOIN community_post post ON post.id = comment.post_id
+			WHERE comment.author_id = :authorId
+				AND (CAST(:periodStart AS timestamptz) IS NULL OR comment.created_at >= CAST(:periodStart AS timestamptz))
+				AND (CAST(:periodEnd AS timestamptz) IS NULL OR comment.created_at < CAST(:periodEnd AS timestamptz))
+				AND (:keyword IS NULL OR (
+					LOWER(comment.content) LIKE LOWER(CONCAT('%', :keyword, '%'))
+					OR LOWER(post.title) LIKE LOWER(CONCAT('%', :keyword, '%'))
+				))
+		""",
 		nativeQuery = true,
 	)
 	fun findByAuthorIdIncludingDeletedOrderByCreatedAtDesc(
 		@Param("authorId") authorId: UUID,
+		@Param("keyword") keyword: String?,
+		@Param("periodStart") periodStart: String?,
+		@Param("periodEnd") periodEnd: String?,
 		pageable: Pageable,
 	): Page<MyCommentRow>
 }
