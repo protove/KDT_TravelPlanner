@@ -31,7 +31,10 @@ REQUIRED_TOP_LEVEL_FIELDS = (
 )
 
 REQUIRED_SCENARIOS = ("smoke", "ramp", "baseline", "spike")
-CAPACITY_STRESS_PROFILE_VERSION = "aws-ec2-eks-capacity-stress-v1.0"
+CAPACITY_STRESS_PROFILE_VERSIONS = {
+    "aws-ec2-eks-capacity-stress-v1.0",
+    "aws-ec2-eks-capacity-stress-v1.1",
+}
 
 
 def load_profile(path):
@@ -105,7 +108,7 @@ def validate(profile):
         _validate_mix_sums_to_100(request_mix["normal"], "requestMix.normal")
         _require("soak" in request_mix, "requestMix.soak is missing")
         _validate_mix_sums_to_100(request_mix["soak"], "requestMix.soak")
-    if profile.get("profileVersion") == CAPACITY_STRESS_PROFILE_VERSION:
+    if profile.get("profileVersion") in CAPACITY_STRESS_PROFILE_VERSIONS:
         _validate_capacity_stress(profile)
 
     return True

@@ -9,6 +9,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).parents[2]
 PROFILE = ROOT / "load-tests/aws/profiles/ec2-eks-capacity-stress-v1.0.json"
+PROFILE_V11 = ROOT / "load-tests/aws/profiles/ec2-eks-capacity-stress-v1.1.json"
 VALIDATOR_PATH = ROOT / "scripts/loadtest/aws/validate-aws-profile.py"
 SPEC = importlib.util.spec_from_file_location("validate_aws_profile_capacity", VALIDATOR_PATH)
 MODULE = importlib.util.module_from_spec(SPEC)
@@ -57,6 +58,16 @@ class CapacityStressProfileTest(unittest.TestCase):
         profile["capacityStress"]["runnerRepairLimit"] = 2
         with self.assertRaisesRegex(ValueError, "exactly one"):
             MODULE.validate(profile)
+
+    def test_v11_profile_is_valid_and_preserves_the_same_stress_bytes(self) -> None:
+        profile = json.loads(PROFILE_V11.read_text(encoding="utf-8"))
+        self.assertTrue(MODULE.validate(profile))
+        stress = profile["capacityStress"]
+        self.assertEqual(stress["stageMultipliers"], [1, 2, 4, 8])
+        self.assertEqual(stress["stageDurations"], ["5m", "8m", "8m", "8m"])
+        self.assertEqual(stress["maxVUs"], 320)
+        self.assertEqual(stress["seededUsers"], 320)
+        self.assertEqual(profile["sloVersion"], "v1.1-frozen")
 
 
 if __name__ == "__main__":

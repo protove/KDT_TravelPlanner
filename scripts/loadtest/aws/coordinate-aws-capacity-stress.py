@@ -134,22 +134,30 @@ def terminate_process(process: subprocess.Popen, event_handle, reason: str) -> N
             process.wait(timeout=10)
 
 
-def parse_args() -> argparse.Namespace:
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--run-dir", required=True, type=Path)
     parser.add_argument("--snapshot-file", type=Path)
     parser.add_argument("--capacity-stability-seconds", type=int, default=120)
+    parser.add_argument(
+        "--complete-schedule-seconds",
+        type=int,
+        default=1740,
+        help="Expected 1x/2x/4x/8x schedule length; a clean exit at or beyond it is HARD_CEILING.",
+    )
     parser.add_argument("--hard-time-ceiling-seconds", type=int, default=2100)
     parser.add_argument("--poll-seconds", type=float, default=10.0)
     parser.add_argument("--", dest="separator", nargs="?")
     parser.add_argument("command", nargs=argparse.REMAINDER)
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     if args.command and args.command[0] == "--":
         args.command = args.command[1:]
     if not args.command:
         parser.error("a workload command is required after the coordinator options")
-    if args.capacity_stability_seconds < 1 or args.hard_time_ceiling_seconds < 1:
+    if args.capacity_stability_seconds < 1 or args.complete_schedule_seconds < 1 or args.hard_time_ceiling_seconds < 1:
         parser.error("terminal durations must be positive")
+    if args.complete_schedule_seconds > args.hard_time_ceiling_seconds:
+        parser.error("complete schedule cannot exceed the hard time ceiling")
     if args.poll_seconds <= 0:
         parser.error("poll interval must be positive")
     return args
@@ -187,7 +195,16 @@ def main() -> int:
         exit_code = process.wait()
         elapsed = time.monotonic() - started
         if reason is None:
-            reason = "HARD_CEILING" if elapsed >= args.hard_time_ceiling_seconds else "WORKLOAD_COMPLETED"
+            # A zero-exit after the preregistered 29-minute schedule is the
+            # normal terminal, not an invalid early completion.  Anything
+            # shorter remains WORKLOAD_COMPLETED and the evaluator rejects it.
+            reason = (
+                "HARD_CEILING"
+                if elapsed >= args.complete_schedule_seconds and exit_code == 0
+                else "HARD_CEILING"
+                if elapsed >= args.hard_time_ceiling_seconds
+                else "WORKLOAD_COMPLETED"
+            )
         append_event(events, "CONTROLLER_END", terminalReason=reason, workloadExitCode=exit_code, elapsedSeconds=round(elapsed, 3))
 
     write_json(result_path, {
@@ -197,6 +214,7 @@ def main() -> int:
         "workloadExitCode": exit_code,
         "elapsedSeconds": round(elapsed, 3),
         "capacityStabilitySeconds": args.capacity_stability_seconds,
+        "completeScheduleSeconds": args.complete_schedule_seconds,
         "hardTimeCeilingSeconds": args.hard_time_ceiling_seconds,
         "snapshotFile": str(snapshot_file),
         "workloadCommandRecorded": True,

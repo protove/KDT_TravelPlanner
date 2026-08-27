@@ -24,6 +24,18 @@ def utc(seconds: int) -> str:
 
 
 class CapacityStressCoordinatorTest(unittest.TestCase):
+    def test_clean_exit_is_hard_ceiling_only_after_registered_schedule(self) -> None:
+        args = MODULE.parse_args([
+            "--run-dir", "/tmp/scrum43-stress",
+            "--complete-schedule-seconds", "100",
+            "--hard-time-ceiling-seconds", "120",
+            "--poll-seconds", "1",
+            "--",
+            "echo", "ok",
+        ])
+        self.assertEqual(args.complete_schedule_seconds, 100)
+        self.assertEqual(args.hard_time_ceiling_seconds, 120)
+
     def test_capacity_terminal_requires_the_registered_stability_window(self) -> None:
         snapshots = [
             {"ts": utc(0), "capacityHealthy": True, "logicalCapacity": 4},
