@@ -3,6 +3,7 @@
 import * as React from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/atoms/Button";
+import { Checkbox } from "@/components/atoms/Checkbox";
 import { SearchBar } from "@/components/molecules/SearchBar";
 import { SearchPeriodSelect } from "@/components/molecules/SearchPeriodSelect";
 import { CommunityPostList } from "@/components/organisms/CommunityPostList";
@@ -34,11 +35,13 @@ function MyPostsPanel({ accessToken }: MyPostsPanelProps) {
   const [keyword, setKeyword] = React.useState("");
   const [keywordDraft, setKeywordDraft] = React.useState("");
   const [period, setPeriod] = React.useState<SearchPeriodPreset>(DEFAULT_SEARCH_PERIOD);
+  // 기본값은 false — 내가 삭제한 글은 마이페이지에서도 기본으로는 숨긴다.
+  const [includeDeleted, setIncludeDeleted] = React.useState(false);
 
   const sentinelRef = React.useRef<HTMLDivElement>(null);
 
   const { periodStart, periodEnd } = resolveSearchPeriod(period);
-  const requestKey = `${accessToken}:${keyword}:${period}:${refreshKey}`;
+  const requestKey = `${accessToken}:${keyword}:${period}:${includeDeleted}:${refreshKey}`;
   const isLoading = completedRequestKey !== requestKey;
 
   React.useEffect(() => {
@@ -52,6 +55,7 @@ function MyPostsPanel({ accessToken }: MyPostsPanelProps) {
       keyword: keyword.trim() || undefined,
       periodStart,
       periodEnd,
+      includeDeleted,
       page: 0,
       size: PAGE_SIZE,
     })
@@ -75,7 +79,7 @@ function MyPostsPanel({ accessToken }: MyPostsPanelProps) {
       isCurrentRequest = false;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [accessToken, keyword, refreshKey, requestKey]);
+  }, [accessToken, keyword, includeDeleted, refreshKey, requestKey]);
 
   const loadMore = React.useCallback(() => {
     if (isLast || loadingMore || error || isLoading) return;
@@ -87,6 +91,7 @@ function MyPostsPanel({ accessToken }: MyPostsPanelProps) {
       keyword: keyword.trim() || undefined,
       periodStart,
       periodEnd,
+      includeDeleted,
       page: nextPage,
       size: PAGE_SIZE,
     })
@@ -98,7 +103,7 @@ function MyPostsPanel({ accessToken }: MyPostsPanelProps) {
       .catch(() => setIsLast(true))
       .finally(() => setLoadingMore(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [accessToken, keyword, period, page, isLast, loadingMore, error, isLoading]);
+  }, [accessToken, keyword, period, includeDeleted, page, isLast, loadingMore, error, isLoading]);
 
   React.useEffect(() => {
     const el = sentinelRef.current;
@@ -127,7 +132,7 @@ function MyPostsPanel({ accessToken }: MyPostsPanelProps) {
 
   return (
     <>
-      <div className="mb-4 flex gap-2">
+      <div className="mb-3 flex gap-2">
         <SearchPeriodSelect value={period} onValueChange={setPeriod} />
         <SearchBar
           placeholder="내가 쓴 글 검색 (Enter로 검색)"
@@ -137,6 +142,14 @@ function MyPostsPanel({ accessToken }: MyPostsPanelProps) {
           containerClassName="flex-1"
         />
       </div>
+
+      <label className="mb-4 flex w-fit cursor-pointer items-center gap-2 text-sm text-muted-foreground">
+        <Checkbox
+          checked={includeDeleted}
+          onCheckedChange={(checked) => setIncludeDeleted(checked === true)}
+        />
+        삭제한 글도 보기
+      </label>
 
       {error ? (
         <div role="alert" className="flex flex-col items-center gap-3 py-16 text-center">

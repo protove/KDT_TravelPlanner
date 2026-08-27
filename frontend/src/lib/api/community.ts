@@ -176,6 +176,8 @@ export interface MyPageListParams {
   /** YYYY-MM-DD. 둘 다 생략하면 전체 기간. */
   periodStart?: string;
   periodEnd?: string;
+  /** 기본 false — 본인이 소프트 삭제한 글/댓글은 생략하면 안 보인다. */
+  includeDeleted?: boolean;
   page?: number;
   size?: number;
 }
@@ -189,6 +191,7 @@ export async function listMyPosts(
   if (params.keyword) searchParams.set("keyword", params.keyword);
   if (params.periodStart) searchParams.set("periodStart", params.periodStart);
   if (params.periodEnd) searchParams.set("periodEnd", params.periodEnd);
+  if (params.includeDeleted) searchParams.set("includeDeleted", "true");
   if (params.page != null) searchParams.set("page", String(params.page));
   if (params.size != null) searchParams.set("size", String(params.size));
   const qs = searchParams.toString();
@@ -207,6 +210,7 @@ export async function listMyComments(
   if (params.keyword) searchParams.set("keyword", params.keyword);
   if (params.periodStart) searchParams.set("periodStart", params.periodStart);
   if (params.periodEnd) searchParams.set("periodEnd", params.periodEnd);
+  if (params.includeDeleted) searchParams.set("includeDeleted", "true");
   if (params.page != null) searchParams.set("page", String(params.page));
   if (params.size != null) searchParams.set("size", String(params.size));
   const qs = searchParams.toString();
