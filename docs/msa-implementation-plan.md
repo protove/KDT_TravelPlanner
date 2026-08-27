@@ -25,7 +25,27 @@ Location은 이번 스코프에서 별도 서비스로 배포하지 않는다. �
 
 - 스키마: `identity`, `community`, `travel`, `location`
 - 각 서비스는 자기 스키마만 접근 가능 (다른 스키마 접근 시 DB 권한 에러 — 실수 방지용 안전망)
-- 예외 없음: Travel도 자기 스키마(`travel`)만 접근하고, User/Location 데이터는 반드시 API로 조회 (아래 통신 패턴 참고)
+- **예외 하나**: Community/Travel의 `author: User`/`owner: User` 엔티티 관계와 생성 시점 `userRepository.findById()` 호출은 이번 스코프에서 안 바꾸므로(엔티티 완전분리는 스트레치 목표), 두 서비스 DB 계정에 `identity.user_table`에 대한 **SELECT 권한만** 예외로 부여한다. **정확한 표현**: "Community/Travel이 User 데이터를 소유한다"가 아니라 "User 소유권은 Identity에 있고, PoC 기간 동안 조회 목적의 임시 SELECT 예외를 뒀다" — 실제 HTTP Adapter 전환 완료 시 이 GRANT는 제거한다. 나머지 스키마는 예외 없이 완전히 막는다.
+
+### 의존성 순서 (날짜 일정과 별개로, 뭐가 뭘 막는지)
+
+```
+[1] 서비스 경계/API Contract 확정   ← 완료
+      ↓
+[2] Port + JPA Adapter (임시)      ← Community 완료, Travel 진행 필요
+      ↓
+[3] 서비스 코드 실제 분리 (스캐폴딩)
+      ↓
+[4] DB 스키마 + 권한 분리 (User 읽기 예외 포함)   ← [2]가 끝난 뒤에! 순서 바뀌면 스키마 잠그는 순간 Port 없는 코드가 다 깨짐
+      ↓
+[5] HTTP Adapter로 교체 (Identity API 뜨면)
+      ↓
+[6] kind 통합 배포 → [7] ArgoCD 연결 → [8] 부하/장애 격리 비교 테스트
+```
+
+### 공통 인증 필터 처리
+
+`JwtAuthenticationFilter`가 매 요청마다 `userRepository.existsById(userId)`로 DB 조회를 함 — Identity 분리되면 Community/Travel에 남는 사본이 깨짐. **결정: 존재 확인 체크를 제거하고 JWT 서명 검증만 한다.** 트레이드오프(탈퇴 유저가 만료 전 토큰으로 잠깐 더 접근 가능)는 PoC 스코프에서 허용, 발표 시 명시.
 
 ### 통신 패턴 (모든 서비스 쌍에 동일 적용)
 
@@ -59,9 +79,10 @@ Location은 이번 스코프에서 별도 서비스로 배포하지 않는다. �
 
 ### 본인 — 사전작업 + Identity + ArgoCD
 
+- [x] `PatchField`를 `user/dto`에서 `global/dto`로 이동 — 완료 (Identity가 travel/timeline을 안 깨뜨리게 하는 선행 작업)
 - [x] `community/port/UserLookupPort.kt`, `TravelAccessPort.kt` — 완료
 - [x] `community/adapter/JpaUserLookupAdapter.kt`, `JpaTravelAccessAdapter.kt` — 완료
-- [ ] `CommunityCommentService`/`CommunityPostService`/DTO들을 Port 쓰게 전환 — 진행 중
+- [x] `CommunityCommentService`/`CommunityPostService`/DTO들을 Port 쓰게 전환 — 완료 (단, `getComments`/목록 조회 JPQL은 N+1 방지를 위해 의도적으로 유지)
 - [ ] Travel의 `GET /api/v1/travels/{travelId}/read-access` 엔드포인트 추가
 - [ ] DB 스키마 4개 생성 + 테이블 이동 + 서비스별 계정/GRANT
 - [ ] Identity 전용 서비스 구축 (auth+user 코드 이동, JWT 로직, `GET /api/v1/users/{id}/summary` API)
