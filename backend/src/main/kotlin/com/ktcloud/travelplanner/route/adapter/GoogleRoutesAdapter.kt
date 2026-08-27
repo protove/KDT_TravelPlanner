@@ -2,6 +2,7 @@ package com.ktcloud.travelplanner.route.adapter
 
 import com.ktcloud.travelplanner.global.external.externalHttpRequestFactory
 import com.ktcloud.travelplanner.global.external.hasExternalTimeoutCause
+import com.ktcloud.travelplanner.global.logging.ApplicationLogger
 import com.ktcloud.travelplanner.route.config.GoogleRoutesProperties
 import com.ktcloud.travelplanner.route.exception.GoogleRoutesNotConfiguredException
 import com.ktcloud.travelplanner.route.exception.GoogleRoutesProviderException
@@ -12,7 +13,6 @@ import com.ktcloud.travelplanner.route.port.RouteCalculation
 import com.ktcloud.travelplanner.route.port.RouteCalculationPort
 import com.ktcloud.travelplanner.route.port.RouteCalculationWaypoint
 import com.ktcloud.travelplanner.route.port.RouteLegCalculation
-import org.slf4j.LoggerFactory
 import org.springframework.http.MediaType
 import org.springframework.stereotype.Component
 import org.springframework.web.client.ResourceAccessException
@@ -118,11 +118,6 @@ class GoogleRoutesAdapter(
     private val properties: GoogleRoutesProperties,
 ) : RouteCalculationPort {
 
-    private val logger =
-        LoggerFactory.getLogger(
-            GoogleRoutesAdapter::class.java,
-        )
-
     private val restClient: RestClient =
         restClientBuilder
             .clone()
@@ -200,7 +195,7 @@ class GoogleRoutesAdapter(
         if (
             response.routes.isEmpty()
         ) {
-            logger.warn(
+            ApplicationLogger.warn(
                 "Google Routes returned no route for Place ID waypoints. waypointCount={}, transportationType={}",
                 normalizedPlaceIds.size,
                 transportationType,
@@ -300,7 +295,7 @@ class GoogleRoutesAdapter(
                 segment ==
                 null
             ) {
-                logger.warn(
+                ApplicationLogger.warn(
                     "Google Routes returned no TRANSIT route for preview segment. segmentIndex={}, originPlaceId={}, destinationPlaceId={}",
                     index,
                     origin.googlePlaceId,
@@ -347,7 +342,7 @@ class GoogleRoutesAdapter(
                 }
                 .distinct()
 
-        logger.info(
+        ApplicationLogger.info(
             "Google Routes TRANSIT preview succeeded. waypointCount={}, segmentCount={}, totalDistanceMeters={}, totalDurationSeconds={}",
             normalizedWaypoints.size,
             segments.size,
@@ -426,7 +421,7 @@ class GoogleRoutesAdapter(
          * 2차:
          * 좌표 fallback.
          */
-        logger.info(
+        ApplicationLogger.info(
             "Google Routes returned no TRANSIT route for Place IDs. Retrying with coordinates. segmentIndex={}",
             segmentIndex,
         )
@@ -453,7 +448,7 @@ class GoogleRoutesAdapter(
             return null
         }
 
-        logger.info(
+        ApplicationLogger.info(
             "Google Routes TRANSIT coordinate fallback succeeded. segmentIndex={}",
             segmentIndex,
         )
@@ -481,7 +476,7 @@ class GoogleRoutesAdapter(
             response.routes.size !=
             1
         ) {
-            logger.error(
+            ApplicationLogger.error(
                 "Google Routes returned unexpected TRANSIT route count. segmentIndex={}, expected=1, actual={}",
                 segmentIndex,
                 response.routes.size,
@@ -496,7 +491,7 @@ class GoogleRoutesAdapter(
         val distanceMeters =
             route.distanceMeters
                 ?: run {
-                    logger.error(
+                    ApplicationLogger.error(
                         "Google Routes TRANSIT response is missing distanceMeters. segmentIndex={}",
                         segmentIndex,
                     )
@@ -511,7 +506,7 @@ class GoogleRoutesAdapter(
                     String::isNotBlank,
                 )
                 ?: run {
-                    logger.error(
+                    ApplicationLogger.error(
                         "Google Routes TRANSIT response is missing encodedPolyline. segmentIndex={}",
                         segmentIndex,
                     )
@@ -577,7 +572,7 @@ class GoogleRoutesAdapter(
                     GoogleComputeRoutesResponse::class.java,
                 )
                 ?: run {
-                    logger.error(
+                    ApplicationLogger.error(
                         "Google Routes returned an empty response body.",
                     )
 
@@ -589,7 +584,7 @@ class GoogleRoutesAdapter(
             if (
                 exception.hasExternalTimeoutCause()
             ) {
-                logger.error(
+                ApplicationLogger.error(
                     "Google Routes request timed out.",
                     exception,
                 )
@@ -599,7 +594,7 @@ class GoogleRoutesAdapter(
                 )
             }
 
-            logger.error(
+            ApplicationLogger.error(
                 "Google Routes network request failed.",
                 exception,
             )
@@ -610,7 +605,7 @@ class GoogleRoutesAdapter(
         } catch (
             exception: RestClientResponseException,
         ) {
-            logger.error(
+            ApplicationLogger.error(
                 "Google Routes API rejected request. status={}, body={}",
                 exception.statusCode.value(),
                 exception.responseBodyAsString,
@@ -631,7 +626,7 @@ class GoogleRoutesAdapter(
         } catch (
             exception: RestClientException,
         ) {
-            logger.error(
+            ApplicationLogger.error(
                 "Google Routes RestClient request failed.",
                 exception,
             )
@@ -642,7 +637,7 @@ class GoogleRoutesAdapter(
         } catch (
             exception: IllegalArgumentException,
         ) {
-            logger.error(
+            ApplicationLogger.error(
                 "Google Routes request was invalid.",
                 exception,
             )
@@ -667,7 +662,7 @@ class GoogleRoutesAdapter(
             response.routes.size !=
             1
         ) {
-            logger.error(
+            ApplicationLogger.error(
                 "Google Routes returned unexpected route count. expected=1, actual={}",
                 response.routes.size,
             )
@@ -682,7 +677,7 @@ class GoogleRoutesAdapter(
             route.legs.size !=
             expectedLegCount
         ) {
-            logger.error(
+            ApplicationLogger.error(
                 "Google Routes returned unexpected leg count. expected={}, actual={}",
                 expectedLegCount,
                 route.legs.size,
@@ -694,7 +689,7 @@ class GoogleRoutesAdapter(
         val totalDistanceMeters =
             route.distanceMeters
                 ?: run {
-                    logger.error(
+                    ApplicationLogger.error(
                         "Google Routes response is missing routes.distanceMeters.",
                     )
 
@@ -708,7 +703,7 @@ class GoogleRoutesAdapter(
                     String::isNotBlank,
                 )
                 ?: run {
-                    logger.error(
+                    ApplicationLogger.error(
                         "Google Routes response is missing routes.polyline.encodedPolyline.",
                     )
 
@@ -745,7 +740,7 @@ class GoogleRoutesAdapter(
                     val distanceMeters =
                         leg.distanceMeters
                             ?: run {
-                                logger.error(
+                                ApplicationLogger.error(
                                     "Google Routes response leg is missing distanceMeters. legIndex={}",
                                     index,
                                 )
@@ -831,7 +826,7 @@ class GoogleRoutesAdapter(
                 }
                 ?.dropLast(1)
                 ?: run {
-                    logger.error(
+                    ApplicationLogger.error(
                         "Google Routes returned invalid duration. field={}, value={}",
                         fieldName,
                         duration,
@@ -847,7 +842,7 @@ class GoogleRoutesAdapter(
         } catch (
             exception: ArithmeticException,
         ) {
-            logger.error(
+            ApplicationLogger.error(
                 "Google Routes duration could not be converted. field={}, value={}",
                 fieldName,
                 duration,
@@ -860,7 +855,7 @@ class GoogleRoutesAdapter(
         } catch (
             exception: NumberFormatException,
         ) {
-            logger.error(
+            ApplicationLogger.error(
                 "Google Routes duration has invalid number format. field={}, value={}",
                 fieldName,
                 duration,
