@@ -114,6 +114,24 @@ class CapacityStressEvaluatorTest(unittest.TestCase):
             result = MODULE.evaluate(self.args(root))
             self.assertEqual(result["validity"], "INVALID_TERMINAL_REASON")
 
+    def test_missing_stage_labels_are_backfilled_from_fixed_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.fixture(root)
+            metadata = json.loads((root / "metadata.json").read_text(encoding="utf-8"))
+            metadata["startedAtUtc"] = utc(0)
+            metadata["effectiveInputs"]["stageDurations"] = ["5m", "8m", "8m", "8m"]
+            write_json(root / "metadata.json", metadata)
+            snapshots = [json.loads(line) for line in (root / "snapshots.jsonl").read_text().splitlines()]
+            for item in snapshots:
+                item.pop("stageIndex", None)
+                item.pop("stageMultiplier", None)
+            (root / "snapshots.jsonl").write_text("\n".join(json.dumps(item) for item in snapshots) + "\n", encoding="utf-8")
+            result = MODULE.evaluate(self.args(root))
+            self.assertEqual(result["validity"], "VALID")
+            self.assertEqual(result["stageCurve"][0]["observedSamples"], 3)
+            self.assertEqual(result["stageCurve"][1]["observedSamples"], 0)
+
 
 if __name__ == "__main__":
     unittest.main()

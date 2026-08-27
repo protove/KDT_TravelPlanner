@@ -63,6 +63,51 @@ def number(value: object) -> float | None:
     return result if result == result else None
 
 
+def stage_from_metadata(item: dict, metadata: dict) -> dict:
+    """Backfill stage labels for snapshots collected before observer repair."""
+    if "stageIndex" in item and "stageMultiplier" in item:
+        return item
+    inputs = metadata.get("effectiveInputs") if isinstance(metadata.get("effectiveInputs"), dict) else {}
+    multipliers = inputs.get("stageMultipliers")
+    durations = inputs.get("stageDurations")
+    started = timestamp(metadata.get("startedAtUtc"))
+    if not isinstance(multipliers, list) or not isinstance(durations, list) or len(multipliers) != len(durations) or started is None:
+        return item
+    seconds = []
+    for value in durations:
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            parsed = float(value)
+        elif isinstance(value, str):
+            match = re.fullmatch(r"(\d+(?:\.\d+)?)([smh])", value.strip())
+            if not match:
+                return item
+            parsed = float(match.group(1)) * {"s": 1.0, "m": 60.0, "h": 3600.0}[match.group(2)]
+        else:
+            return item
+        if parsed <= 0:
+            return item
+        seconds.append(parsed)
+    current = timestamp(item.get("ts") or item.get("timestamp"))
+    if current is None:
+        return item
+    elapsed = max(0.0, current - started)
+    cursor = 0.0
+    selected = len(multipliers) - 1
+    for index, duration in enumerate(seconds):
+        if elapsed < cursor + duration:
+            selected = index
+            break
+        cursor += duration
+    enriched = dict(item)
+    enriched["stageIndex"] = selected
+    enriched["stageMultiplier"] = multipliers[selected]
+    try:
+        enriched.setdefault("targetRate", float(inputs.get("baseRate")) * float(multipliers[selected]))
+    except (TypeError, ValueError):
+        pass
+    return enriched
+
+
 def max_runner_values(path: Path) -> tuple[float | None, float | None, int]:
     cpu: list[float] = []
     memory: list[float] = []
@@ -146,6 +191,7 @@ def evaluate(args: argparse.Namespace) -> dict:
         read_json_lines(run_dir / "snapshots.jsonl"),
         key=lambda item: timestamp(item.get("ts") or item.get("timestamp")) or 0,
     )
+    snapshots = [stage_from_metadata(item, metadata) for item in snapshots]
     slo_contract = read_json(Path(args.slo_contract))
     slo = slo_contract.get("baseline", {}) if slo_contract else {}
     metrics = summary_metrics(summary)
