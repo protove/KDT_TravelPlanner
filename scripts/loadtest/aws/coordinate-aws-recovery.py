@@ -268,9 +268,15 @@ def load_config(path: Path) -> dict[str, Any]:
     _require(scenario in SCENARIO_PREFIX, "config scenario must be B-02/R-01/R-03/R-05/R-07")
     run_id = config.get("runId", "")
     _require(bool(RUN_ID_RE.fullmatch(str(run_id))), "config runId is not an approved Recovery run id")
+    # SCRUM-43 comparison runs use compact scenario IDs (``r01``/``r03``),
+    # while the legacy ``aws-*`` IDs retain their historical mapping.  Keep
+    # the accepted forms aligned with RUN_ID_RE; the previous check expanded
+    # ``R-01`` to ``scrum43-r-01`` and rejected every planned ``scrum43-r01``
+    # run before any AWS call was made.
+    compact_scenario = scenario.replace("-", "").lower()
     _require(
         str(run_id).startswith(SCENARIO_PREFIX[scenario])
-        or str(run_id).startswith(f"scrum43-{scenario.lower()}-"),
+        or str(run_id).startswith(f"scrum43-{compact_scenario}-"),
         "config runId prefix does not match scenario",
     )
     _require(bool(APPROVED_REGION_RE.fullmatch(str(config.get("region", "")))), "config region is invalid")

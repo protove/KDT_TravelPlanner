@@ -431,6 +431,47 @@ PY
   echo "[recovery] comparison preflight passed: platform=$TARGET_PLATFORM run=$RUN_ID evidence=$RUN_DIR"
 }
 
+modern_reuse_preflight() {
+  # The coordinator performs the immutable target preflight immediately
+  # before starting the workload.  ``run`` is then invoked by that same
+  # coordinator in the background; repeating the full snapshot would compare
+  # dynamic AWS fields (ASG activity/instance health timestamps) and reject a
+  # valid run as an attempted overwrite.  Reuse only the exact preflight
+  # bundle, and verify its identity inputs before starting k6.  No AWS
+  # mutation or operator recovery action is hidden here.
+  local required
+  for required in metadata.json aws-alb.json aws-target-groups.json aws-target-health.json aws-runner.json aws-runner-tags.json aws-platform.json; do
+    [[ -f "$RUN_DIR/$required" ]] || {
+      echo "comparison run cannot reuse preflight: missing $required" >&2
+      exit 2
+    }
+  done
+  python3 - "$RUN_DIR/metadata.json" "$RUN_ID" "$TARGET_PLATFORM" "$RATE" "$SOURCE_SHA" <<'PY'
+import json
+import math
+import sys
+from pathlib import Path
+
+metadata_path, run_id, platform, rate_raw, source_sha = sys.argv[1:]
+metadata = json.loads(Path(metadata_path).read_text(encoding="utf-8"))
+if metadata.get("scenarioId") != "AWS-RECOVERY-COMPARISON":
+    raise SystemExit("comparison run preflight metadata has an unexpected scenario")
+if metadata.get("runId") != run_id or metadata.get("platform") != platform:
+    raise SystemExit("comparison run preflight metadata does not match action-time inputs")
+try:
+    rate = float(rate_raw)
+except ValueError as error:
+    raise SystemExit("comparison run rate is not numeric") from error
+if not math.isclose(float(metadata.get("rate")), rate, rel_tol=0, abs_tol=1e-9):
+    raise SystemExit("comparison run preflight rate does not match action-time input")
+if metadata.get("sourceCommitSha") != source_sha:
+    raise SystemExit("comparison run preflight source SHA does not match action-time input")
+if not metadata.get("startedAtUtc"):
+    raise SystemExit("comparison run preflight metadata has no start timestamp")
+PY
+  echo "[recovery] comparison preflight reused: platform=$TARGET_PLATFORM run=$RUN_ID evidence=$RUN_DIR"
+}
+
 modern_main() {
   modern_validate_inputs
   RUN_DIR="${AWS_RECOVERY_EVIDENCE_BASE:-$REPOSITORY_ROOT/evidence/aws-recovery}/$RUN_ID"
@@ -441,7 +482,11 @@ modern_main() {
     run)
       [[ -n "$K6_IMAGE" && -f "$DATA_FILE" ]] || { echo "--k6-image and --data-file are required for comparison run" >&2; exit 2; }
       [[ "$K6_IMAGE" =~ @sha256:[0-9a-fA-F]{64}$ ]] || { echo "--k6-image must be digest-pinned" >&2; exit 2; }
-      modern_target_preflight
+      if [[ -f "$RUN_DIR/metadata.json" ]]; then
+        modern_reuse_preflight
+      else
+        modern_target_preflight
+      fi
       export REPOSITORY_ROOT BASE_URL RUN_ID REGION ENVIRONMENT RATE DATA_FILE TARGET_PLATFORM
       export K6_IMAGE_DIGEST="$K6_IMAGE" AWS_RECOVERY_PROFILE_FILE="$PROFILE"
       export AWS_SLO_CONTRACT_FILE="${SLO_CONTRACT:-$REPOSITORY_ROOT/load-tests/aws/contracts/slo-v1.1-candidate.json}"

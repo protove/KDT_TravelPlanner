@@ -277,6 +277,15 @@ class ConfigContractTests(unittest.TestCase):
             with self.assertRaisesRegex(MODULE.CoordinatorError, "prefix"):
                 MODULE.load_config(path)
 
+    def test_config_accepts_compact_scrum43_scenario_id(self) -> None:
+        with TemporaryDirectory() as raw:
+            directory = Path(raw)
+            config = base_config(directory, scenario="R-01", run_id="scrum43-r01-test-1")
+            path = directory / "config.json"
+            path.write_text(json.dumps(config), encoding="utf-8")
+            loaded = MODULE.load_config(path)
+            self.assertEqual(loaded["runId"], "scrum43-r01-test-1")
+
     def test_config_rejects_auto_approve_terraform(self) -> None:
         with TemporaryDirectory() as raw:
             directory = Path(raw)
