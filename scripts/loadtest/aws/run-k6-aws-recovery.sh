@@ -91,15 +91,16 @@ started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 git_sha="$(git -C "$REPOSITORY_ROOT" rev-parse HEAD)"
 measurement_sha="${MEASUREMENT_SOURCE_COMMIT_SHA:-$git_sha}"
 lineage_sha="${SOURCE_LINEAGE_SHA256:-}"
-python3 - "$RUN_DIR/metadata.json" "$RUN_ID" "$started_at" "$git_sha" "$measurement_sha" "$lineage_sha" "$K6_IMAGE_DIGEST" "$RATE" "$REGION" "$ENVIRONMENT" "$TARGET_PLATFORM" "$AWS_RECOVERY_PROFILE_FILE" "$BASE_URL" "${AWS_TARGET_HOST_IPS:-}" <<'PY'
+python3 - "$RUN_DIR/metadata.json" "$RUN_ID" "$started_at" "$git_sha" "$measurement_sha" "$lineage_sha" "$K6_IMAGE_DIGEST" "$RATE" "$REGION" "$ENVIRONMENT" "$TARGET_PLATFORM" "$AWS_RECOVERY_PROFILE_FILE" "$BASE_URL" "${AWS_TARGET_HOST_IPS:-}" "$AWS_SLO_CONTRACT_FILE" <<'PY'
 import hashlib
 import json
 import sys
 from urllib.parse import urlparse
 from pathlib import Path
 
-output, run_id, started_at, commit_sha, measurement_sha, lineage_sha, image, rate, region, environment, platform, profile_path, base_url, target_host_ips_raw = sys.argv[1:]
+output, run_id, started_at, commit_sha, measurement_sha, lineage_sha, image, rate, region, environment, platform, profile_path, base_url, target_host_ips_raw, contract_path = sys.argv[1:]
 profile = json.loads(Path(profile_path).read_text(encoding="utf-8"))
+contract = json.loads(Path(contract_path).read_text(encoding="utf-8"))
 target_host_ips = [value.strip() for value in target_host_ips_raw.split(",") if value.strip()]
 output_path = Path(output)
 metadata = {}
@@ -124,7 +125,8 @@ metadata.update({
     "warmupSeconds": 180,
     "seedVersion": profile["seedVersion"],
     "requestMixVersion": profile["requestMixVersion"],
-    "sloVersion": profile["sloVersion"],
+    "sloVersion": contract["sloVersion"],
+    "sloContractSha256": hashlib.sha256(Path(contract_path).read_bytes()).hexdigest(),
     "profileVersion": profile["profileVersion"],
     "targetHostResolution": {
         "hostname": urlparse(base_url).hostname,

@@ -185,12 +185,15 @@ PY
 }
 
 modern_validate_inputs() {
+  if [[ -z "$SLO_CONTRACT" ]]; then
+    SLO_CONTRACT="$REPOSITORY_ROOT/load-tests/aws/contracts/slo-v1.1-frozen.json"
+  fi
   [[ -n "$RUN_ID" && -n "$REGION" && -n "$ENVIRONMENT" && -n "$EXPECTED_ACCOUNT_ID" \
     && -n "$ALB_ARN" && -n "$TARGET_GROUP_ARN" && -n "$RUNNER_ID" \
     && -n "$BASE_URL" && -n "$RATE" && -n "$SOURCE_SHA" ]] || modern_usage_error
   [[ "$TARGET_PLATFORM" == "ec2" || "$TARGET_PLATFORM" == "eks" ]] || modern_usage_error
-  [[ "$RUN_ID" =~ ^scrum43-(r01|r03|r05|r07)-[A-Za-z0-9._-]+$ ]] || {
-    echo "comparison --run-id must use scrum43-r01/r03/r05/r07 prefix" >&2
+  [[ "$RUN_ID" =~ ^scrum43-(b02|r01|r03|r05|r07)-[A-Za-z0-9._-]+$ ]] || {
+    echo "comparison --run-id must use scrum43-b02/r01/r03/r05/r07 prefix" >&2
     exit 2
   }
   [[ "$EXPECTED_ACCOUNT_ID" =~ ^[0-9]{12}$ ]] || { echo "--expected-account-id must be exactly 12 digits" >&2; exit 2; }
@@ -391,7 +394,7 @@ metadata = {
     "region": region,
     "baseUrl": base_url,
     "rate": float(rate),
-    "sloVersion": "v1.1-candidate",
+    "sloVersion": json.loads(Path(contract_path).read_text(encoding="utf-8")).get("sloVersion") if contract_path else "v1.1-frozen",
     "profileSha256": profile_sha,
     "sourceCommitSha": source_sha,
     "controllerSourceCommitSha": source_sha,
@@ -457,8 +460,17 @@ modern_main() {
       record_modern_operator_event "$RUN_DIR" "$detail"
       ;;
     evaluate)
-      echo "comparison v1.1 does not use the v1.0 Recovery evaluator; run the per-phase validator instead" >&2
-      exit 2
+      [[ -f "$RUN_DIR/metadata.json" ]] || { echo "comparison run has not passed preflight" >&2; exit 2; }
+      [[ -f "$REPOSITORY_ROOT/scripts/loadtest/aws/evaluate-aws-recovery-comparison.py" ]] || { echo "comparison evaluator is missing" >&2; exit 2; }
+      slo_contract_path="${SLO_CONTRACT:-$REPOSITORY_ROOT/load-tests/aws/contracts/slo-v1.1-frozen.json}"
+      [[ -f "$slo_contract_path" ]] || { echo "v1.1 SLO contract is missing: $slo_contract_path" >&2; exit 2; }
+      comparison_scenario="${RUN_ID#scrum43-}"
+      comparison_scenario="${comparison_scenario%%-*}"
+      comparison_scenario="${comparison_scenario^^}"
+      python3 "$REPOSITORY_ROOT/scripts/loadtest/aws/evaluate-aws-recovery-comparison.py" "$RUN_DIR" \
+        --run-id "$RUN_ID" --profile "$PROFILE" --slo-contract "$slo_contract_path" \
+        --rate "$RATE" --source-sha "$SOURCE_SHA" --k6-image "$K6_IMAGE" \
+        --scenario "$comparison_scenario"
       ;;
     *)
       echo "unsupported comparison mode: $MODE" >&2

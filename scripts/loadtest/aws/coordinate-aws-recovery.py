@@ -64,7 +64,7 @@ STEPS = (
     "restoration-readback",
 )
 
-MUTATION_KINDS = {"b02-terminate", "terraform-apply"}
+MUTATION_KINDS = {"b02-terminate", "terraform-apply", "recovery-rollout"}
 
 
 class CoordinatorError(ValueError):
@@ -107,6 +107,12 @@ def platform_high_watermark(previous: dict[str, Any] | None, current: dict[str, 
                     merged[key] = max(int(merged.get(key, 0) or 0), new_status[key])
         if merged:
             result[section] = {**(previous.get(section, {}) if isinstance(previous.get(section), dict) else {}), "status": merged}
+    # Pod/node membership is not monotonic, but retaining the most recent
+    # complete section is important when a later SSM poll transiently omits a
+    # kubectl section.  Do not manufacture a replacement from a missing poll.
+    for section in ("pods", "nodes", "events"):
+        if isinstance(current.get(section), dict):
+            result[section] = current[section]
     return result
 
 
@@ -296,9 +302,10 @@ def load_config(path: Path) -> dict[str, Any]:
         _require(isinstance(target.get("clusterName"), str) and target["clusterName"], "target.clusterName is required for EKS")
         _require(isinstance(target.get("nodeGroupName"), str) and target["nodeGroupName"], "target.nodeGroupName is required for EKS")
     if scenario == "B-02":
+        target_instance = target.get("instanceId") or target.get("nodeInstanceId")
         _require(
-            bool(INSTANCE_ID_RE.fullmatch(str(target.get("instanceId", "")))),
-            "B-02 requires target.instanceId",
+            bool(INSTANCE_ID_RE.fullmatch(str(target_instance or ""))),
+            "B-02 requires target.instanceId (EC2) or target.nodeInstanceId (EKS)",
         )
 
     for name, script, mode in (
@@ -320,7 +327,7 @@ def load_config(path: Path) -> dict[str, Any]:
     )
 
     t1 = config.get("t1Mutation")
-    _validate_mutation_spec(t1, "t1Mutation", scenario)
+    _validate_mutation_spec(t1, "t1Mutation", scenario, platform)
     t4 = config.get("t4Mutation")
     _require(t4 is None, "t4Mutation is forbidden: recovery/image restore is a human operator action")
     if scenario in RESTORE_SCENARIOS:
@@ -330,30 +337,45 @@ def load_config(path: Path) -> dict[str, Any]:
     return config
 
 
-def _validate_mutation_spec(spec: Any, label: str, scenario: str) -> None:
+def _validate_mutation_spec(spec: Any, label: str, scenario: str, platform: str = "ec2") -> None:
     _require(isinstance(spec, dict), f"config.{label} must be an object")
     kind = spec.get("kind")
     _require(kind in MUTATION_KINDS, f"{label}.kind must be one of {sorted(MUTATION_KINDS)}")
     if scenario == "B-02":
         _require(kind == "b02-terminate", "B-02 T1 mutation must use the b02-terminate adapter")
     else:
-        _require(kind == "terraform-apply", f"{scenario} mutations must be exact terraform applies")
+        _require(kind in {"terraform-apply", "recovery-rollout"}, f"{scenario} mutations must use an approved rollout adapter")
     argv = spec.get("argv")
     _require(isinstance(argv, list) and argv and all(isinstance(item, str) for item in argv), f"{label}.argv must be a string list")
     if kind == "b02-terminate":
+        expected_adapter = (
+            "actions/b02-eks-node-replacement.py"
+            if platform == "eks"
+            else "actions/b02-one-instance-replacement.py"
+        )
         _require(
-            argv[0].endswith("actions/b02-one-instance-replacement.py") or (
-                argv[0] == "python3" and len(argv) > 1 and argv[1].endswith("actions/b02-one-instance-replacement.py")
+            argv[0].endswith(expected_adapter) or (
+                argv[0] == "python3" and len(argv) > 1 and argv[1].endswith(expected_adapter)
             ),
-            f"{label}.argv must invoke the B-02 adapter",
+            f"{label}.argv must invoke the platform-specific B-02 adapter",
         )
         _require("execute" in argv, f"{label}.argv must use the adapter execute mode")
         _require("--approval-file" in argv, f"{label}.argv must pass --approval-file")
-    else:
+    elif kind == "terraform-apply":
         _require(argv[0] == "terraform" and "apply" in argv, f"{label}.argv must be a terraform apply")
         _require("-auto-approve" not in argv, f"{label}.argv must not use -auto-approve")
         _require(isinstance(spec.get("planFile"), str) and spec["planFile"], f"{label}.planFile is required")
         _require(argv[-1] == spec["planFile"] or Path(argv[-1]).name == Path(spec["planFile"]).name, f"{label}.argv must apply the exact saved plan")
+        _require(bool(SHA256_RE.fullmatch(str(spec.get("planSha256", "")))), f"{label}.planSha256 is required")
+    else:
+        _require(
+            argv[0].endswith("actions/start-recovery-rollout.py") or (
+                argv[0] == "python3" and len(argv) > 1 and argv[1].endswith("actions/start-recovery-rollout.py")
+            ),
+            f"{label}.argv must invoke the Recovery rollout adapter",
+        )
+        _require("execute" in argv and "--approval-file" in argv, f"{label}.argv must use execute with --approval-file")
+        _require(isinstance(spec.get("planFile"), str) and spec["planFile"], f"{label}.planFile is required")
         _require(bool(SHA256_RE.fullmatch(str(spec.get("planSha256", "")))), f"{label}.planSha256 is required")
     approval = spec.get("approvalFile")
     _require(isinstance(approval, str) and approval, f"{label}.approvalFile is required")
@@ -481,6 +503,12 @@ class Coordinator:
         self.run_end_timeout_seconds = int(timing.get("runEndTimeoutSeconds", 2400))
         self.minimum_window_ratio = float(timing.get("minimumWindowSuccessRatio", 0.9))
         self._operator_recovery_event: dict[str, Any] | None = None
+        # Snapshot the EKS workload before T1.  ``updatedReplicas`` is a
+        # steady-state field and is already non-zero for a healthy Deployment;
+        # comparing it to zero would falsely call every normal run a node
+        # replacement.  The baseline lets detectors identify an actual Pod or
+        # node transition instead.
+        self._eks_pre_t1_snapshot: dict[str, Any] | None = None
 
     # ----- runner helpers ---------------------------------------------------
 
@@ -656,10 +684,12 @@ class Coordinator:
             f"printf '%s\\n' __SCRUM53_DEPLOYMENT_BEGIN__; kubectl --context scr43-eks -n {shlex.quote(namespace)} get deployment {shlex.quote(deployment)} -o json; printf '%s\\n' __SCRUM53_DEPLOYMENT_END__; "
             f"printf '%s\\n' __SCRUM53_PODS_BEGIN__; kubectl --context scr43-eks -n {shlex.quote(namespace)} get pods -l app.kubernetes.io/name=travel-planner-backend -o json; printf '%s\\n' __SCRUM53_PODS_END__; "
             f"printf '%s\\n' __SCRUM53_HPA_BEGIN__; kubectl --context scr43-eks -n {shlex.quote(namespace)} get hpa {shlex.quote(deployment)} -o json; printf '%s\\n' __SCRUM53_HPA_END__"
+            f"; printf '%s\\n' __SCRUM53_NODES_BEGIN__; kubectl --context scr43-eks get nodes -o json; printf '%s\\n' __SCRUM53_NODES_END__"
+            f"; printf '%s\\n' __SCRUM53_EVENTS_BEGIN__; kubectl --context scr43-eks get events --all-namespaces --sort-by=.lastTimestamp -o json; printf '%s\\n' __SCRUM53_EVENTS_END__"
         )
         stdout = self.ssm.run(command, timeout_seconds=180, comment="eks-platform-snapshot")
         snapshots: dict[str, Any] = {}
-        for key in ("deployment", "pods", "hpa"):
+        for key in ("deployment", "pods", "hpa", "nodes", "events"):
             begin = f"__SCRUM53_{key.upper()}_BEGIN__"
             end = f"__SCRUM53_{key.upper()}_END__"
             match = re.search(re.escape(begin) + r"\s*(.*?)\s*" + re.escape(end), stdout, re.DOTALL)
@@ -744,6 +774,8 @@ class Coordinator:
         )
         _require(float(stats.get("unexpectedErrors") or 0) == 0, "pre-T1 window observed unexpected errors")
         _require(float(stats.get("contractFailures") or 0) == 0, "pre-T1 window observed contract failures")
+        if self.platform == "eks":
+            self._eks_pre_t1_snapshot = self._eks_snapshot()
         self.log(f"[coordinator] pre-T1 normal window verified: successful={successful}")
 
     def _execute_mutation(self, label: str) -> None:
@@ -754,7 +786,7 @@ class Coordinator:
             sha256_file(approval_path) == spec["approvalSha256"],
             f"{label} approval artifact digest changed; approval is void",
         )
-        if spec["kind"] == "terraform-apply":
+        if spec["kind"] in {"terraform-apply", "recovery-rollout"}:
             plan_path = Path(spec["planFile"])
             _require(plan_path.is_file(), f"{label} saved plan is missing")
             _require(
@@ -784,9 +816,39 @@ class Coordinator:
         if self.platform == "eks":
             def probe() -> str | None:
                 snapshot = self._eks_snapshot()
+                previous = self._eks_pre_t1_snapshot or {}
+                previous_nodes = {
+                    item.get("metadata", {}).get("name")
+                    for item in (previous.get("nodes", {}).get("items", []) if isinstance(previous.get("nodes"), dict) else [])
+                    if isinstance(item, dict)
+                }
+                current_nodes = {
+                    item.get("metadata", {}).get("name")
+                    for item in (snapshot.get("nodes", {}).get("items", []) if isinstance(snapshot.get("nodes"), dict) else [])
+                    if isinstance(item, dict)
+                }
+                previous_pods = {
+                    item.get("metadata", {}).get("name")
+                    for item in (previous.get("pods", {}).get("items", []) if isinstance(previous.get("pods"), dict) else [])
+                    if isinstance(item, dict)
+                }
+                current_pods = {
+                    item.get("metadata", {}).get("name")
+                    for item in (snapshot.get("pods", {}).get("items", []) if isinstance(snapshot.get("pods"), dict) else [])
+                    if isinstance(item, dict)
+                }
+                if previous_nodes and current_nodes and current_nodes != previous_nodes:
+                    return "EKS managed node membership changed after B-02"
+                if previous_pods and current_pods and current_pods != previous_pods:
+                    return "EKS backend Pod was rescheduled after B-02"
+                for activity in self._scaling_activities():
+                    description = str(activity.get("Description", ""))
+                    if "Launching" in description or "Terminating" in description:
+                        return "EKS managed-node ASG recorded a replacement activity"
                 deployment = snapshot.get("deployment", {}) if isinstance(snapshot.get("deployment"), dict) else {}
                 status = deployment.get("status", {}) if isinstance(deployment.get("status"), dict) else {}
-                if int(status.get("updatedReplicas", 0) or 0) > 0:
+                old_status = previous.get("deployment", {}).get("status", {}) if isinstance(previous.get("deployment"), dict) else {}
+                if int(status.get("updatedReplicas", 0) or 0) > int(old_status.get("updatedReplicas", 0) or 0):
                     return "EKS Deployment observed an updated backend replica"
                 return None
             return self._poll_until(f"{scenario} EKS first replacement", probe)
@@ -940,7 +1002,10 @@ class Coordinator:
             health = self._target_health()
             healthy = {target for target, state in health.items() if state == "healthy"}
             others = {target: state for target, state in health.items() if state != "healthy"}
-            if len(healthy) >= expected_healthy and not others and not (healthy & forbidden):
+            eks_ready = True
+            if self.platform == "eks":
+                eks_ready = self._eks_ready(self._eks_snapshot())
+            if len(healthy) >= expected_healthy and not others and not (healthy & forbidden) and eks_ready:
                 return f"{len(healthy)} targets healthy"
             return None
 
