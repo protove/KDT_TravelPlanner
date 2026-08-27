@@ -59,7 +59,17 @@ def timestamp(value: object) -> float:
     if not isinstance(value, str):
         raise ComparisonRecoveryError("UTC timestamp is missing")
     try:
-        return datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
+        # k6 emits RFC3339 timestamps with nanosecond precision while the
+        # Python 3.9 runtime accepts at most microseconds.  Truncate only the
+        # excess fractional precision; the timestamp remains in the same
+        # bucket and no event ordering information is discarded.
+        normalized = value.replace("Z", "+00:00")
+        normalized = re.sub(
+            r"(\.\d{6})\d*(?=\+\d{2}:\d{2}$)",
+            r"\1",
+            normalized,
+        )
+        return datetime.fromisoformat(normalized).timestamp()
     except ValueError as error:
         raise ComparisonRecoveryError("invalid UTC timestamp") from error
 
@@ -313,7 +323,34 @@ def evaluate(args: argparse.Namespace) -> dict[str, Any]:
     bucket_seconds = int(contract["recovery"]["bucketSeconds"])
     window_seconds = int(contract["recovery"]["stableWindowSeconds"])
     durations, counters, observed = load_points(run_dir / "raw.json", bucket_seconds)
-    missing = [name for name in (*CORE_COUNTERS, "core_operation_duration") if name not in observed]
+    # k6's handleSummary output can legitimately omit a zero-valued counter
+    # from raw Point records.  Keep the raw-metric contract fail-closed for
+    # positive counters, while accepting only the two explicitly empty-valid
+    # error counters when summary.json and required-metrics.json both prove a
+    # zero count.  This does not synthesize points or change SLO arithmetic.
+    required_status = read_json(run_dir / profile["observability"]["statusPath"])
+    status_metrics = required_status.get("metrics")
+    if isinstance(status_metrics, list):
+        status_metrics = {
+            item.get("name"): item
+            for item in status_metrics
+            if isinstance(item, dict) and item.get("name")
+        }
+    summary_metrics = summary.get("metrics") if isinstance(summary.get("metrics"), dict) else {}
+    omitted_zero_valid = {
+        name
+        for name in ("core_unexpected_errors_total", "core_contract_failures_total")
+        if isinstance(status_metrics, dict)
+        and isinstance(status_metrics.get(name), dict)
+        and status_metrics[name].get("emptyIsValid") is True
+        and isinstance(summary_metrics.get(name), dict)
+        and float(summary_metrics[name].get("count", 0) or 0) == 0
+    }
+    missing = [
+        name
+        for name in (*CORE_COUNTERS, "core_operation_duration")
+        if name not in observed and name not in omitted_zero_valid
+    ]
     if missing:
         raise ComparisonRecoveryError("raw k6 metrics missing: " + ",".join(missing))
     baseline_buckets = sorted(bucket for bucket in durations if durations[bucket] and events["T0"] < bucket + bucket_seconds <= events["T1"])

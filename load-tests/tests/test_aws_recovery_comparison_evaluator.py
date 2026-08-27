@@ -86,6 +86,52 @@ class ComparisonEvaluatorTests(unittest.TestCase):
             self.assertIsNone(result["T1ToT6Seconds"])
             self.assertNotIn('"event": "T6"', (root / "operations.jsonl").read_text(encoding="utf-8"))
 
+    def test_zero_error_counters_may_be_omitted_from_raw_when_proven_by_summary(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            args = self.fixture(root)
+            points = []
+            for line in (root / "raw.json").read_text(encoding="utf-8").splitlines():
+                point = json.loads(line)
+                if point.get("metric") not in {"core_unexpected_errors_total", "core_contract_failures_total"}:
+                    points.append(point)
+            (root / "raw.json").write_text(
+                "\n".join(json.dumps(point) for point in points) + "\n",
+                encoding="utf-8",
+            )
+            write_json(root / "summary.json", {
+                "metrics": {
+                    "dropped_iterations": {"count": 0},
+                    "core_unexpected_errors_total": {"count": 0},
+                    "core_contract_failures_total": {"count": 0},
+                },
+            })
+            required = json.loads((root / "monitoring/required-metrics.json").read_text(encoding="utf-8"))
+            for name in ("core_unexpected_errors_total", "core_contract_failures_total"):
+                required["metrics"][name] = {"status": "collected", "datapointCount": 0, "emptyIsValid": True}
+            (root / "monitoring/required-metrics.json").write_text(json.dumps(required) + "\n", encoding="utf-8")
+            result = MODULE.evaluate(args)
+            self.assertEqual(result["status"], "PASSED")
+
+    def test_nanosecond_k6_timestamps_are_counted(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            args = self.fixture(root)
+            points = []
+            for line in (root / "raw.json").read_text(encoding="utf-8").splitlines():
+                point = json.loads(line)
+                if point.get("type") == "Point":
+                    point["data"]["time"] = point["data"]["time"].replace(
+                        "Z", ".123456789Z"
+                    )
+                points.append(point)
+            (root / "raw.json").write_text(
+                "\n".join(json.dumps(point) for point in points) + "\n",
+                encoding="utf-8",
+            )
+            result = MODULE.evaluate(args)
+            self.assertEqual(result["status"], "PASSED")
+
     def test_manual_scenario_requires_operator_event(self):
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)

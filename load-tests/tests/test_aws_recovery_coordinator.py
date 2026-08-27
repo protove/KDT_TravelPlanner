@@ -511,6 +511,7 @@ class B02LifecycleTests(unittest.TestCase):
             readback = json.loads(
                 (Path(coordinator.config["controlDir"]) / "restoration-readback.json").read_text()
             )
+            self.assertEqual(readback["status"], "verified")
             self.assertEqual(readback["capacity"], {"minSize": 2, "desiredCapacity": 2, "maxSize": 4})
             self.assertEqual(len(readback["mutationsExecuted"]), 1)
 
