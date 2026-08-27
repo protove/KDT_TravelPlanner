@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { Button } from "@/components/atoms/Button";
 import { ProfileSection } from "@/components/organisms/ProfileSection";
 import { NotificationList } from "@/components/organisms/NotificationList";
@@ -43,6 +43,12 @@ const TABS = [
   { key: "myComments", label: "내가 쓴 댓글" },
 ];
 
+const VALID_TABS: MypageTab[] = ["profile", "notif", "myPosts", "myComments"];
+
+function isMypageTab(value: string | null): value is MypageTab {
+  return value !== null && (VALID_TABS as string[]).includes(value);
+}
+
 interface ProfileDraft {
   nickname: string;
   gender: Gender;
@@ -72,7 +78,16 @@ function profileToDraft(profile: UserProfile): ProfileDraft {
 }
 
 export default function MypagePage() {
+  return (
+    <React.Suspense fallback={null}>
+      <MypagePageContent />
+    </React.Suspense>
+  );
+}
+
+function MypagePageContent() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const isLoggedIn = useAuthStore((s) => s.isLoggedIn);
   const isInitializing = useAuthStore((s) => s.isInitializing);
   const user = useAuthStore((s) => s.user);
@@ -84,7 +99,12 @@ export default function MypagePage() {
   const acceptNotification = useNotificationStore((s) => s.accept);
   const rejectNotification = useNotificationStore((s) => s.reject);
 
-  const [tab, setTab] = React.useState<MypageTab>("profile");
+  // 마이페이지에서 나갔다가(글/댓글 상세로 진입 등) 뒤로가기로 돌아왔을 때 탭이 "프로필수정"으로
+  // 초기화되지 않도록 URL 쿼리(?tab=)로 상태를 남긴다 — community/page.tsx의 카테고리 탭과 동일한 패턴.
+  const [tab, setTab] = React.useState<MypageTab>(() => {
+    const fromUrl = searchParams.get("tab");
+    return isMypageTab(fromUrl) ? fromUrl : "profile";
+  });
   const [showWithdraw, setShowWithdraw] = React.useState(false);
   const [profile, setProfile] = React.useState<UserProfile | null>(null);
   const [draft, setDraft] = React.useState<ProfileDraft>({
@@ -330,7 +350,10 @@ export default function MypagePage() {
     <MyPageLayout
       tabs={TABS}
       activeTab={tab}
-      onTabChange={(key) => setTab(key as MypageTab)}
+      onTabChange={(key) => {
+        setTab(key as MypageTab);
+        router.replace(`/mypage?tab=${key}`, { scroll: false });
+      }}
     >
       {tab === "profile" ? (
         <>
