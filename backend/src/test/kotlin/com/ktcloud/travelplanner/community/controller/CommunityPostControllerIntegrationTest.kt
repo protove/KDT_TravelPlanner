@@ -651,6 +651,45 @@ class CommunityPostControllerIntegrationTest(
 		}
 	}
 
+	@Test
+	fun `sort=popular ranks a less recent but more liked and commented post above a newer untouched one`() {
+		val author = saveUser("popular-ranking-author")
+		val reactor = saveUser("popular-ranking-reactor")
+		val older = savePost(author, title = "좋아요 많은 오래된 글")
+		val newer = savePost(author, title = "아무도 안 건드린 최신 글")
+		setCreatedAt(older.id, Instant.parse("2026-08-01T00:00:00Z"))
+		setCreatedAt(newer.id, Instant.parse("2026-08-05T00:00:00Z"))
+
+		mockMvc.put("/api/v1/community/posts/${older.id}/reactions/LIKE") {
+			header(HttpHeaders.AUTHORIZATION, bearer(reactor))
+		}.andExpect { status { isOk() } }
+
+		mockMvc.post("/api/v1/community/posts/${older.id}/comments") {
+			header(HttpHeaders.AUTHORIZATION, bearer(reactor))
+			contentType = MediaType.APPLICATION_JSON
+			content = """{"content": "댓글"}"""
+		}.andExpect { status { isOk() } }
+
+		mockMvc.get("/api/v1/community/posts") {
+			param("sort", "popular")
+		}.andExpect {
+			status { isOk() }
+			jsonPath("$.data.content[0].title", equalTo("좋아요 많은 오래된 글"))
+			jsonPath("$.data.content[0].reactionCount", equalTo(1))
+			jsonPath("$.data.content[0].commentCount", equalTo(1))
+			jsonPath("$.data.content[1].title", equalTo("아무도 안 건드린 최신 글"))
+		}
+
+		// 최신순은 좋아요/댓글과 무관하게 createdAt DESC 그대로.
+		mockMvc.get("/api/v1/community/posts") {
+			param("sort", "latest")
+		}.andExpect {
+			status { isOk() }
+			jsonPath("$.data.content[0].title", equalTo("아무도 안 건드린 최신 글"))
+			jsonPath("$.data.content[1].title", equalTo("좋아요 많은 오래된 글"))
+		}
+	}
+
 	private fun bearer(user: User): String =
 		"Bearer ${jwtTokenService.issueAccessToken(requireNotNull(user.id)).value}"
 

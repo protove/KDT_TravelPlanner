@@ -76,60 +76,91 @@ interface CommunityPostRepository : JpaRepository<CommunityPost, UUID> {
 	): Page<CommunityPostListRow>
 
 	// community-api-contract.md 3절 — sort=popular: (reactionCount*2 + commentCount) DESC, createdAt DESC.
-	// 댓글/리액션 API가 아직 붙지 않아(8절) reactionCount/commentCount는 0으로 고정되므로, 정렬식은
-	// 지금은 상수(0 * 2 + 0)로 평가된다. 2차에서 두 테이블을 서브쿼리로 연결하면 이 식만 채워 넣으면 된다.
+	// community_reaction은 매핑된 JPA 엔티티가 없어(항상 네이티브로만 다룸, countReactions 등 참고)
+	// JPQL "SELECT NEW" 방식으로는 이 정렬식을 표현할 수 없어서 쿼리 자체를 네이티브로 뺐다.
+	// WHERE 절은 findPostsOrderByCreatedAt과 동일한 조건을 raw SQL로 옮긴 것 — @SQLRestriction이
+	// 없어지는 만큼 post.deleted_at IS NULL을 직접 추가했다.
 	@Query(
 		value = """
-			SELECT new com.ktcloud.travelplanner.community.repository.CommunityPostListRow(
-				post.id,
-				category.code,
-				post.title,
-				post.bodyPreview,
-				author.nickname,
-				author.profileImageUrl,
-				post.viewCount,
-				post.sourceTravelId,
-				post.createdAt
-			)
-			FROM CommunityPost post
-			JOIN post.category category
-			JOIN post.author author
-			WHERE (:categoryCode IS NULL OR category.code = :categoryCode)
-				AND (:tagName IS NULL OR EXISTS (SELECT 1 FROM post.tags t WHERE t.name = :tagName))
+			SELECT
+				post.id AS postId,
+				category.code AS categoryCode,
+				post.title AS title,
+				post.body_preview AS bodyPreview,
+				author.nickname AS authorNickname,
+				author.profile_image_url AS authorProfileImageUrl,
+				post.view_count AS viewCount,
+				post.source_travel_id AS sourceTravelId,
+				post.created_at AS createdAt
+			FROM community_post post
+			JOIN community_category category ON category.id = post.category_id
+			JOIN user_table author ON author.id = post.author_id
+			WHERE post.deleted_at IS NULL
+				AND (:categoryCode IS NULL OR category.code = :categoryCode)
+				AND (:tagName IS NULL OR EXISTS (
+					SELECT 1 FROM community_post_tag pt
+					JOIN community_tag t ON t.id = pt.tag_id
+					WHERE pt.post_id = post.id AND t.name = :tagName
+				))
 				AND (:keyword IS NULL OR (
-					(:searchScope = 'TITLE' AND LOWER(post.title) LIKE LOWER(CONCAT('%', CAST(:keyword AS string), '%')))
-					OR (:searchScope = 'AUTHOR' AND LOWER(author.nickname) LIKE LOWER(CONCAT('%', CAST(:keyword AS string), '%')))
-					OR (:searchScope = 'CONTENT' AND LOWER(post.bodyPreview) LIKE LOWER(CONCAT('%', CAST(:keyword AS string), '%')))
-					OR (:searchScope = 'TAG' AND EXISTS (SELECT 1 FROM post.tags st WHERE LOWER(st.name) LIKE LOWER(CONCAT('%', CAST(:keyword AS string), '%'))))
+					(:searchScope = 'TITLE' AND LOWER(post.title) LIKE LOWER(CONCAT('%', :keyword, '%')))
+					OR (:searchScope = 'AUTHOR' AND LOWER(author.nickname) LIKE LOWER(CONCAT('%', :keyword, '%')))
+					OR (:searchScope = 'CONTENT' AND LOWER(post.body_preview) LIKE LOWER(CONCAT('%', :keyword, '%')))
+					OR (:searchScope = 'TAG' AND EXISTS (
+						SELECT 1 FROM community_post_tag pt2
+						JOIN community_tag t2 ON t2.id = pt2.tag_id
+						WHERE pt2.post_id = post.id AND LOWER(t2.name) LIKE LOWER(CONCAT('%', :keyword, '%'))
+					))
 					OR (:searchScope = 'ALL' AND (
-						LOWER(post.title) LIKE LOWER(CONCAT('%', CAST(:keyword AS string), '%'))
-						OR LOWER(author.nickname) LIKE LOWER(CONCAT('%', CAST(:keyword AS string), '%'))
-						OR LOWER(post.bodyPreview) LIKE LOWER(CONCAT('%', CAST(:keyword AS string), '%'))
-						OR EXISTS (SELECT 1 FROM post.tags st2 WHERE LOWER(st2.name) LIKE LOWER(CONCAT('%', CAST(:keyword AS string), '%')))
+						LOWER(post.title) LIKE LOWER(CONCAT('%', :keyword, '%'))
+						OR LOWER(author.nickname) LIKE LOWER(CONCAT('%', :keyword, '%'))
+						OR LOWER(post.body_preview) LIKE LOWER(CONCAT('%', :keyword, '%'))
+						OR EXISTS (
+							SELECT 1 FROM community_post_tag pt3
+							JOIN community_tag t3 ON t3.id = pt3.tag_id
+							WHERE pt3.post_id = post.id AND LOWER(t3.name) LIKE LOWER(CONCAT('%', :keyword, '%'))
+						)
 					))
 				))
-			ORDER BY (0 * 2 + 0) DESC, post.createdAt DESC
+			ORDER BY (
+				(SELECT COUNT(*) FROM community_reaction r WHERE r.post_id = post.id) * 2
+				+ (SELECT COUNT(*) FROM community_comment c WHERE c.post_id = post.id AND c.deleted_at IS NULL)
+			) DESC, post.created_at DESC
 		""",
 		countQuery = """
-			SELECT COUNT(post)
-			FROM CommunityPost post
-			JOIN post.category category
-			JOIN post.author author
-			WHERE (:categoryCode IS NULL OR category.code = :categoryCode)
-				AND (:tagName IS NULL OR EXISTS (SELECT 1 FROM post.tags t WHERE t.name = :tagName))
+			SELECT COUNT(*)
+			FROM community_post post
+			JOIN community_category category ON category.id = post.category_id
+			JOIN user_table author ON author.id = post.author_id
+			WHERE post.deleted_at IS NULL
+				AND (:categoryCode IS NULL OR category.code = :categoryCode)
+				AND (:tagName IS NULL OR EXISTS (
+					SELECT 1 FROM community_post_tag pt
+					JOIN community_tag t ON t.id = pt.tag_id
+					WHERE pt.post_id = post.id AND t.name = :tagName
+				))
 				AND (:keyword IS NULL OR (
-					(:searchScope = 'TITLE' AND LOWER(post.title) LIKE LOWER(CONCAT('%', CAST(:keyword AS string), '%')))
-					OR (:searchScope = 'AUTHOR' AND LOWER(author.nickname) LIKE LOWER(CONCAT('%', CAST(:keyword AS string), '%')))
-					OR (:searchScope = 'CONTENT' AND LOWER(post.bodyPreview) LIKE LOWER(CONCAT('%', CAST(:keyword AS string), '%')))
-					OR (:searchScope = 'TAG' AND EXISTS (SELECT 1 FROM post.tags st WHERE LOWER(st.name) LIKE LOWER(CONCAT('%', CAST(:keyword AS string), '%'))))
+					(:searchScope = 'TITLE' AND LOWER(post.title) LIKE LOWER(CONCAT('%', :keyword, '%')))
+					OR (:searchScope = 'AUTHOR' AND LOWER(author.nickname) LIKE LOWER(CONCAT('%', :keyword, '%')))
+					OR (:searchScope = 'CONTENT' AND LOWER(post.body_preview) LIKE LOWER(CONCAT('%', :keyword, '%')))
+					OR (:searchScope = 'TAG' AND EXISTS (
+						SELECT 1 FROM community_post_tag pt2
+						JOIN community_tag t2 ON t2.id = pt2.tag_id
+						WHERE pt2.post_id = post.id AND LOWER(t2.name) LIKE LOWER(CONCAT('%', :keyword, '%'))
+					))
 					OR (:searchScope = 'ALL' AND (
-						LOWER(post.title) LIKE LOWER(CONCAT('%', CAST(:keyword AS string), '%'))
-						OR LOWER(author.nickname) LIKE LOWER(CONCAT('%', CAST(:keyword AS string), '%'))
-						OR LOWER(post.bodyPreview) LIKE LOWER(CONCAT('%', CAST(:keyword AS string), '%'))
-						OR EXISTS (SELECT 1 FROM post.tags st2 WHERE LOWER(st2.name) LIKE LOWER(CONCAT('%', CAST(:keyword AS string), '%')))
+						LOWER(post.title) LIKE LOWER(CONCAT('%', :keyword, '%'))
+						OR LOWER(author.nickname) LIKE LOWER(CONCAT('%', :keyword, '%'))
+						OR LOWER(post.body_preview) LIKE LOWER(CONCAT('%', :keyword, '%'))
+						OR EXISTS (
+							SELECT 1 FROM community_post_tag pt3
+							JOIN community_tag t3 ON t3.id = pt3.tag_id
+							WHERE pt3.post_id = post.id AND LOWER(t3.name) LIKE LOWER(CONCAT('%', :keyword, '%'))
+						)
 					))
 				))
 		""",
+		nativeQuery = true,
 	)
 	fun findPostsOrderByPopularity(
 		@Param("categoryCode") categoryCode: String?,
@@ -137,7 +168,7 @@ interface CommunityPostRepository : JpaRepository<CommunityPost, UUID> {
 		@Param("keyword") keyword: String?,
 		@Param("searchScope") searchScope: String,
 		pageable: Pageable,
-	): Page<CommunityPostListRow>
+	): Page<PostSummaryRow>
 
 	@Query(
 		value = """

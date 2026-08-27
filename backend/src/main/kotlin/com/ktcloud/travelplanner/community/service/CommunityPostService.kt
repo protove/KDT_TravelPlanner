@@ -244,7 +244,19 @@ class CommunityPostService(
 				normalizedKeyword,
 				normalizedSearchScope,
 				pageable,
-			)
+			).map { row ->
+				CommunityPostListRow(
+					postId = row.postId,
+					categoryCode = row.categoryCode,
+					title = row.title,
+					bodyPreview = row.bodyPreview,
+					authorNickname = row.authorNickname,
+					authorProfileImageUrl = row.authorProfileImageUrl,
+					viewCount = row.viewCount,
+					sourceTravelId = row.sourceTravelId,
+					createdAt = row.createdAt,
+				)
+			}
 		} else {
 			communityPostRepository.findPostsOrderByCreatedAt(
 				normalizedCategoryCode,
