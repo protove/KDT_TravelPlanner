@@ -67,6 +67,10 @@ class AwsRecoveryRunnerContractTest(unittest.TestCase):
         self.assertIn('if [[ "$DRY_RUN" == "1" ]]; then', source)
         self.assertIn('would run AWS Recovery workload', source)
 
+    def test_coordinator_detaches_background_workload_stdin(self):
+        source = (ROOT / "scripts/loadtest/aws/coordinate-aws-recovery.py").read_text(encoding="utf-8")
+        self.assertIn("< /dev/null & echo started:$!", source)
+
     def test_v11_orchestrator_accepts_ec2_and_eks_action_time_targets(self):
         source_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
         profile = ROOT / "load-tests/aws/profiles/ec2-eks-recovery-v1.1.json"

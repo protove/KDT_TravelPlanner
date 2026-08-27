@@ -525,7 +525,8 @@ class Coordinator:
         if background:
             command = (
                 f"cd {shlex.quote(repo)} && nohup {quoted} "
-                f">> {shlex.quote(self.config['runner']['runDir'])}/coordinator-workload.log 2>&1 & echo started:$!"
+                f">> {shlex.quote(self.config['runner']['runDir'])}/coordinator-workload.log 2>&1 "
+                f"< /dev/null & echo started:$!"
             )
         return self.ssm.run(command, timeout_seconds=timeout_seconds, comment=comment)
 
