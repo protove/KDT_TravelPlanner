@@ -44,7 +44,7 @@ APPROVED_INSTANCE_TAGS = {
     "Environment": "dev",
     "Service": "travel-planner-backend",
 }
-RUN_ID_PATTERN = re.compile(r"^aws-b02-[A-Za-z0-9._-]{1,80}$")
+RUN_ID_PATTERN = re.compile(r"^(?:aws|scrum43)-b02-[A-Za-z0-9._-]{1,80}$")
 ACCOUNT_ID_PATTERN = re.compile(r"^[0-9]{12}$")
 INSTANCE_ID_PATTERN = re.compile(r"^i-[0-9a-f]{8,32}$")
 ASG_NAME_PATTERN = re.compile(r"^[A-Za-z0-9._:/+=,@-]{1,255}$")
@@ -167,7 +167,7 @@ def _require_string(value: Any, field: str) -> str:
 
 def validate_request(request: B02Request) -> None:
     if not RUN_ID_PATTERN.fullmatch(request.run_id):
-        raise B02ActionError("--run-id must use the aws-b02- prefix and safe characters")
+        raise B02ActionError("--run-id must use the aws-b02- or scrum43-b02- prefix and safe characters")
     if not ACCOUNT_ID_PATTERN.fullmatch(request.expected_account_id):
         raise B02ActionError("--expected-account-id must be exactly 12 digits")
     if not REGION_PATTERN.fullmatch(request.region):
