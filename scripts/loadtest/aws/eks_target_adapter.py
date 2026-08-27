@@ -139,6 +139,10 @@ def build_kubectl_commands(
     _require(isinstance(region, str) and re.fullmatch(r"[a-z]{2}(?:-gov)?-[a-z0-9-]+-\d", region), "AWS region is invalid")
     return [
         "set -euo pipefail",
+        # AWS-RunShellScript executes as root with HOME unset on the EKS
+        # bastion.  Pin both paths so update-kubeconfig and kubectl use the
+        # same context instead of silently writing/reading different files.
+        "export HOME=/root KUBECONFIG=/root/.kube/config",
         f"aws eks update-kubeconfig --name {cluster_name} --region {region} --alias scr43-eks",
         f"printf '%s\\n' __SCRUM53_HPA_BEGIN__; kubectl --context scr43-eks --namespace {namespace} get hpa {deployment} -o json; printf '%s\\n' __SCRUM53_HPA_END__",
         f"printf '%s\\n' __SCRUM53_DEPLOYMENT_BEGIN__; kubectl --context scr43-eks --namespace {namespace} get deployment {deployment} -o json; printf '%s\\n' __SCRUM53_DEPLOYMENT_END__",
