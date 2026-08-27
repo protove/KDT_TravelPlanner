@@ -73,7 +73,7 @@ class CommunityCommentService(
 		)
 		val saved = communityCommentRepository.save(comment)
 		// author 엔티티를 이미 로딩했으니 Port를 다시 호출하지 않고 그대로 AuthorSummary로 변환한다.
-		val authorSummary = AuthorSummary(id = author.id, nickname = author.nickname, profileImageUrl = author.profileImageUrl)
+		val authorSummary = AuthorSummary(id = authorId, nickname = author.nickname, profileImageUrl = author.profileImageUrl)
 		return CommentResponse.from(saved, authorSummary, isMine = true, reactionCount = 0, isReacted = false)
 	}
 
@@ -92,7 +92,7 @@ class CommunityCommentService(
 
 		val reactionCount = communityCommentRepository.countReactions(commentId)
 		val isReacted = communityCommentRepository.existsReaction(commentId, requesterId)
-		val author = userLookupPort.findAuthor(comment.author.id)
+		val author = userLookupPort.findAuthor(requireNotNull(comment.author.id))
 		return CommentResponse.from(comment, author, isMine = true, reactionCount = reactionCount, isReacted = isReacted)
 	}
 
@@ -131,7 +131,7 @@ class CommunityCommentService(
 		}
 
 		val reactionCount = communityCommentRepository.countReactions(commentId)
-		val author = userLookupPort.findAuthor(comment.author.id)
+		val author = userLookupPort.findAuthor(requireNotNull(comment.author.id))
 		return CommentResponse.from(
 			comment = comment,
 			author = author,

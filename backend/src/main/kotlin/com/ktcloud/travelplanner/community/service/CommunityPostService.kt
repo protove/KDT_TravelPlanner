@@ -90,7 +90,7 @@ class CommunityPostService(
 		val reactionCount = communityPostRepository.countReactions(postId)
 		// author.id는 Lazy 프록시의 FK 컬럼 값이라 추가 조회 없이 읽힌다 — Port 안 거쳐도 됨.
 		// 닉네임/프로필사진 같은 실제 User 필드는 Port로 조회한다.
-		val author = userLookupPort.findAuthor(post.author.id)
+		val author = userLookupPort.findAuthor(requireNotNull(post.author.id))
 
 		val response = CommunityPostDetailResponse.from(
 			post = post,

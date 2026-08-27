@@ -14,6 +14,6 @@ class JpaUserLookupAdapter(
 ) : UserLookupPort {
 	override fun findAuthor(userId: UUID): AuthorSummary? =
 		userRepository.findById(userId).map {
-			AuthorSummary(id = it.id, nickname = it.nickname, profileImageUrl = it.profileImageUrl)
+			AuthorSummary(id = userId, nickname = it.nickname, profileImageUrl = it.profileImageUrl)
 		}.orElse(null)
 }

@@ -4,6 +4,7 @@ import com.ktcloud.travelplanner.community.dto.CommentCreateRequest
 import com.ktcloud.travelplanner.community.model.CommunityComment
 import com.ktcloud.travelplanner.community.model.CommunityPost
 import com.ktcloud.travelplanner.community.repository.CommentReactionCountRow
+import com.ktcloud.travelplanner.community.port.UserLookupPort
 import com.ktcloud.travelplanner.community.repository.CommunityCommentRepository
 import com.ktcloud.travelplanner.community.repository.CommunityPostRepository
 import com.ktcloud.travelplanner.user.model.User
@@ -27,10 +28,12 @@ class CommunityCommentServiceTest {
 	private val communityPostRepository = mock(CommunityPostRepository::class.java)
 	private val communityCommentRepository = mock(CommunityCommentRepository::class.java)
 	private val userRepository = mock(UserRepository::class.java)
+	private val userLookupPort = mock(UserLookupPort::class.java)
 	private val service = CommunityCommentService(
 		communityPostRepository,
 		communityCommentRepository,
 		userRepository,
+		userLookupPort,
 	)
 
 	private val postId = UUID.randomUUID()
