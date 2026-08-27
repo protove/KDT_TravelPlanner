@@ -20,6 +20,7 @@ from typing import Any
 
 
 RECOVERY_RUN_ID = re.compile(r"^aws-(?:recovery|b02|r01|r03|r05|r07)-[A-Za-z0-9._-]+$")
+COMPARISON_RUN_ID = re.compile(r"^scrum43-(?:b02|r01|r03|r05|r07)-[A-Za-z0-9._-]+$")
 REQUIRED_EVENTS = ("RUN_START", "T0", "T1", "T2", "T3", "T4", "T5", "T6", "RUN_END")
 DEFAULT_EMPTY_IS_VALID = {"http_5xx", "loki_warn_error", "aws_asg_activities_empty"}
 
@@ -252,6 +253,181 @@ def validate_verdict(path: Path, run_id: str) -> dict[str, Any]:
     }
 
 
+def resolve_comparison_run(root: Path, run_id: str) -> tuple[str, str, str]:
+    """Resolve a v1.1 comparison run without accepting legacy metadata."""
+    if not COMPARISON_RUN_ID.fullmatch(run_id):
+        raise RecoveryExportError("--run-id must use an approved scrum43 comparison prefix")
+    metadata = read_json(root / "metadata.json")
+    if metadata.get("runId") != run_id or metadata.get("scenarioId") != "AWS-RECOVERY-COMPARISON":
+        raise RecoveryExportError("metadata runId/scenarioId does not match comparison Recovery export")
+    started = metadata.get("startedAtUtc")
+    ended = metadata.get("endedAtUtc")
+    if not isinstance(started, str) or not isinstance(ended, str) or not started or not ended:
+        raise RecoveryExportError("comparison metadata must contain a closed UTC range")
+    parse_timestamp(started)
+    parse_timestamp(ended)
+    if parse_timestamp(ended) <= parse_timestamp(started):
+        raise RecoveryExportError("comparison UTC range must be positive")
+    return run_id, started, ended
+
+
+def validate_comparison_verdict(path: Path, run_id: str) -> dict[str, Any]:
+    """Validate the independent v1.1 evaluator output, including no-T6 failures."""
+    payload = read_json(path)
+    if payload.get("runId") != run_id or payload.get("scenarioId") != "AWS-RECOVERY-COMPARISON":
+        raise RecoveryExportError("comparison recovery-verdict.json is bound to a different run")
+    status = payload.get("status")
+    if status not in {"PASSED", "VALID_EXPERIMENTAL_FAILURE", "INVALID_RUN"}:
+        raise RecoveryExportError("comparison recovery-verdict.json has an unsupported status")
+    if status == "PASSED":
+        required = ("T0", "T1", "T2", "T3", "T4", "T5", "T6", "RUN_END")
+        for field in required:
+            if not isinstance(payload.get(field), str) or not payload[field].strip():
+                raise RecoveryExportError(f"comparison recovery-verdict.json is missing {field}")
+    else:
+        for field in ("errorType", "detail"):
+            if not isinstance(payload.get(field), str) or not payload[field].strip():
+                raise RecoveryExportError(f"comparison non-passed verdict is missing {field}")
+    return {
+        "status": status,
+        "runId": run_id,
+        "scenarioId": "AWS-RECOVERY-COMPARISON",
+        "scenario": payload.get("scenario"),
+        "platform": payload.get("platform"),
+        "sloVersion": payload.get("sloVersion"),
+        "T1ToT6Seconds": payload.get("T1ToT6Seconds"),
+        "T4ToT6Seconds": payload.get("T4ToT6Seconds"),
+        **(
+            {}
+            if status == "PASSED"
+            else {"errorType": payload.get("errorType"), "detail": payload.get("detail")}
+        ),
+        "source": "recovery-verdict.json",
+    }
+
+
+def export_comparison_recovery_evidence(
+    evidence_root: Path,
+    run_id: str,
+    grafana_url: str,
+    user: str,
+    password: str,
+    region: str,
+    dashboard_uid: str = "aws-recovery",
+    anonymous_viewer: bool = False,
+) -> dict[str, Any]:
+    """Export a v1.1 comparison bundle while preserving valid no-T6 failures."""
+    run_id, from_utc, to_utc = resolve_comparison_run(evidence_root, run_id)
+    verdict = validate_comparison_verdict(evidence_root / "recovery-verdict.json", run_id)
+    events = read_recovery_events(
+        evidence_root / "operations.jsonl", require_all=verdict["status"] == "PASSED"
+    )
+    range_start = parse_timestamp(from_utc)
+    range_end = parse_timestamp(to_utc)
+    if any(value < range_start or value > range_end for value in events.values()):
+        raise RecoveryExportError("comparison event falls outside metadata's fixed UTC range")
+
+    profile_path = Path(__file__).parents[3] / "load-tests/aws/profiles/ec2-eks-recovery-v1.1.json"
+    profile = read_json(profile_path)
+    required = list(profile.get("observability", {}).get("required", []))
+    metric_status = validate_required_metrics(
+        read_json(evidence_root / "monitoring/required-metrics.json"), required,
+        {"core_unexpected_errors_total", "core_contract_failures_total", "aws_target_health"},
+    )
+    if verdict["status"] == "PASSED" and metric_status["status"] != "collected":
+        raise RecoveryExportError("comparison observability evidence is incomplete")
+
+    platform_recovery_path = evidence_root / "control" / "restoration-readback.json"
+    if not platform_recovery_path.is_file():
+        platform_recovery_path = evidence_root / "restoration-readback.json"
+    platform_recovery = read_json(platform_recovery_path) if platform_recovery_path.is_file() else {"status": "not-observed"}
+    if verdict["status"] == "PASSED" and platform_recovery.get("status") not in {"verified", "restored"} and platform_recovery.get("deploymentReady") is not True:
+        raise RecoveryExportError("comparison platform recovery readback is not verified")
+
+    exporter = _load_grafana_exporter()
+    if not exporter.is_loopback_grafana_url(grafana_url):
+        raise RecoveryExportError("--grafana-url must be a loopback SSM port-forward endpoint")
+    if anonymous_viewer:
+        auth_header = None
+    else:
+        if not user or not password:
+            raise RecoveryExportError("--user/--password are required unless --anonymous-viewer is used")
+        auth_header = exporter.basic_auth_header(user, password)
+    grafana_dir = evidence_root / "grafana"
+    queries_dir = grafana_dir / "queries"
+    panels_dir = grafana_dir / "panels"
+    queries_dir.mkdir(parents=True, exist_ok=True)
+    panels_dir.mkdir(parents=True, exist_ok=True)
+    dashboard = exporter.fetch_dashboard(grafana_url, auth_header, dashboard_uid)
+    (grafana_dir / "dashboard.json").write_text(json.dumps(dashboard, indent=2) + "\n", encoding="utf-8")
+    dimensions = exporter.load_resource_dimensions(evidence_root)
+    exporter.validate_resource_dimensions(dimensions)
+    from_ms = exporter.to_epoch_seconds(from_utc) * 1000
+    to_ms = exporter.to_epoch_seconds(to_utc) * 1000
+    annotations = exporter.fetch_annotations(grafana_url, auth_header, run_id, from_ms, to_ms)
+    (grafana_dir / "annotations.json").write_text(
+        json.dumps({"runId": run_id, "fromUtc": from_utc, "toUtc": to_utc, "annotations": annotations}, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    queries = exporter.extract_panel_queries(dashboard, dimensions)
+    collected, failed = exporter.collect_panel_queries(
+        grafana_url, auth_header, queries, from_utc, to_utc, region, queries_dir,
+    )
+    contracts = exporter.build_panel_capture_contracts(
+        dashboard, queries, grafana_url, run_id, from_utc, to_utc, dimensions,
+    )
+    exporter.write_panel_capture_contracts(contracts, panels_dir)
+    dashboard_contract = exporter.build_dashboard_capture_contract(
+        dashboard, grafana_url, run_id, from_utc, to_utc, dimensions,
+    )
+    (grafana_dir / "dashboard.capture.json").write_text(
+        json.dumps(dashboard_contract, indent=2) + "\n", encoding="utf-8",
+    )
+    (panels_dir / "status.json").write_text(json.dumps({
+        "status": "pending-manual-capture",
+        "panelCount": len(contracts),
+        "runId": run_id,
+        "fromUtc": from_utc,
+        "toUtc": to_utc,
+        "dashboardCapture": dashboard_contract,
+        "accessMode": "anonymous-viewer" if anonymous_viewer else "basic-auth",
+        "reason": "D-003-R1 requires fixed panel and full-dashboard screenshots via SSM port-forward and browser.",
+    }, indent=2) + "\n", encoding="utf-8")
+    timing = build_recovery_timing(events)
+    (evidence_root / "recovery-timing.json").write_text(json.dumps(timing, indent=2) + "\n", encoding="utf-8")
+    (evidence_root / "recovery-observability.json").write_text(json.dumps(metric_status, indent=2) + "\n", encoding="utf-8")
+    (evidence_root / "recovery-restoration.json").write_text(json.dumps(platform_recovery, indent=2) + "\n", encoding="utf-8")
+    (evidence_root / "recovery-verdict-export.json").write_text(json.dumps(verdict, indent=2) + "\n", encoding="utf-8")
+    summary = {
+        "status": "collected" if failed == 0 else "INVALID_OBSERVABILITY_EVIDENCE",
+        "verdictStatus": verdict["status"],
+        "runId": run_id,
+        "scenarioId": "AWS-RECOVERY-COMPARISON",
+        "fromUtc": from_utc,
+        "toUtc": to_utc,
+        "dashboardUid": dashboard.get("dashboard", {}).get("uid"),
+        "dashboardVersion": dashboard.get("dashboard", {}).get("version"),
+        "queryCount": len(queries),
+        "queryCollected": collected,
+        "queryFailed": failed,
+        "panelCount": len(contracts),
+        "dashboardCapturePath": "grafana/dashboard.capture.json",
+        "expectedDashboardPngPath": "grafana/dashboard.png",
+        "timingPath": "recovery-timing.json",
+        "restorationPath": "recovery-restoration.json",
+        "observabilityPath": "recovery-observability.json",
+        "verdictPath": "recovery-verdict.json",
+        "pngStatus": "pending-manual-capture",
+        "accessMode": "anonymous-viewer" if anonymous_viewer else "basic-auth",
+    }
+    (evidence_root / "recovery-export-summary.json").write_text(
+        json.dumps(summary, indent=2) + "\n", encoding="utf-8",
+    )
+    if failed:
+        raise RecoveryExportError(f"{failed} Grafana queries failed; evidence is not complete")
+    return summary
+
+
 def export_recovery_evidence(
     evidence_root: Path,
     run_id: str,
@@ -261,6 +437,7 @@ def export_recovery_evidence(
     region: str,
     dashboard_uid: str = "aws-recovery",
     empty_is_valid: set[str] | None = None,
+    anonymous_viewer: bool = False,
 ) -> dict[str, Any]:
     run_id, from_utc, to_utc = resolve_run(evidence_root, run_id)
     verdict = validate_verdict(evidence_root / "recovery-verdict.json", run_id)
@@ -283,7 +460,14 @@ def export_recovery_evidence(
     restoration = validate_restoration_invariant(evidence_root / "aws/restoration-state.json")
 
     exporter = _load_grafana_exporter()
-    auth_header = exporter.basic_auth_header(user, password)
+    if not exporter.is_loopback_grafana_url(grafana_url):
+        raise RecoveryExportError("--grafana-url must be a loopback SSM port-forward endpoint")
+    if anonymous_viewer:
+        auth_header = None
+    else:
+        if not user or not password:
+            raise RecoveryExportError("--user/--password are required unless --anonymous-viewer is used")
+        auth_header = exporter.basic_auth_header(user, password)
     grafana_dir = evidence_root / "grafana"
     queries_dir = grafana_dir / "queries"
     panels_dir = grafana_dir / "panels"
@@ -301,12 +485,20 @@ def export_recovery_evidence(
     collected, failed = exporter.collect_panel_queries(grafana_url, auth_header, queries, from_utc, to_utc, region, queries_dir)
     contracts = exporter.build_panel_capture_contracts(dashboard, queries, grafana_url, run_id, from_utc, to_utc, dimensions)
     exporter.write_panel_capture_contracts(contracts, panels_dir)
+    dashboard_contract = exporter.build_dashboard_capture_contract(
+        dashboard, grafana_url, run_id, from_utc, to_utc, dimensions,
+    )
+    (grafana_dir / "dashboard.capture.json").write_text(
+        json.dumps(dashboard_contract, indent=2) + "\n", encoding="utf-8",
+    )
     (panels_dir / "status.json").write_text(json.dumps({
         "status": "pending-manual-capture",
         "panelCount": len(contracts),
         "runId": run_id,
         "fromUtc": from_utc,
         "toUtc": to_utc,
+        "dashboardCapture": dashboard_contract,
+        "accessMode": "anonymous-viewer" if anonymous_viewer else "basic-auth",
         "reason": "D-003-R1 requires fixed Panel ID screenshots via SSM port-forward and browser.",
     }, indent=2) + "\n", encoding="utf-8")
     timing = build_recovery_timing(events)
@@ -327,11 +519,14 @@ def export_recovery_evidence(
         "queryCollected": collected,
         "queryFailed": failed,
         "panelCount": len(contracts),
+        "dashboardCapturePath": "grafana/dashboard.capture.json",
+        "expectedDashboardPngPath": "grafana/dashboard.png",
         "timingPath": "recovery-timing.json",
         "restorationPath": "recovery-restoration.json",
         "observabilityPath": "recovery-observability.json",
         "verdictPath": "recovery-verdict.json",
         "pngStatus": "pending-manual-capture",
+        "accessMode": "anonymous-viewer" if anonymous_viewer else "basic-auth",
     }
     (evidence_root / "recovery-export-summary.json").write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
     if failed:
@@ -349,6 +544,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--region", required=True)
     parser.add_argument("--dashboard-uid", default="aws-recovery")
     parser.add_argument("--empty-is-valid-metric", action="append", default=[])
+    parser.add_argument(
+        "--anonymous-viewer",
+        action="store_true",
+        help="Use explicit action-time anonymous Viewer access over a loopback SSM tunnel (default: basic auth).",
+    )
     parser.add_argument("--dry-run", action="store_true")
     return parser.parse_args()
 
@@ -358,17 +558,27 @@ def main() -> int:
     root = args.evidence_root.resolve()
     if not root.is_dir():
         raise RecoveryExportError("--evidence-root does not exist")
-    run_id, from_utc, to_utc = resolve_run(root, args.run_id)
-    events = read_recovery_events(root / "operations.jsonl")
+    metadata = read_json(root / "metadata.json")
+    comparison = metadata.get("scenarioId") == "AWS-RECOVERY-COMPARISON" or COMPARISON_RUN_ID.fullmatch(args.run_id)
+    if comparison:
+        run_id, from_utc, to_utc = resolve_comparison_run(root, args.run_id)
+    else:
+        run_id, from_utc, to_utc = resolve_run(root, args.run_id)
+    events = read_recovery_events(root / "operations.jsonl", require_all=not comparison)
     if args.dry_run:
         print(f"[recovery-export] dry-run run={run_id} range={from_utc}..{to_utc} dashboard={args.dashboard_uid} events={len(events)}")
         return 0
-    if not args.user or not args.password:
-        raise RecoveryExportError("--user/--password are required for live Grafana export")
-    result = export_recovery_evidence(
-        root, run_id, args.grafana_url, args.user, args.password, args.region,
-        args.dashboard_uid, DEFAULT_EMPTY_IS_VALID | set(args.empty_is_valid_metric),
-    )
+    if comparison:
+        result = export_comparison_recovery_evidence(
+            root, run_id, args.grafana_url, args.user, args.password, args.region,
+            args.dashboard_uid, args.anonymous_viewer,
+        )
+    else:
+        result = export_recovery_evidence(
+            root, run_id, args.grafana_url, args.user, args.password, args.region,
+            args.dashboard_uid, DEFAULT_EMPTY_IS_VALID | set(args.empty_is_valid_metric),
+            args.anonymous_viewer,
+        )
     print(json.dumps(result, indent=2))
     return 0
 
