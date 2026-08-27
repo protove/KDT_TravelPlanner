@@ -8,6 +8,8 @@ import com.ktcloud.travelplanner.community.dto.CommunityPostDetailResponse
 import com.ktcloud.travelplanner.community.dto.CommunityPostSummaryResponse
 import com.ktcloud.travelplanner.community.model.CommunityPost
 import com.ktcloud.travelplanner.community.model.CommunityTag
+import com.ktcloud.travelplanner.community.port.TravelAccessPort
+import com.ktcloud.travelplanner.community.port.UserLookupPort
 import com.ktcloud.travelplanner.community.repository.CommunityCategoryRepository
 import com.ktcloud.travelplanner.community.repository.CommunityPostRepository
 import com.ktcloud.travelplanner.community.repository.CommunityTagRepository
@@ -15,8 +17,6 @@ import com.ktcloud.travelplanner.community.validation.TiptapBodyJsonValidator
 import com.ktcloud.travelplanner.global.exception.DomainException
 import com.ktcloud.travelplanner.global.exception.ErrorCode
 import com.ktcloud.travelplanner.global.response.PageResponse
-import com.ktcloud.travelplanner.membership.repository.TravelMemberRepository
-import com.ktcloud.travelplanner.travel.repository.TravelRepository
 import com.ktcloud.travelplanner.user.repository.UserRepository
 import org.springframework.data.domain.PageRequest
 import org.springframework.stereotype.Service
@@ -28,9 +28,12 @@ class CommunityPostService(
 	private val communityCategoryRepository: CommunityCategoryRepository,
 	private val communityTagRepository: CommunityTagRepository,
 	private val communityPostRepository: CommunityPostRepository,
+	// 게시글 생성 시 CommunityPost.author: User 엔티티 관계 자체를 채우는 데 필요 — 이번 스코프에서는
+	// 엔티티를 authorId: UUID로 바꾸지 않기로 했으므로(docs/msa-service-boundaries.md 참고) 직접 유지.
+	// DB 스키마 분리 후에도 identity.user_table SELECT 예외 권한으로 계속 동작한다.
 	private val userRepository: UserRepository,
-	private val travelRepository: TravelRepository,
-	private val travelMemberRepository: TravelMemberRepository,
+	private val userLookupPort: UserLookupPort,
+	private val travelAccessPort: TravelAccessPort,
 	private val objectMapper: ObjectMapper,
 ) {
 	@Transactional
@@ -85,11 +88,15 @@ class CommunityPostService(
 		val post = communityPostRepository.findById(postId).orElseThrow(::CommunityPostNotFoundException)
 		val commentCount = communityPostRepository.countActiveComments(postId)
 		val reactionCount = communityPostRepository.countReactions(postId)
+		// author.id는 Lazy 프록시의 FK 컬럼 값이라 추가 조회 없이 읽힌다 — Port 안 거쳐도 됨.
+		// 닉네임/프로필사진 같은 실제 User 필드는 Port로 조회한다.
+		val author = userLookupPort.findAuthor(post.author.id)
 
 		val response = CommunityPostDetailResponse.from(
 			post = post,
 			bodyJson = objectMapper.readTree(post.bodyJson),
 			itinerarySnapshotJson = post.itinerarySnapshotJson?.let(objectMapper::readTree),
+			author = author,
 			viewCount = post.viewCount + 1,
 			commentCount = commentCount,
 			reactionCount = reactionCount,
@@ -139,8 +146,10 @@ class CommunityPostService(
 		travelId: UUID,
 		requesterId: UUID,
 	) {
-		val travel = travelRepository.findById(travelId).orElseThrow(::CommunityPostSourceTravelNotFoundException)
-		if (travel.owner.id != requesterId && travelMemberRepository.findAcceptedRole(travelId, requesterId) == null) {
+		if (!travelAccessPort.exists(travelId)) {
+			throw CommunityPostSourceTravelNotFoundException()
+		}
+		if (!travelAccessPort.hasReadAccess(travelId, requesterId)) {
 			throw CommunityPostSourceTravelAccessDeniedException()
 		}
 	}
