@@ -69,6 +69,7 @@ class AwsRecoveryRunnerContractTest(unittest.TestCase):
 
     def test_coordinator_detaches_background_workload_stdin(self):
         source = (ROOT / "scripts/loadtest/aws/coordinate-aws-recovery.py").read_text(encoding="utf-8")
+        self.assertIn("nohup setsid sh -c", source)
         self.assertIn("< /dev/null & echo started:$!", source)
 
     def test_v11_orchestrator_accepts_ec2_and_eks_action_time_targets(self):

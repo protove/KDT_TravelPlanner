@@ -523,8 +523,9 @@ class Coordinator:
         quoted = " ".join(shlex.quote(item) for item in argv)
         command = f"cd {shlex.quote(repo)} && {quoted}"
         if background:
+            detached = shlex.quote(quoted)
             command = (
-                f"cd {shlex.quote(repo)} && nohup {quoted} "
+                f"cd {shlex.quote(repo)} && nohup setsid sh -c {detached} "
                 f">> {shlex.quote(self.config['runner']['runDir'])}/coordinator-workload.log 2>&1 "
                 f"< /dev/null & echo started:$!"
             )
