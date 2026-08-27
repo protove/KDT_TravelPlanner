@@ -45,6 +45,7 @@ class FakeSsm:
         self.clock = clock
         self.events: list[tuple[str, str]] = []
         self.comments: list[str] = []
+        self.commands: list[str] = []
         self.stats_queue: list[dict] = []
         self.run_end_queue: list[str] = ["present"]
         self.operator_event: dict | None = None
@@ -52,6 +53,7 @@ class FakeSsm:
         self.fail_comments: set[str] = set()
 
     def run(self, command: str, *, timeout_seconds: int = 120, comment: str = "") -> str:
+        self.commands.append(command)
         self.comments.append(comment)
         if comment in self.fail_comments:
             raise AssertionError(f"unexpected SSM command in this phase: {comment}")
@@ -649,6 +651,45 @@ class ScenarioDetectorTests(unittest.TestCase):
             aws.target_health_queue = [{"10.20.1.11": "healthy", "10.20.2.11": "healthy"}]
             detail = coordinator._detect_t3()
             self.assertIn("readiness failure", detail)
+            self.assertEqual(mutations.executed, [])
+
+    def test_eks_snapshot_pins_root_kubeconfig_for_ssm(self) -> None:
+        with TemporaryDirectory() as raw:
+            directory = Path(raw)
+            config = base_config(directory, scenario="R-03", run_id="aws-r03-eks-test-home")
+            config["platform"] = "eks"
+            config["target"] = {
+                "clusterName": "kdt-travelplanner-dev-eks",
+                "nodeGroupName": "kdt-travelplanner-dev-eks-nodes",
+                "targetGroupArn": config["target"]["targetGroupArn"],
+            }
+            coordinator, _, ssm, _, _, _ = build_coordinator(directory, config)
+            coordinator._eks_snapshot()
+            snapshot_command = ssm.commands[-1]
+            self.assertIn("export HOME=/root KUBECONFIG=/root/.kube/config", snapshot_command)
+
+    def test_eks_b02_t3_uses_node_replacement_signal(self) -> None:
+        with TemporaryDirectory() as raw:
+            directory = Path(raw)
+            config = base_config(directory, scenario="B-02", run_id="aws-b02-eks-test-t3")
+            config["platform"] = "eks"
+            config["target"] = {
+                "clusterName": "kdt-travelplanner-dev-eks",
+                "nodeGroupName": "kdt-travelplanner-dev-eks-nodes",
+                "asgName": "eks-kdt-travelplanner-dev-eks-nodes",
+                "targetGroupArn": config["target"]["targetGroupArn"],
+                "nodeInstanceId": "i-0aaaaaaaaaaaaaaa1",
+            }
+            coordinator, aws, ssm, mutations, _, state = build_coordinator(directory, config)
+            for step in ("preflight", "workload-start", "warmup", "t0", "pre-t1-window", "t1", "t2"):
+                state.record(step)
+            coordinator._eks_pre_t1_snapshot = {
+                "nodes": {"items": [{"metadata": {"name": "node-a"}}]},
+                "pods": {"items": []},
+            }
+            ssm.eks_snapshot_queue = [{"nodes": {"items": [{"metadata": {"name": "node-b"}}]}}]
+            detail = coordinator._detect_t3()
+            self.assertIn("node loss/replacement", detail)
             self.assertEqual(mutations.executed, [])
 
     def test_b02_t5_rejects_terminated_instance_as_recovery(self) -> None:

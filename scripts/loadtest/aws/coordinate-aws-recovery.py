@@ -698,6 +698,10 @@ class Coordinator:
         region = self.config["region"]
         command = (
             "set -euo pipefail; "
+            # AWS-RunShellScript executes as root with HOME unset on the
+            # Bastion. Pin the kubeconfig location so the read-only snapshot
+            # actually uses the context prepared by the deployment runner.
+            "export HOME=/root KUBECONFIG=/root/.kube/config; "
             f"aws eks update-kubeconfig --name {shlex.quote(cluster)} --region {shlex.quote(region)} --alias scr43-eks; "
             f"printf '%s\\n' __SCRUM53_DEPLOYMENT_BEGIN__; kubectl --context scr43-eks -n {shlex.quote(namespace)} get deployment {shlex.quote(deployment)} -o json; printf '%s\\n' __SCRUM53_DEPLOYMENT_END__; "
             f"printf '%s\\n' __SCRUM53_PODS_BEGIN__; kubectl --context scr43-eks -n {shlex.quote(namespace)} get pods -l app.kubernetes.io/name=travel-planner-backend -o json; printf '%s\\n' __SCRUM53_PODS_END__; "
@@ -915,6 +919,33 @@ class Coordinator:
     def _detect_t3(self) -> str:
         scenario = self.config["scenario"]
         if self.platform == "eks":
+            if scenario == "B-02":
+                def probe_b02() -> str | None:
+                    # Node loss is the B-02 signal. Readiness may remain
+                    # healthy while Kubernetes reschedules the Pod, so do
+                    # not wait for a probe failure that this scenario does
+                    # not promise.
+                    previous = self._eks_pre_t1_snapshot or {}
+                    snapshot = self._eks_snapshot()
+                    previous_nodes = {
+                        item.get("metadata", {}).get("name")
+                        for item in (previous.get("nodes", {}).get("items", []) if isinstance(previous.get("nodes"), dict) else [])
+                        if isinstance(item, dict)
+                    }
+                    current_nodes = {
+                        item.get("metadata", {}).get("name")
+                        for item in (snapshot.get("nodes", {}).get("items", []) if isinstance(snapshot.get("nodes"), dict) else [])
+                        if isinstance(item, dict)
+                    }
+                    if previous_nodes and current_nodes and current_nodes != previous_nodes:
+                        return "EKS managed node loss/replacement signal observed"
+                    for activity in self._scaling_activities():
+                        description = str(activity.get("Description", ""))
+                        if "Terminating" in description or "Launching" in description:
+                            return "EKS managed-node ASG recorded the B-02 replacement activity"
+                    return None
+                return self._poll_until("B-02 EKS node-loss detection", probe_b02)
+
             def probe() -> str | None:
                 snapshot = self._eks_snapshot()
                 deployment = snapshot.get("deployment", {}) if isinstance(snapshot.get("deployment"), dict) else {}
