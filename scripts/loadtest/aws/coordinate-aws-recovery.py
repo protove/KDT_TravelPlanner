@@ -784,7 +784,15 @@ class Coordinator:
         _require(stats.get("status") == "ok", "live stats unavailable for the pre-T1 window")
         rate = float(self.config.get("rate", 0) or 0)
         _require(rate > 0, "config.rate must be the frozen D-005 rate")
-        expected = rate * self.normal_window_seconds
+        # The frozen comparison mix includes auth refreshes, which are
+        # intentionally excluded from the Core API counters by contract. Keep
+        # the pre-T1 gate on the same observable unit as the evaluator instead
+        # of demanding ``rate * window`` Core operations. The run config records
+        # the share derived from the frozen request mix (0.88 for v1.1); a
+        # missing value retains the legacy 1.0 default for older fixtures.
+        core_share = float(self.config.get("coreOperationShare", 1.0))
+        _require(0 < core_share <= 1, "config.coreOperationShare must be within (0, 1]")
+        expected = rate * core_share * self.normal_window_seconds
         successful = float(stats.get("successful") or 0)
         _require(
             successful >= expected * self.minimum_window_ratio,

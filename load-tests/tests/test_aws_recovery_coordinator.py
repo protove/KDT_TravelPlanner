@@ -455,6 +455,18 @@ class MutationGateTests(unittest.TestCase):
             with self.assertRaisesRegex(MODULE.CoordinatorError, "capacity floor"):
                 coordinator.step_pre_t1_window()
 
+    def test_pre_t1_window_uses_core_operation_share(self) -> None:
+        with TemporaryDirectory() as raw:
+            directory = Path(raw)
+            config = base_config(directory)
+            config["coreOperationShare"] = 0.5
+            coordinator, _, ssm, _, _, state = build_coordinator(directory, config)
+            for step in ("preflight", "workload-start", "warmup", "t0"):
+                state.record(step)
+            ssm.stats_queue = [{"status": "ok", "operations": 10, "successful": 10,
+                                "unexpectedErrors": 0, "contractFailures": 0}]
+            coordinator.step_pre_t1_window()
+
     def test_pre_t1_window_blocks_on_unexpected_errors(self) -> None:
         with TemporaryDirectory() as raw:
             directory = Path(raw)
