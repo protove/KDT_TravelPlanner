@@ -220,6 +220,22 @@ class ExtractPanelQueriesTest(unittest.TestCase):
 
 
 class CollectPanelQueriesTest(unittest.TestCase):
+    def test_loki_auto_interval_is_resolved_for_http_query(self):
+        captured = []
+        original_request = EXPORT.grafana_request
+        EXPORT.grafana_request = lambda url, auth_header, timeout=15: captured.append(url) or json.dumps({"status": "success", "data": {}}).encode("utf-8")
+        try:
+            EXPORT.collect_datasource_range_query(
+                "http://127.0.0.1:3000", None, "loki", "loki",
+                'sum(count_over_time({service="x"}[$__auto]))',
+                "2026-08-11T09:00:00Z", "2026-08-11T10:00:00Z",
+            )
+        finally:
+            EXPORT.grafana_request = original_request
+        self.assertEqual(len(captured), 1)
+        self.assertIn("1m", captured[0])
+        self.assertNotIn("%24__auto", captured[0])
+
     def test_cloudwatch_command_keeps_all_dimensions_in_one_cli_list(self):
         captured = []
         original_run_command = EXPORT.run_command

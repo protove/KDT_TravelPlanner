@@ -61,6 +61,42 @@ class ObserverContractTests(unittest.TestCase):
             self.assertEqual(snapshot["logicalCapacity"], 4)
             self.assertRegex(snapshot["ts"], r"Z$")
 
+    def test_cloudwatch_read_failure_keeps_capacity_snapshot_and_records_limitation(self):
+        class FakeAws:
+            def call(self, service, operation, arguments):
+                if service == "autoscaling":
+                    return {
+                        "AutoScalingGroups": [{
+                            "MinSize": 2,
+                            "DesiredCapacity": 2,
+                            "MaxSize": 4,
+                            "Instances": [
+                                {"LifecycleState": "InService", "HealthStatus": "Healthy"},
+                                {"LifecycleState": "InService", "HealthStatus": "Healthy"},
+                            ],
+                        }]
+                    }
+                raise MODULE.ObserverError("simulated CloudWatch permission denial")
+
+        args = argparse.Namespace(
+            sample_json=None,
+            platform="ec2",
+            asg_name="kdt-travelplanner-dev-backend",
+            cluster_name="",
+            node_group_name="",
+            rds_instance_id="",
+            redis_cluster_id="",
+            t3_instance_ids=[],
+            runner_stats_file=None,
+            slo_window_file=None,
+        )
+        snapshot = MODULE.collect_snapshot(args, FakeAws())
+        self.assertEqual(snapshot["logicalCapacity"], 2)
+        self.assertTrue(snapshot["capacityHealthy"])
+        self.assertEqual(snapshot["backendCpuPercent"], None)
+        self.assertEqual(snapshot["sources"][-1], "cloudwatch-unavailable")
+        self.assertIn("AWS/EC2:CPUUtilization:read-failed", snapshot["observationErrors"])
+
 
 if __name__ == "__main__":
     unittest.main()

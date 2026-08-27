@@ -127,6 +127,29 @@ def cloudwatch_metric(aws: AwsReadOnly, namespace: str, metric: str, statistic: 
     return max(values) if values else None
 
 
+def best_effort_cloudwatch_metric(
+    aws: AwsReadOnly,
+    namespace: str,
+    metric: str,
+    statistic: str,
+    dimensions: Mapping[str, str] | None,
+    now: datetime,
+    observation_errors: list[str],
+) -> float | None:
+    """Keep the capacity window alive when Runner IAM cannot read CloudWatch.
+
+    ASG/EKS capacity and Runner stats are still useful read-only observations,
+    while a permission-denied CloudWatch call must be recorded as a limitation
+    rather than terminating the workload or being mistaken for a zero metric.
+    The error string is intentionally sanitized and contains no AWS response.
+    """
+    try:
+        return cloudwatch_metric(aws, namespace, metric, statistic, dimensions, now)
+    except ObserverError:
+        observation_errors.append(f"{namespace}:{metric}:read-failed")
+        return None
+
+
 def collect_snapshot(args: argparse.Namespace, aws: AwsReadOnly) -> dict[str, Any]:
     now = utc_now()
     fixture = read_optional(args.sample_json)
@@ -144,9 +167,11 @@ def collect_snapshot(args: argparse.Namespace, aws: AwsReadOnly) -> dict[str, An
     runner = last_jsonl(args.runner_stats_file)
     docker = runner.get("docker") if isinstance(runner.get("docker"), Mapping) else {}
     cloudwatch: dict[str, Any] = {}
+    observation_errors: list[str] = []
     if args.platform == "ec2" and args.asg_name:
-        cloudwatch["backendCpuPercent"] = cloudwatch_metric(
+        cloudwatch["backendCpuPercent"] = best_effort_cloudwatch_metric(
             aws, "AWS/EC2", "CPUUtilization", "Average", {"AutoScalingGroupName": args.asg_name}, now,
+            observation_errors,
         )
     if args.rds_instance_id:
         rds_dimensions = {"DBInstanceIdentifier": args.rds_instance_id}
@@ -157,7 +182,9 @@ def collect_snapshot(args: argparse.Namespace, aws: AwsReadOnly) -> dict[str, An
             ("ReadLatency", "rdsReadLatencySeconds"),
             ("WriteLatency", "rdsWriteLatencySeconds"),
         ):
-            cloudwatch[key] = cloudwatch_metric(aws, "AWS/RDS", metric_name, "Average", rds_dimensions, now)
+            cloudwatch[key] = best_effort_cloudwatch_metric(
+                aws, "AWS/RDS", metric_name, "Average", rds_dimensions, now, observation_errors,
+            )
     if args.redis_cluster_id:
         redis_dimensions = {"CacheClusterId": args.redis_cluster_id}
         for metric_name, key in (
@@ -169,14 +196,16 @@ def collect_snapshot(args: argparse.Namespace, aws: AwsReadOnly) -> dict[str, An
             ("CPUCreditBalance", "redisT3CreditBalance"),
             ("CPUCreditUsage", "redisT3CreditUsage"),
         ):
-            cloudwatch[key] = cloudwatch_metric(aws, "AWS/ElastiCache", metric_name, "Average", redis_dimensions, now)
+            cloudwatch[key] = best_effort_cloudwatch_metric(
+                aws, "AWS/ElastiCache", metric_name, "Average", redis_dimensions, now, observation_errors,
+            )
     for instance_id in getattr(args, "t3_instance_ids", []) or []:
         dimensions = {"InstanceId": instance_id}
-        cloudwatch.setdefault("t3CreditBalance", {})[instance_id] = cloudwatch_metric(
-            aws, "AWS/EC2", "CPUCreditBalance", "Average", dimensions, now,
+        cloudwatch.setdefault("t3CreditBalance", {})[instance_id] = best_effort_cloudwatch_metric(
+            aws, "AWS/EC2", "CPUCreditBalance", "Average", dimensions, now, observation_errors,
         )
-        cloudwatch.setdefault("t3CreditUsage", {})[instance_id] = cloudwatch_metric(
-            aws, "AWS/EC2", "CPUCreditUsage", "Average", dimensions, now,
+        cloudwatch.setdefault("t3CreditUsage", {})[instance_id] = best_effort_cloudwatch_metric(
+            aws, "AWS/EC2", "CPUCreditUsage", "Average", dimensions, now, observation_errors,
         )
 
     slo = last_jsonl(args.slo_window_file)
@@ -211,7 +240,12 @@ def collect_snapshot(args: argparse.Namespace, aws: AwsReadOnly) -> dict[str, An
         "sloWindow": bool(slo.get("sloWindow", False)),
         "sloBreached": bool(slo.get("sloBreached", False)),
         "runnerVusExhausted": bool(slo.get("runnerVusExhausted", False)),
-        "sources": ["autoscaling" if args.platform == "ec2" else "eks", "runner-stats", "cloudwatch" if cloudwatch else "none"],
+        "observationErrors": sorted(set(observation_errors)),
+        "sources": [
+            "autoscaling" if args.platform == "ec2" else "eks",
+            "runner-stats",
+            "cloudwatch" if cloudwatch and not observation_errors else "cloudwatch-unavailable" if observation_errors else "none",
+        ],
     }
     return snapshot
 

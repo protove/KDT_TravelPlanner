@@ -255,6 +255,12 @@ def collect_datasource_range_query(grafana_url: str, auth_header: str | None, ds
         query = urllib.parse.urlencode({"query": expr, "start": start_epoch, "end": end_epoch, "step": step})
         url = f"{grafana_url.rstrip('/')}/api/datasources/proxy/uid/{ds_uid}/api/v1/query_range?{query}"
     else:  # loki
+        # ``$__auto`` is a Grafana dashboard macro, not valid LogQL when the
+        # exporter calls Loki's HTTP API directly. The recovery dashboards
+        # use it for the fixed one-minute marker bucket, so resolve it to the
+        # explicit interval before querying while retaining the original
+        # expression in the evidence record.
+        expr = expr.replace("$__auto", "1m")
         query = urllib.parse.urlencode({
             "query": expr,
             "start": start_epoch * 1_000_000_000,
