@@ -14,10 +14,12 @@ import {
 import { TripList } from "@/components/organisms/TripList";
 import { NewTripModal } from "@/components/organisms/NewTripModal";
 import { SearchBar } from "@/components/molecules/SearchBar";
+import { SearchPeriodSelect } from "@/components/molecules/SearchPeriodSelect";
 import { ListLayout } from "@/components/templates/ListLayout";
 import { TripsPageSkeleton } from "@/components/templates/TripsPageSkeleton";
 import { useAuthStore } from "@/lib/stores/useAuthStore";
 import { fetchTravels, type TravelSearchScope, type TravelSummary } from "@/lib/api/travel";
+import { resolveSearchPeriod, type SearchPeriodPreset } from "@/lib/utils/searchPeriod";
 import type { TripListItem } from "@/components/organisms/TripList";
 
 type ListTab = "mine" | "shared";
@@ -108,6 +110,11 @@ export default function TripsPage() {
   const [searchScope, setSearchScope] = React.useState<TravelSearchScope>("ALL");
   const [queryDraft, setQueryDraft] = React.useState("");
   const [searchScopeDraft, setSearchScopeDraft] = React.useState<TravelSearchScope>("ALL");
+  // 커뮤니티/마이페이지와 달리 기본값은 "전체 기간"으로 둔다 — 여기서 "기간"은 작성일이 아니라
+  // 여행 자체의 날짜(startDate~endDate)라서, 과거 N개월로 기본값을 좁히면 이미 만들어둔 예정된
+  // 미래 여행이 기본 목록에서 안 보이는 더 나쁜 문제가 생긴다. 개인 여행 목록은 개수 자체도
+  // 게시글/댓글처럼 무한정 쌓이지 않아 "전체 기간 조회"의 부담도 상대적으로 작다.
+  const [period, setPeriod] = React.useState<SearchPeriodPreset>("ALL");
   const [travels, setTravels] = React.useState<TravelSummary[]>([]);
   const [error, setError] = React.useState<string | null>(null);
   const [page, setPage] = React.useState(0);
@@ -122,7 +129,8 @@ export default function TripsPage() {
 
   const sentinelRef = React.useRef<HTMLDivElement>(null);
 
-  const requestKey = `${accessToken ?? ""}:${query}:${searchScope}:${refreshKey}`;
+  const { periodStart, periodEnd } = resolveSearchPeriod(period);
+  const requestKey = `${accessToken ?? ""}:${query}:${searchScope}:${period}:${refreshKey}`;
   const isLoading = isPreview
     ? isPreviewLoading
     : completedRequestKey !== requestKey;
@@ -165,6 +173,8 @@ export default function TripsPage() {
     fetchTravels(accessToken, {
       keyword: query.trim() || undefined,
       searchScope,
+      periodStart,
+      periodEnd,
       page: 0,
       size: PAGE_SIZE,
     })
@@ -191,6 +201,7 @@ export default function TripsPage() {
     return () => {
       isCurrentRequest = false;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [accessToken, query, searchScope, requestKey]);
 
   const loadMore = React.useCallback(() => {
@@ -202,6 +213,8 @@ export default function TripsPage() {
     fetchTravels(accessToken, {
       keyword: query.trim() || undefined,
       searchScope,
+      periodStart,
+      periodEnd,
       page: nextPage,
       size: PAGE_SIZE,
     })
@@ -212,7 +225,8 @@ export default function TripsPage() {
       })
       .catch(() => setIsLast(true))
       .finally(() => setLoadingMore(false));
-  }, [accessToken, query, searchScope, page, isLast, loadingMore, error]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [accessToken, query, searchScope, period, page, isLast, loadingMore, error]);
 
   function commitSearch() {
     setError(null);
@@ -293,16 +307,16 @@ export default function TripsPage() {
         />
       </div>
 
-      <Tabs
-        value={tab}
-        onValueChange={(v) => setTab(v as ListTab)}
-        className="mb-5 w-fit"
-      >
-        <TabsList>
-          <TabsTrigger value="mine">내 일정</TabsTrigger>
-          <TabsTrigger value="shared">공유받은 일정</TabsTrigger>
-        </TabsList>
-      </Tabs>
+      <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
+        <Tabs value={tab} onValueChange={(v) => setTab(v as ListTab)}>
+          <TabsList>
+            <TabsTrigger value="mine">내 일정</TabsTrigger>
+            <TabsTrigger value="shared">공유받은 일정</TabsTrigger>
+          </TabsList>
+        </Tabs>
+
+        <SearchPeriodSelect value={period} onValueChange={setPeriod} />
+      </div>
 
       {error ? (
         <div

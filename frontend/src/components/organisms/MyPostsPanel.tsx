@@ -3,8 +3,11 @@
 import * as React from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/atoms/Button";
+import { SearchBar } from "@/components/molecules/SearchBar";
+import { SearchPeriodSelect } from "@/components/molecules/SearchPeriodSelect";
 import { CommunityPostList } from "@/components/organisms/CommunityPostList";
 import { getCategories, listMyPosts } from "@/lib/api/community";
+import { DEFAULT_SEARCH_PERIOD, resolveSearchPeriod, type SearchPeriodPreset } from "@/lib/utils/searchPeriod";
 import type { CommunityCategory, CommunityPostSummary } from "@/lib/types/community";
 
 const PAGE_SIZE = 10;
@@ -13,8 +16,9 @@ export interface MyPostsPanelProps {
   accessToken: string;
 }
 
-// /trips, /community 목록과 동일한 sentinel + IntersectionObserver 무한 스크롤 패턴 —
-// 카테고리/정렬/검색 필터가 없다는 점만 다르다(항상 본인 글 전체).
+// /trips, /community 목록과 동일한 sentinel + IntersectionObserver 무한 스크롤 패턴, 그리고
+// 동일한 Enter로 검색 확정 패턴(community/page.tsx 참고) — keyword/keywordDraft를 분리해
+// 타이핑할 때마다 서버로 요청이 나가지 않게 한다. period는 카테고리/정렬처럼 선택 즉시 반영.
 function MyPostsPanel({ accessToken }: MyPostsPanelProps) {
   const router = useRouter();
 
@@ -27,9 +31,14 @@ function MyPostsPanel({ accessToken }: MyPostsPanelProps) {
   const [refreshKey, setRefreshKey] = React.useState(0);
   const [completedRequestKey, setCompletedRequestKey] = React.useState<string | null>(null);
 
+  const [keyword, setKeyword] = React.useState("");
+  const [keywordDraft, setKeywordDraft] = React.useState("");
+  const [period, setPeriod] = React.useState<SearchPeriodPreset>(DEFAULT_SEARCH_PERIOD);
+
   const sentinelRef = React.useRef<HTMLDivElement>(null);
 
-  const requestKey = `${accessToken}:${refreshKey}`;
+  const { periodStart, periodEnd } = resolveSearchPeriod(period);
+  const requestKey = `${accessToken}:${keyword}:${period}:${refreshKey}`;
   const isLoading = completedRequestKey !== requestKey;
 
   React.useEffect(() => {
@@ -39,7 +48,13 @@ function MyPostsPanel({ accessToken }: MyPostsPanelProps) {
   React.useEffect(() => {
     let isCurrentRequest = true;
 
-    listMyPosts(accessToken, { page: 0, size: PAGE_SIZE })
+    listMyPosts(accessToken, {
+      keyword: keyword.trim() || undefined,
+      periodStart,
+      periodEnd,
+      page: 0,
+      size: PAGE_SIZE,
+    })
       .then((res) => {
         if (!isCurrentRequest) return;
         setPosts(res.content);
@@ -59,7 +74,8 @@ function MyPostsPanel({ accessToken }: MyPostsPanelProps) {
     return () => {
       isCurrentRequest = false;
     };
-  }, [accessToken, refreshKey, requestKey]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [accessToken, keyword, refreshKey, requestKey]);
 
   const loadMore = React.useCallback(() => {
     if (isLast || loadingMore || error || isLoading) return;
@@ -67,7 +83,13 @@ function MyPostsPanel({ accessToken }: MyPostsPanelProps) {
     const nextPage = page + 1;
     setLoadingMore(true);
 
-    listMyPosts(accessToken, { page: nextPage, size: PAGE_SIZE })
+    listMyPosts(accessToken, {
+      keyword: keyword.trim() || undefined,
+      periodStart,
+      periodEnd,
+      page: nextPage,
+      size: PAGE_SIZE,
+    })
       .then((res) => {
         setPosts((prev) => [...prev, ...res.content]);
         setPage(nextPage);
@@ -75,7 +97,8 @@ function MyPostsPanel({ accessToken }: MyPostsPanelProps) {
       })
       .catch(() => setIsLast(true))
       .finally(() => setLoadingMore(false));
-  }, [accessToken, page, isLast, loadingMore, error, isLoading]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [accessToken, keyword, period, page, isLast, loadingMore, error, isLoading]);
 
   React.useEffect(() => {
     const el = sentinelRef.current;
@@ -94,37 +117,56 @@ function MyPostsPanel({ accessToken }: MyPostsPanelProps) {
     return categories.find((c) => c.code === code)?.name ?? code;
   }
 
-  if (error) {
-    return (
-      <div role="alert" className="flex flex-col items-center gap-3 py-16 text-center">
-        <p className="text-sm text-destructive">{error}</p>
-        <Button
-          variant="outline"
-          onClick={() => {
-            setError(null);
-            setRefreshKey((k) => k + 1);
-          }}
-        >
-          다시 시도
-        </Button>
-      </div>
-    );
+  function commitSearch() {
+    setKeyword(keywordDraft);
+  }
+
+  function handleSearchKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
+    if (e.key === "Enter") commitSearch();
   }
 
   return (
     <>
-      <CommunityPostList
-        posts={posts.map((post) => ({
-          id: post.postId,
-          post,
-          categoryName: categoryName(post.categoryCode),
-          onClick: () => router.push(`/community/detail?id=${post.postId}`),
-        }))}
-        isLoading={isLoading}
-        isLoadingMore={loadingMore}
-        emptyMessage="아직 작성한 게시글이 없어요."
-      />
-      <div ref={sentinelRef} className="h-px" />
+      <div className="mb-4 flex gap-2">
+        <SearchPeriodSelect value={period} onValueChange={setPeriod} />
+        <SearchBar
+          placeholder="내가 쓴 글 검색 (Enter로 검색)"
+          value={keywordDraft}
+          onChange={(e) => setKeywordDraft(e.target.value)}
+          onKeyDown={handleSearchKeyDown}
+          containerClassName="flex-1"
+        />
+      </div>
+
+      {error ? (
+        <div role="alert" className="flex flex-col items-center gap-3 py-16 text-center">
+          <p className="text-sm text-destructive">{error}</p>
+          <Button
+            variant="outline"
+            onClick={() => {
+              setError(null);
+              setRefreshKey((k) => k + 1);
+            }}
+          >
+            다시 시도
+          </Button>
+        </div>
+      ) : (
+        <>
+          <CommunityPostList
+            posts={posts.map((post) => ({
+              id: post.postId,
+              post,
+              categoryName: categoryName(post.categoryCode),
+              onClick: () => router.push(`/community/detail?id=${post.postId}`),
+            }))}
+            isLoading={isLoading}
+            isLoadingMore={loadingMore}
+            emptyMessage={keyword ? "검색 결과가 없어요." : "아직 작성한 게시글이 없어요."}
+          />
+          <div ref={sentinelRef} className="h-px" />
+        </>
+      )}
     </>
   );
 }

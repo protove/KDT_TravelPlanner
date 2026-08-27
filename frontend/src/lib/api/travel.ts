@@ -28,6 +28,9 @@ export type TravelSearchScope = "ALL" | "TITLE" | "DESCRIPTION" | "DESTINATION";
 export interface FetchTravelsParams {
   keyword?: string;
   searchScope?: TravelSearchScope;
+  /** YYYY-MM-DD. 여행 "자체 기간"(startDate~endDate)이 이 구간과 겹치는지로 거른다. */
+  periodStart?: string;
+  periodEnd?: string;
   page?: number;
   size?: number;
 }
@@ -43,6 +46,8 @@ export async function fetchTravels(
   const searchParams = new URLSearchParams();
   if (params.keyword) searchParams.set("keyword", params.keyword);
   if (params.searchScope) searchParams.set("searchScope", params.searchScope);
+  if (params.periodStart) searchParams.set("periodStart", params.periodStart);
+  if (params.periodEnd) searchParams.set("periodEnd", params.periodEnd);
   if (params.page != null) searchParams.set("page", String(params.page));
   if (params.size != null) searchParams.set("size", String(params.size));
   const qs = searchParams.toString();

@@ -12,10 +12,12 @@ import {
   SelectValue,
 } from "@/components/atoms/Select";
 import { SearchBar } from "@/components/molecules/SearchBar";
+import { SearchPeriodSelect } from "@/components/molecules/SearchPeriodSelect";
 import { CommunityPostList } from "@/components/organisms/CommunityPostList";
 import { ListLayout } from "@/components/templates/ListLayout";
 import { useAuthStore } from "@/lib/stores/useAuthStore";
 import { getCategories, listPosts } from "@/lib/api/community";
+import { DEFAULT_SEARCH_PERIOD, resolveSearchPeriod, type SearchPeriodPreset } from "@/lib/utils/searchPeriod";
 import type { CommunityCategory, CommunityPostSearchScope, CommunityPostSummary } from "@/lib/types/community";
 
 const ALL_CATEGORY = "ALL";
@@ -49,6 +51,9 @@ function CommunityPageContent() {
   // 선택했던 카테고리 탭이 "전체"로 초기화되지 않도록 URL 쿼리(?category=)로 상태를 남긴다.
   const [categoryTab, setCategoryTab] = React.useState(() => searchParams.get("category") ?? ALL_CATEGORY);
   const [sort, setSort] = React.useState<SortOption>("latest");
+  // 카테고리/정렬처럼 선택 즉시 반영 — "전체 기간"으로 무제한 조회하는 걸 막기 위해 기본값을
+  // 최근 3개월로 좁혀둔다(SearchPeriodSelect 참고).
+  const [period, setPeriod] = React.useState<SearchPeriodPreset>(DEFAULT_SEARCH_PERIOD);
   // keyword/searchScope는 실제 조회에 쓰이는 "확정된" 값이고, keywordDraft/searchScopeDraft는
   // 입력 중인 값이다 — 타이핑할 때마다, 혹은 스코프 드롭다운만 바꿔도 매번 서버로 요청이 나가는 걸
   // 막기 위해 검색창에서 Enter를 눌러야 확정값에 반영되고 그때 비로소 재조회가 일어난다.
@@ -67,7 +72,9 @@ function CommunityPageContent() {
 
   const sentinelRef = React.useRef<HTMLDivElement>(null);
 
-  const requestKey = `${accessToken ?? ""}:${categoryTab}:${sort}:${keyword}:${searchScope}:${refreshKey}`;
+  const { periodStart, periodEnd } = resolveSearchPeriod(period);
+  const requestKey =
+    `${accessToken ?? ""}:${categoryTab}:${sort}:${keyword}:${searchScope}:${period}:${refreshKey}`;
   const isLoading = completedRequestKey !== requestKey;
 
   React.useEffect(() => {
@@ -83,6 +90,8 @@ function CommunityPageContent() {
       keyword: keyword.trim() || undefined,
       searchScope,
       sort: sort === "popular" ? "popular" : undefined,
+      periodStart,
+      periodEnd,
       page: 0,
       size: PAGE_SIZE,
     })
@@ -105,6 +114,9 @@ function CommunityPageContent() {
     return () => {
       isCurrentRequest = false;
     };
+    // periodStart/periodEnd는 requestKey에 이미 period 문자열로 반영돼 있어 의존성 배열에
+    // 추가하지 않는다(resolveSearchPeriod가 매 렌더 새 객체를 반환해 추가하면 무한루프됨).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [accessToken, categoryTab, sort, keyword, searchScope, refreshKey, requestKey]);
 
   const loadMore = React.useCallback(() => {
@@ -118,6 +130,8 @@ function CommunityPageContent() {
       keyword: keyword.trim() || undefined,
       searchScope,
       sort: sort === "popular" ? "popular" : undefined,
+      periodStart,
+      periodEnd,
       page: nextPage,
       size: PAGE_SIZE,
     })
@@ -128,7 +142,8 @@ function CommunityPageContent() {
       })
       .catch(() => setIsLast(true))
       .finally(() => setLoadingMore(false));
-  }, [accessToken, categoryTab, sort, keyword, searchScope, page, isLast, loadingMore, error, isLoading]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [accessToken, categoryTab, sort, keyword, searchScope, period, page, isLast, loadingMore, error, isLoading]);
 
   // 목록 하단의 sentinel이 화면에 보이면 다음 페이지를 불러온다.
   React.useEffect(() => {
@@ -211,15 +226,18 @@ function CommunityPageContent() {
           </TabsList>
         </Tabs>
 
-        <Select value={sort} onValueChange={changeSort}>
-          <SelectTrigger className="w-28">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="latest">최신순</SelectItem>
-            <SelectItem value="popular">인기순</SelectItem>
-          </SelectContent>
-        </Select>
+        <div className="flex items-center gap-2">
+          <SearchPeriodSelect value={period} onValueChange={setPeriod} />
+          <Select value={sort} onValueChange={changeSort}>
+            <SelectTrigger className="w-28">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="latest">최신순</SelectItem>
+              <SelectItem value="popular">인기순</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
       </div>
 
       {error ? (

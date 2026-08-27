@@ -5,10 +5,13 @@ import { useRouter } from "next/navigation";
 import { Badge } from "@/components/atoms/Badge";
 import { Button } from "@/components/atoms/Button";
 import { Skeleton } from "@/components/atoms/Skeleton";
+import { SearchBar } from "@/components/molecules/SearchBar";
+import { SearchPeriodSelect } from "@/components/molecules/SearchPeriodSelect";
 import { listMyComments } from "@/lib/api/community";
 import type { MyCommentResponse } from "@/lib/types/community";
 import { cn } from "@/lib/utils";
 import { formatRelativeTime } from "@/lib/utils/formatRelativeTime";
+import { DEFAULT_SEARCH_PERIOD, resolveSearchPeriod, type SearchPeriodPreset } from "@/lib/utils/searchPeriod";
 
 const PAGE_SIZE = 10;
 
@@ -72,7 +75,8 @@ function MyCommentCardSkeleton() {
   );
 }
 
-// MyPostsPanel과 동일한 sentinel + IntersectionObserver 무한 스크롤 패턴.
+// MyPostsPanel과 동일한 sentinel + IntersectionObserver 무한 스크롤 패턴, 그리고 동일한
+// Enter로 검색 확정 패턴(community/page.tsx 참고).
 function MyCommentsPanel({ accessToken }: MyCommentsPanelProps) {
   const router = useRouter();
 
@@ -84,15 +88,26 @@ function MyCommentsPanel({ accessToken }: MyCommentsPanelProps) {
   const [refreshKey, setRefreshKey] = React.useState(0);
   const [completedRequestKey, setCompletedRequestKey] = React.useState<string | null>(null);
 
+  const [keyword, setKeyword] = React.useState("");
+  const [keywordDraft, setKeywordDraft] = React.useState("");
+  const [period, setPeriod] = React.useState<SearchPeriodPreset>(DEFAULT_SEARCH_PERIOD);
+
   const sentinelRef = React.useRef<HTMLDivElement>(null);
 
-  const requestKey = `${accessToken}:${refreshKey}`;
+  const { periodStart, periodEnd } = resolveSearchPeriod(period);
+  const requestKey = `${accessToken}:${keyword}:${period}:${refreshKey}`;
   const isLoading = completedRequestKey !== requestKey;
 
   React.useEffect(() => {
     let isCurrentRequest = true;
 
-    listMyComments(accessToken, { page: 0, size: PAGE_SIZE })
+    listMyComments(accessToken, {
+      keyword: keyword.trim() || undefined,
+      periodStart,
+      periodEnd,
+      page: 0,
+      size: PAGE_SIZE,
+    })
       .then((res) => {
         if (!isCurrentRequest) return;
         setComments(res.content);
@@ -112,7 +127,8 @@ function MyCommentsPanel({ accessToken }: MyCommentsPanelProps) {
     return () => {
       isCurrentRequest = false;
     };
-  }, [accessToken, refreshKey, requestKey]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [accessToken, keyword, refreshKey, requestKey]);
 
   const loadMore = React.useCallback(() => {
     if (isLast || loadingMore || error || isLoading) return;
@@ -120,7 +136,13 @@ function MyCommentsPanel({ accessToken }: MyCommentsPanelProps) {
     const nextPage = page + 1;
     setLoadingMore(true);
 
-    listMyComments(accessToken, { page: nextPage, size: PAGE_SIZE })
+    listMyComments(accessToken, {
+      keyword: keyword.trim() || undefined,
+      periodStart,
+      periodEnd,
+      page: nextPage,
+      size: PAGE_SIZE,
+    })
       .then((res) => {
         setComments((prev) => [...prev, ...res.content]);
         setPage(nextPage);
@@ -128,7 +150,8 @@ function MyCommentsPanel({ accessToken }: MyCommentsPanelProps) {
       })
       .catch(() => setIsLast(true))
       .finally(() => setLoadingMore(false));
-  }, [accessToken, page, isLast, loadingMore, error, isLoading]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [accessToken, keyword, period, page, isLast, loadingMore, error, isLoading]);
 
   React.useEffect(() => {
     const el = sentinelRef.current;
@@ -143,44 +166,65 @@ function MyCommentsPanel({ accessToken }: MyCommentsPanelProps) {
     return () => observer.disconnect();
   }, [loadMore]);
 
-  if (error) {
-    return (
-      <div role="alert" className="flex flex-col items-center gap-3 py-16 text-center">
-        <p className="text-sm text-destructive">{error}</p>
-        <Button
-          variant="outline"
-          onClick={() => {
-            setError(null);
-            setRefreshKey((k) => k + 1);
-          }}
-        >
-          다시 시도
-        </Button>
-      </div>
-    );
+  function commitSearch() {
+    setKeyword(keywordDraft);
+  }
+
+  function handleSearchKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
+    if (e.key === "Enter") commitSearch();
   }
 
   return (
     <>
-      <div className="flex flex-col gap-3">
-        {isLoading ? (
-          Array.from({ length: 4 }, (_, i) => <MyCommentCardSkeleton key={i} />)
-        ) : comments.length === 0 ? (
-          <div className="py-16 text-center text-sm text-muted-foreground">아직 작성한 댓글이 없어요.</div>
-        ) : (
-          <>
-            {comments.map((comment) => (
-              <MyCommentCard
-                key={comment.commentId}
-                comment={comment}
-                onClick={() => router.push(`/community/detail?id=${comment.postId}`)}
-              />
-            ))}
-            {loadingMore && <MyCommentCardSkeleton />}
-          </>
-        )}
+      <div className="mb-4 flex gap-2">
+        <SearchPeriodSelect value={period} onValueChange={setPeriod} />
+        <SearchBar
+          placeholder="내가 쓴 댓글 검색 (Enter로 검색)"
+          value={keywordDraft}
+          onChange={(e) => setKeywordDraft(e.target.value)}
+          onKeyDown={handleSearchKeyDown}
+          containerClassName="flex-1"
+        />
       </div>
-      <div ref={sentinelRef} className="h-px" />
+
+      {error ? (
+        <div role="alert" className="flex flex-col items-center gap-3 py-16 text-center">
+          <p className="text-sm text-destructive">{error}</p>
+          <Button
+            variant="outline"
+            onClick={() => {
+              setError(null);
+              setRefreshKey((k) => k + 1);
+            }}
+          >
+            다시 시도
+          </Button>
+        </div>
+      ) : (
+        <>
+          <div className="flex flex-col gap-3">
+            {isLoading ? (
+              Array.from({ length: 4 }, (_, i) => <MyCommentCardSkeleton key={i} />)
+            ) : comments.length === 0 ? (
+              <div className="py-16 text-center text-sm text-muted-foreground">
+                {keyword ? "검색 결과가 없어요." : "아직 작성한 댓글이 없어요."}
+              </div>
+            ) : (
+              <>
+                {comments.map((comment) => (
+                  <MyCommentCard
+                    key={comment.commentId}
+                    comment={comment}
+                    onClick={() => router.push(`/community/detail?id=${comment.postId}`)}
+                  />
+                ))}
+                {loadingMore && <MyCommentCardSkeleton />}
+              </>
+            )}
+          </div>
+          <div ref={sentinelRef} className="h-px" />
+        </>
+      )}
     </>
   );
 }

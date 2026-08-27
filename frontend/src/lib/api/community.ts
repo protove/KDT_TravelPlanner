@@ -94,6 +94,9 @@ export interface ListPostsParams {
   /** keyword 매칭 대상. 생략하면 서버 기본값(ALL). */
   searchScope?: CommunityPostSearchScope;
   sort?: "popular";
+  /** YYYY-MM-DD. 둘 다 생략하면 전체 기간(서버 기본 동작). */
+  periodStart?: string;
+  periodEnd?: string;
   page?: number;
   size?: number;
 }
@@ -109,6 +112,8 @@ export async function listPosts(
   if (params.keyword) searchParams.set("keyword", params.keyword);
   if (params.searchScope) searchParams.set("searchScope", params.searchScope);
   if (params.sort) searchParams.set("sort", params.sort);
+  if (params.periodStart) searchParams.set("periodStart", params.periodStart);
+  if (params.periodEnd) searchParams.set("periodEnd", params.periodEnd);
   if (params.page != null) searchParams.set("page", String(params.page));
   if (params.size != null) searchParams.set("size", String(params.size));
   const qs = searchParams.toString();
@@ -167,16 +172,23 @@ export async function toggleCommentReaction(accessToken: string, commentId: stri
 }
 
 export interface MyPageListParams {
+  keyword?: string;
+  /** YYYY-MM-DD. 둘 다 생략하면 전체 기간. */
+  periodStart?: string;
+  periodEnd?: string;
   page?: number;
   size?: number;
 }
 
-/** 마이페이지 "내가 쓴 글" 탭. 로그인 필요(토큰만으로 본인 글을 식별, 필터 없음). */
+/** 마이페이지 "내가 쓴 글" 탭. 로그인 필요(토큰만으로 본인 글을 식별). */
 export async function listMyPosts(
   accessToken: string,
   params: MyPageListParams = {},
 ): Promise<PageResponse<CommunityPostSummary>> {
   const searchParams = new URLSearchParams();
+  if (params.keyword) searchParams.set("keyword", params.keyword);
+  if (params.periodStart) searchParams.set("periodStart", params.periodStart);
+  if (params.periodEnd) searchParams.set("periodEnd", params.periodEnd);
   if (params.page != null) searchParams.set("page", String(params.page));
   if (params.size != null) searchParams.set("size", String(params.size));
   const qs = searchParams.toString();
@@ -192,6 +204,9 @@ export async function listMyComments(
   params: MyPageListParams = {},
 ): Promise<PageResponse<MyCommentResponse>> {
   const searchParams = new URLSearchParams();
+  if (params.keyword) searchParams.set("keyword", params.keyword);
+  if (params.periodStart) searchParams.set("periodStart", params.periodStart);
+  if (params.periodEnd) searchParams.set("periodEnd", params.periodEnd);
   if (params.page != null) searchParams.set("page", String(params.page));
   if (params.size != null) searchParams.set("size", String(params.size));
   const qs = searchParams.toString();
