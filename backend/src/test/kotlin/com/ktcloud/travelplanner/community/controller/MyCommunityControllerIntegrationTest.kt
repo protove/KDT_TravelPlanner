@@ -70,7 +70,7 @@ class MyCommunityControllerIntegrationTest(
 	}
 
 	@Test
-	fun `GET me posts includes the requester's own soft deleted posts with deletedAt set`() {
+	fun `GET me posts hides the requester's own soft deleted posts by default`() {
 		val requester = saveUser("me-posts-deleted-requester")
 		val kept = savePost(requester, "안 지운 글")
 		val deleted = savePost(requester, "내가 지운 글")
@@ -83,6 +83,29 @@ class MyCommunityControllerIntegrationTest(
 
 		mockMvc.get("/api/v1/community/me/posts") {
 			header(HttpHeaders.AUTHORIZATION, bearer(requester))
+		}.andExpect {
+			status { isOk() }
+			jsonPath("$.data.totalElements", equalTo(1))
+			jsonPath("$.data.content[0].title", equalTo("안 지운 글"))
+			jsonPath("$.data.content[0].deletedAt", nullValue())
+		}
+	}
+
+	@Test
+	fun `GET me posts includeDeleted=true includes the requester's own soft deleted posts with deletedAt set`() {
+		val requester = saveUser("me-posts-include-deleted-requester")
+		val kept = savePost(requester, "안 지운 글")
+		val deleted = savePost(requester, "내가 지운 글")
+		setCreatedAt(kept.id, Instant.parse("2026-08-01T00:00:00Z"))
+		setCreatedAt(deleted.id, Instant.parse("2026-08-02T00:00:00Z"))
+
+		mockMvc.delete("/api/v1/community/posts/${deleted.id}") {
+			header(HttpHeaders.AUTHORIZATION, bearer(requester))
+		}.andExpect { status { isOk() } }
+
+		mockMvc.get("/api/v1/community/me/posts") {
+			header(HttpHeaders.AUTHORIZATION, bearer(requester))
+			param("includeDeleted", "true")
 		}.andExpect {
 			status { isOk() }
 			jsonPath("$.data.totalElements", equalTo(2))
@@ -169,7 +192,7 @@ class MyCommunityControllerIntegrationTest(
 	}
 
 	@Test
-	fun `GET me comments includes comments on a soft deleted post, with the comment's own deletedAt null`() {
+	fun `GET me comments hides comments on a soft deleted post by default`() {
 		val requester = saveUser("me-comments-deleted-post-requester")
 		val post = savePost(requester, "곧 삭제될 글")
 
@@ -186,6 +209,14 @@ class MyCommunityControllerIntegrationTest(
 			header(HttpHeaders.AUTHORIZATION, bearer(requester))
 		}.andExpect {
 			status { isOk() }
+			jsonPath("$.data.totalElements", equalTo(0))
+		}
+
+		mockMvc.get("/api/v1/community/me/comments") {
+			header(HttpHeaders.AUTHORIZATION, bearer(requester))
+			param("includeDeleted", "true")
+		}.andExpect {
+			status { isOk() }
 			jsonPath("$.data.totalElements", equalTo(1))
 			jsonPath("$.data.content[0].postTitle", equalTo("곧 삭제될 글"))
 			jsonPath("$.data.content[0].deletedAt", nullValue())
@@ -194,7 +225,7 @@ class MyCommunityControllerIntegrationTest(
 	}
 
 	@Test
-	fun `GET me comments includes the requester's own soft deleted comment with deletedAt set`() {
+	fun `GET me comments hides the requester's own soft deleted comment by default`() {
 		val requester = saveUser("me-comments-own-deleted-requester")
 		val post = savePost(requester, "댓글 달릴 글")
 
@@ -211,6 +242,14 @@ class MyCommunityControllerIntegrationTest(
 
 		mockMvc.get("/api/v1/community/me/comments") {
 			header(HttpHeaders.AUTHORIZATION, bearer(requester))
+		}.andExpect {
+			status { isOk() }
+			jsonPath("$.data.totalElements", equalTo(0))
+		}
+
+		mockMvc.get("/api/v1/community/me/comments") {
+			header(HttpHeaders.AUTHORIZATION, bearer(requester))
+			param("includeDeleted", "true")
 		}.andExpect {
 			status { isOk() }
 			jsonPath("$.data.totalElements", equalTo(1))

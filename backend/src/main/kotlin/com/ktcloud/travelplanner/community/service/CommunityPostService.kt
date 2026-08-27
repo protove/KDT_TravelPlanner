@@ -283,15 +283,17 @@ class CommunityPostService(
 		return buildSummaryPage(result)
 	}
 
-	// 마이페이지 "내가 쓴 글" 탭 — 본인 글만 작성일 역순으로, 본인이 소프트 삭제한 글도 함께
-	// 보여준다(deletedAt 채워서 내려주고 삭제 표시는 프론트에서). keyword/기간 필터는 getPosts와
-	// 동일한 관례(둘 다 null이면 필터 없음).
+	// 마이페이지 "내가 쓴 글" 탭 — 본인 글만 작성일 역순으로. includeDeleted=true일 때만 본인이
+	// 소프트 삭제한 글도 함께 보여준다(기본값 false — 삭제한 글은 숨김). 포함될 때는 deletedAt을
+	// 채워서 내려주고 삭제 표시는 프론트에서 한다. keyword/기간 필터는 getPosts와 동일한 관례
+	// (둘 다 null이면 필터 없음).
 	@Transactional(readOnly = true)
 	fun getMyPosts(
 		authorId: UUID,
 		keyword: String?,
 		periodStart: LocalDate?,
 		periodEnd: LocalDate?,
+		includeDeleted: Boolean,
 		page: Int,
 		size: Int,
 	): PageResponse<CommunityPostSummaryResponse> {
@@ -302,6 +304,7 @@ class CommunityPostService(
 			normalizedKeyword,
 			periodStart?.toStartOfDayInstant(),
 			periodEnd?.toExclusiveEndOfDayInstant(),
+			includeDeleted,
 			pageable,
 		)
 			.map { row ->

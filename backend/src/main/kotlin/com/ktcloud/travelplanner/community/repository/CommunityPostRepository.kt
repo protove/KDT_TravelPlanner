@@ -266,9 +266,10 @@ interface CommunityPostRepository : JpaRepository<CommunityPost, UUID> {
 		@Param("postIds") postIds: List<UUID>,
 	): List<PostReactionCountRow>
 
-	// 마이페이지 "내가 쓴 글" 탭 — 본인 글만 작성일 역순으로, 본인이 소프트 삭제한 글도 함께
-	// 보여준다. CommunityPost의 @SQLRestriction("deleted_at IS NULL")은 JPQL로는(findById 포함)
-	// 절대 우회할 수 없어서, countActiveComments 등과 동일하게 네이티브 쿼리로 우회한다.
+	// 마이페이지 "내가 쓴 글" 탭 — 본인 글만 작성일 역순으로, includeDeleted=true일 때만 본인이
+	// 소프트 삭제한 글도 함께 보여준다(기본은 숨김). CommunityPost의
+	// @SQLRestriction("deleted_at IS NULL")은 JPQL로는(findById 포함) 절대 우회할 수 없어서,
+	// countActiveComments 등과 동일하게 네이티브 쿼리로 우회한다.
 	// keyword는 제목/본문 미리보기를 훑고, periodStart/periodEnd는 작성일(created_at) 기준.
 	@Query(
 		value = """
@@ -287,6 +288,7 @@ interface CommunityPostRepository : JpaRepository<CommunityPost, UUID> {
 			JOIN community_category category ON category.id = post.category_id
 			JOIN user_table author ON author.id = post.author_id
 			WHERE post.author_id = :authorId
+				AND (:includeDeleted = true OR post.deleted_at IS NULL)
 				AND (CAST(:periodStart AS timestamptz) IS NULL OR post.created_at >= CAST(:periodStart AS timestamptz))
 				AND (CAST(:periodEnd AS timestamptz) IS NULL OR post.created_at < CAST(:periodEnd AS timestamptz))
 				AND (:keyword IS NULL OR (
@@ -299,6 +301,7 @@ interface CommunityPostRepository : JpaRepository<CommunityPost, UUID> {
 			SELECT COUNT(*)
 			FROM community_post post
 			WHERE post.author_id = :authorId
+				AND (:includeDeleted = true OR post.deleted_at IS NULL)
 				AND (CAST(:periodStart AS timestamptz) IS NULL OR post.created_at >= CAST(:periodStart AS timestamptz))
 				AND (CAST(:periodEnd AS timestamptz) IS NULL OR post.created_at < CAST(:periodEnd AS timestamptz))
 				AND (:keyword IS NULL OR (
@@ -313,6 +316,7 @@ interface CommunityPostRepository : JpaRepository<CommunityPost, UUID> {
 		@Param("keyword") keyword: String?,
 		@Param("periodStart") periodStart: String?,
 		@Param("periodEnd") periodEnd: String?,
+		@Param("includeDeleted") includeDeleted: Boolean,
 		pageable: Pageable,
 	): Page<MyPostRow>
 }

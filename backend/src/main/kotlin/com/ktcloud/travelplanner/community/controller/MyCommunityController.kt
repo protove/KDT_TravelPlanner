@@ -29,11 +29,20 @@ class MyCommunityController(
 		@RequestParam(required = false) keyword: String?,
 		@RequestParam(required = false) periodStart: LocalDate?,
 		@RequestParam(required = false) periodEnd: LocalDate?,
+		@RequestParam(defaultValue = "false") includeDeleted: Boolean,
 		@RequestParam(defaultValue = "0") page: Int,
 		@RequestParam(defaultValue = "10") size: Int,
 	): ApiResponse<PageResponse<CommunityPostSummaryResponse>> =
 		ApiResponse.success(
-			communityPostService.getMyPosts(principal.userId, keyword, periodStart, periodEnd, page, size),
+			communityPostService.getMyPosts(
+				principal.userId,
+				keyword,
+				periodStart,
+				periodEnd,
+				includeDeleted,
+				page,
+				size,
+			),
 		)
 
 	@GetMapping("/comments")
@@ -42,10 +51,19 @@ class MyCommunityController(
 		@RequestParam(required = false) keyword: String?,
 		@RequestParam(required = false) periodStart: LocalDate?,
 		@RequestParam(required = false) periodEnd: LocalDate?,
+		@RequestParam(defaultValue = "false") includeDeleted: Boolean,
 		@RequestParam(defaultValue = "0") page: Int,
 		@RequestParam(defaultValue = "10") size: Int,
 	): ApiResponse<PageResponse<MyCommentResponse>> =
 		ApiResponse.success(
-			communityCommentService.getMyComments(principal.userId, keyword, periodStart, periodEnd, page, size),
+			communityCommentService.getMyComments(
+				principal.userId,
+				keyword,
+				periodStart,
+				periodEnd,
+				includeDeleted,
+				page,
+				size,
+			),
 		)
 }

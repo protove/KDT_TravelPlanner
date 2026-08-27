@@ -137,14 +137,16 @@ class CommunityCommentService(
 		)
 	}
 
-	// 마이페이지 "내가 쓴 댓글" 탭 — 본인 댓글만 작성일 역순으로, 본인이 삭제한 댓글도 함께
-	// 보여준다. keyword/기간 필터는 CommunityPostService.getMyPosts와 동일한 관례.
+	// 마이페이지 "내가 쓴 댓글" 탭 — 본인 댓글만 작성일 역순으로. includeDeleted=true일 때만
+	// 본인이 삭제한 댓글(및 삭제한 글에 달린 댓글)도 함께 보여준다(기본값 false). keyword/기간
+	// 필터는 CommunityPostService.getMyPosts와 동일한 관례.
 	@Transactional(readOnly = true)
 	fun getMyComments(
 		authorId: UUID,
 		keyword: String?,
 		periodStart: LocalDate?,
 		periodEnd: LocalDate?,
+		includeDeleted: Boolean,
 		page: Int,
 		size: Int,
 	): PageResponse<MyCommentResponse> {
@@ -155,6 +157,7 @@ class CommunityCommentService(
 			normalizedKeyword,
 			periodStart?.toStartOfDayInstant(),
 			periodEnd?.toExclusiveEndOfDayInstant(),
+			includeDeleted,
 			pageable,
 		)
 		return PageResponse.from(result.map(MyCommentResponse::from))
