@@ -202,6 +202,12 @@ class MyCommunityControllerIntegrationTest(
 			content = """{"content": "삭제될 글에 단 댓글"}"""
 		}.andExpect { status { isOk() } }
 
+		// entityManager.clear()는 아직 flush되지 않은 변경분(방금 만든 댓글의 insert)을 커밋 없이
+		// 그냥 버려버린다 — 테스트 전체가 @Transactional 하나로 묶여 있어 위 POST의 persist()가
+		// 자동으로 flush되는 시점(커밋)이 오지 않기 때문. clear() 전에 명시적으로 flush해서
+		// 댓글이 실제로 DB에 반영된 뒤에 지운다(같은 클래스의 CommunityPost soft-delete 시나리오와
+		// 동일한 함정).
+		entityManager.flush()
 		jdbcTemplate.update("UPDATE community_post SET deleted_at = NOW() WHERE id = ?", post.id)
 		entityManager.clear()
 
