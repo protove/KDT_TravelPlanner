@@ -443,6 +443,20 @@ class MutationGateTests(unittest.TestCase):
                 coordinator.step_t1()
             self.assertEqual(mutations.executed, [])
 
+    def test_failed_t1_does_not_record_event_or_mutation_for_resume(self) -> None:
+        with TemporaryDirectory() as raw:
+            directory = Path(raw)
+            config = base_config(directory)
+            coordinator, _, ssm, mutations, _, state = build_coordinator(directory, config)
+            for step in ("preflight", "workload-start", "warmup", "t0", "pre-t1-window"):
+                state.record(step)
+            mutations.exit_code = 1
+            with self.assertRaisesRegex(MODULE.CoordinatorError, "mutation failed"):
+                coordinator.step_t1()
+            self.assertEqual(mutations.executed, ["b02-terminate"])
+            self.assertEqual(ssm.events, [])
+            self.assertEqual(state.mutations, [])
+
     def test_pre_t1_window_blocks_below_capacity_floor(self) -> None:
         with TemporaryDirectory() as raw:
             directory = Path(raw)

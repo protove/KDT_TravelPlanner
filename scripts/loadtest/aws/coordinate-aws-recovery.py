@@ -821,8 +821,8 @@ class Coordinator:
             )
         argv_sha = hashlib.sha256(json.dumps(spec["argv"]).encode()).hexdigest()
         code, stdout, stderr = self.mutations.execute(spec, timeout=float(spec.get("timeoutSeconds", 900)))
-        self.state.record_mutation(spec["kind"], argv_sha)
         _require(code == 0, f"{label} mutation failed: {stderr.strip()[:300]}")
+        self.state.record_mutation(spec["kind"], argv_sha)
 
     def step_t1(self) -> None:
         _require(self.state.is_done("pre-t1-window"), "T1 requires a verified pre-T1 window")
@@ -831,8 +831,8 @@ class Coordinator:
             stats.get("status") == "ok" and (stats.get("operations") or 0) > 0,
             "T1 requires an active workload",
         )
-        self.record_event("T1", self.config.get("t1Detail", "approved fault/rollout command issued"))
         self._execute_mutation("t1Mutation")
+        self.record_event("T1", self.config.get("t1Detail", "approved fault/rollout command issued"))
         self.log("[coordinator] T1 mutation executed")
 
     # -- scenario detectors, each returns sanitized detail --
