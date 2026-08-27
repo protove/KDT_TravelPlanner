@@ -219,16 +219,18 @@ resource "aws_instance" "monitoring" {
   user_data_replace_on_change = true
 
   user_data = templatefile("${path.module}/templates/monitoring-user-data.sh.tftpl", {
-    aws_region                 = var.aws_region
-    eks_dashboard_download     = local.eks_dashboard_download
-    grafana_image_reference    = var.grafana_image_reference
-    loki_image_reference       = var.loki_image_reference
-    monitoring_config_revision = local.monitoring_config_revision
-    monitoring_bucket_name     = aws_s3_bucket.monitoring_config.id
-    platform                   = var.platform
-    prometheus_bind_address    = local.prometheus_bind_address
-    prometheus_image_reference = var.prometheus_image_reference
-    prometheus_runtime_flags   = local.prometheus_runtime_flags
+    aws_region                       = var.aws_region
+    eks_dashboard_download           = local.eks_dashboard_download
+    grafana_anonymous_org_role       = var.grafana_anonymous_viewer_enabled ? "Viewer" : ""
+    grafana_anonymous_viewer_enabled = var.grafana_anonymous_viewer_enabled
+    grafana_image_reference          = var.grafana_image_reference
+    loki_image_reference             = var.loki_image_reference
+    monitoring_config_revision       = local.monitoring_config_revision
+    monitoring_bucket_name           = aws_s3_bucket.monitoring_config.id
+    platform                         = var.platform
+    prometheus_bind_address          = local.prometheus_bind_address
+    prometheus_image_reference       = var.prometheus_image_reference
+    prometheus_runtime_flags         = local.prometheus_runtime_flags
   })
 
   depends_on = [

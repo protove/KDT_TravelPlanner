@@ -111,6 +111,12 @@ variable "monitoring_image_references" {
   }
 }
 
+variable "grafana_anonymous_viewer_enabled" {
+  type        = bool
+  description = "Temporary action-time Grafana anonymous Viewer access through an SSM loopback tunnel; default-off."
+  default     = false
+}
+
 variable "admin_principal_arns" {
   type        = list(string)
   description = <<-EOT

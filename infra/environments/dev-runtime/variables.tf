@@ -50,6 +50,12 @@ variable "monitoring_image_references" {
   }
 }
 
+variable "grafana_anonymous_viewer_enabled" {
+  type        = bool
+  description = "Temporary action-time Grafana anonymous Viewer access through an SSM loopback tunnel; default-off."
+  default     = false
+}
+
 variable "persistent_state_bucket" {
   type        = string
   description = "S3 bucket containing the persistent dev Terraform State."

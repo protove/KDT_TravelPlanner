@@ -146,6 +146,26 @@ class BasicAuthHeaderTest(unittest.TestCase):
         self.assertEqual(decoded, "evidence-exporter:s3cr3t")
 
 
+class GrafanaCaptureContractTest(unittest.TestCase):
+    def test_loopback_endpoint_is_required_for_capture(self):
+        self.assertTrue(EXPORT.is_loopback_grafana_url("http://127.0.0.1:3000"))
+        self.assertTrue(EXPORT.is_loopback_grafana_url("http://localhost:3000"))
+        self.assertFalse(EXPORT.is_loopback_grafana_url("https://grafana.example.com"))
+
+    def test_full_dashboard_contract_contains_fixed_window_and_png_path(self):
+        contract = EXPORT.build_dashboard_capture_contract(
+            SAMPLE_DASHBOARD_PAYLOAD,
+            "http://127.0.0.1:3000",
+            "scrum43-r01-ec2-capture",
+            "2026-08-11T09:00:00Z",
+            "2026-08-11T10:00:00Z",
+        )
+        self.assertEqual(contract["expectedPngPath"], "grafana/dashboard.png")
+        self.assertIn("from=1786438800000", contract["captureUrl"])
+        self.assertIn("to=1786442400000", contract["captureUrl"])
+        self.assertIn("tz=utc", contract["captureUrl"])
+
+
 class ToEpochSecondsTest(unittest.TestCase):
     def test_known_timestamp(self):
         self.assertEqual(EXPORT.to_epoch_seconds("1970-01-01T00:00:00Z"), 0)

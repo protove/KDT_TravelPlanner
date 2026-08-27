@@ -72,6 +72,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--from-utc", default="", help="Default: metadata.json's startedAtUtc")
     parser.add_argument("--to-utc", default="", help="Default: metadata.json's endedAtUtc")
     parser.add_argument("--region", default="", help="Required to collect CloudWatch panel queries")
+    parser.add_argument(
+        "--anonymous-viewer",
+        action="store_true",
+        help=(
+            "Use Grafana's action-time anonymous Viewer access. This is allowed only over a "
+            "loopback URL (normally an SSM port-forward) and is disabled by default."
+        ),
+    )
     parser.add_argument("--dry-run", action="store_true", help="Resolve inputs and print the plan; make no network/AWS CLI calls")
     return parser.parse_args()
 
@@ -113,8 +121,9 @@ def basic_auth_header(user: str, password: str) -> str:
     return f"Basic {token}"
 
 
-def grafana_request(url: str, auth_header: str, timeout: int = 15) -> bytes:
-    request = Request(url, headers={"Authorization": auth_header})
+def grafana_request(url: str, auth_header: str | None, timeout: int = 15) -> bytes:
+    headers = {"Authorization": auth_header} if auth_header else {}
+    request = Request(url, headers=headers)
     try:
         with urlopen(request, timeout=timeout) as response:
             return response.read()
@@ -130,12 +139,12 @@ def run_command(command: list[str]) -> str:
     return completed.stdout
 
 
-def fetch_dashboard(grafana_url: str, auth_header: str, dashboard_uid: str) -> dict:
+def fetch_dashboard(grafana_url: str, auth_header: str | None, dashboard_uid: str) -> dict:
     url = f"{grafana_url.rstrip('/')}/api/dashboards/uid/{dashboard_uid}"
     return json.loads(grafana_request(url, auth_header))
 
 
-def fetch_annotations(grafana_url: str, auth_header: str, run_id: str, from_ms: int, to_ms: int) -> list:
+def fetch_annotations(grafana_url: str, auth_header: str | None, run_id: str, from_ms: int, to_ms: int) -> list:
     query = urllib.parse.urlencode({"tags": f"run:{run_id}", "from": from_ms, "to": to_ms, "limit": 500})
     url = f"{grafana_url.rstrip('/')}/api/annotations?{query}"
     return json.loads(grafana_request(url, auth_header))
@@ -238,7 +247,7 @@ def extract_panel_queries(dashboard_payload: dict, resource_dimensions: dict | N
     return queries
 
 
-def collect_datasource_range_query(grafana_url: str, auth_header: str, ds_type: str, ds_uid: str, expr: str, from_utc: str, to_utc: str) -> dict:
+def collect_datasource_range_query(grafana_url: str, auth_header: str | None, ds_type: str, ds_uid: str, expr: str, from_utc: str, to_utc: str) -> dict:
     start_epoch = to_epoch_seconds(from_utc)
     end_epoch = to_epoch_seconds(to_utc)
     if ds_type == "prometheus":
@@ -270,7 +279,7 @@ def collect_cloudwatch_query(namespace: str, metric_name: str, statistic: str, p
     return json.loads(run_command(command))
 
 
-def collect_panel_queries(grafana_url: str, auth_header: str, panel_queries: list[dict], from_utc: str, to_utc: str, region: str, queries_dir: Path) -> tuple[int, int]:
+def collect_panel_queries(grafana_url: str, auth_header: str | None, panel_queries: list[dict], from_utc: str, to_utc: str, region: str, queries_dir: Path) -> tuple[int, int]:
     collected = 0
     failed = 0
     for entry in panel_queries:
@@ -308,6 +317,36 @@ def build_dashboard_url(grafana_url: str, dashboard_uid: str, resource_dimension
         for variable_name, resource_key in CLOUDWATCH_DIMENSION_VARIABLES.items()
     ]
     return f"{base_url}?{urllib.parse.urlencode(variables)}"
+
+
+def is_loopback_grafana_url(grafana_url: str) -> bool:
+    """Return true only for a local endpoint suitable for an SSM tunnel.
+
+    Grafana is intentionally private.  Requiring a loopback host at export
+    time prevents an operator from accidentally sending evidence credentials
+    or anonymous Viewer traffic to a public endpoint.
+    """
+    try:
+        parsed = urllib.parse.urlparse(grafana_url)
+    except ValueError:
+        return False
+    return parsed.scheme in {"http", "https"} and parsed.hostname in {"127.0.0.1", "localhost", "::1"}
+
+
+def build_fixed_dashboard_url(
+    grafana_url: str,
+    dashboard_uid: str,
+    from_utc: str,
+    to_utc: str,
+    resource_dimensions: dict | None = None,
+) -> str:
+    """Build the exact fixed UTC dashboard URL used for a screenshot."""
+    base = build_dashboard_url(grafana_url, dashboard_uid, resource_dimensions)
+    separator = "&" if "?" in base else "?"
+    return (
+        f"{base}{separator}"
+        f"{urllib.parse.urlencode({'from': to_epoch_seconds(from_utc) * 1000, 'to': to_epoch_seconds(to_utc) * 1000, 'tz': 'utc'})}"
+    )
 
 
 def build_panel_capture_contracts(
@@ -370,6 +409,36 @@ def build_panel_capture_contracts(
     return contracts
 
 
+def build_dashboard_capture_contract(
+    dashboard_payload: dict,
+    grafana_url: str,
+    run_id: str,
+    from_utc: str,
+    to_utc: str,
+    resource_dimensions: dict | None = None,
+) -> dict:
+    """Build the browser contract for the full fixed-window dashboard PNG."""
+    dashboard = dashboard_payload.get("dashboard", {})
+    dashboard_uid = dashboard.get("uid", "")
+    return {
+        "runId": run_id,
+        "fromUtc": from_utc,
+        "toUtc": to_utc,
+        "dashboardUid": dashboard_uid,
+        "dashboardVersion": dashboard.get("version"),
+        "dashboardUrl": build_dashboard_url(grafana_url, dashboard_uid, resource_dimensions),
+        "captureUrl": build_fixed_dashboard_url(
+            grafana_url, dashboard_uid, from_utc, to_utc, resource_dimensions,
+        ),
+        "expectedPngPath": "grafana/dashboard.png",
+        "instructions": (
+            "Over the authorized SSM port-forward, open captureUrl in a browser and save the "
+            "entire dashboard (not a login page or a single panel) as expectedPngPath. Keep the "
+            "fixed UTC range visible and do not include credentials, cookies or tokens."
+        ),
+    }
+
+
 def write_panel_capture_contracts(contracts: list[dict], panels_dir: Path) -> None:
     for contract in contracts:
         path = panels_dir / f"panel-{contract['panelId']}.capture.json"
@@ -385,7 +454,9 @@ def main() -> int:
     from_utc, to_utc = resolve_time_range(evidence_root, args.from_utc, args.to_utc)
     run_id = resolve_run_id(evidence_root, args.run_id)
 
-    if not args.user or not args.password:
+    if not is_loopback_grafana_url(args.grafana_url):
+        raise ExportError("--grafana-url must be a loopback SSM port-forward endpoint")
+    if not args.anonymous_viewer and (not args.user or not args.password):
         raise ExportError("--user/--password or GRAFANA_EVIDENCE_USER/GRAFANA_EVIDENCE_PASSWORD are required")
 
     grafana_dir = evidence_root / "grafana"
@@ -402,7 +473,7 @@ def main() -> int:
     queries_dir.mkdir(parents=True, exist_ok=True)
     panels_dir.mkdir(parents=True, exist_ok=True)
 
-    auth_header = basic_auth_header(args.user, args.password)
+    auth_header = None if args.anonymous_viewer else basic_auth_header(args.user, args.password)
 
     dashboard_payload = fetch_dashboard(args.grafana_url, auth_header, args.dashboard_uid)
     (grafana_dir / "dashboard.json").write_text(json.dumps(dashboard_payload, indent=2) + "\n", encoding="utf-8")
@@ -416,7 +487,11 @@ def main() -> int:
         json.dumps({
             "dashboardUid": args.dashboard_uid,
             "url": build_dashboard_url(args.grafana_url, args.dashboard_uid, resource_dimensions),
+            "fixedCaptureUrl": build_fixed_dashboard_url(
+                args.grafana_url, args.dashboard_uid, from_utc, to_utc, resource_dimensions,
+            ),
             "resourceDimensionsPath": "aws/resource-dimensions.json",
+            "accessMode": "anonymous-viewer" if args.anonymous_viewer else "basic-auth",
         }, indent=2) + "\n",
         encoding="utf-8",
     )
@@ -436,6 +511,12 @@ def main() -> int:
         dashboard_payload, panel_queries, args.grafana_url, run_id, from_utc, to_utc, resource_dimensions,
     )
     write_panel_capture_contracts(contracts, panels_dir)
+    dashboard_contract = build_dashboard_capture_contract(
+        dashboard_payload, args.grafana_url, run_id, from_utc, to_utc, resource_dimensions,
+    )
+    (grafana_dir / "dashboard.capture.json").write_text(
+        json.dumps(dashboard_contract, indent=2) + "\n", encoding="utf-8",
+    )
     (panels_dir / "status.json").write_text(json.dumps({
         "status": "pending-manual-capture",
         "reason": (
@@ -446,6 +527,23 @@ def main() -> int:
             "until the corresponding panel-<id>.png is saved."
         ),
         "panelCount": len(contracts),
+        "dashboardCapture": dashboard_contract,
+        "accessMode": "anonymous-viewer" if args.anonymous_viewer else "basic-auth",
+    }, indent=2) + "\n", encoding="utf-8")
+
+    (grafana_dir / "export-summary.json").write_text(json.dumps({
+        "runId": run_id,
+        "fromUtc": from_utc,
+        "toUtc": to_utc,
+        "dashboardUid": dashboard_payload.get("dashboard", {}).get("uid"),
+        "dashboardVersion": dashboard_payload.get("dashboard", {}).get("version"),
+        "queryCount": len(panel_queries),
+        "queryCollected": collected,
+        "queryFailed": failed,
+        "panelCount": len(contracts),
+        "dashboardCapturePath": "grafana/dashboard.capture.json",
+        "expectedDashboardPngPath": "grafana/dashboard.png",
+        "accessMode": "anonymous-viewer" if args.anonymous_viewer else "basic-auth",
     }, indent=2) + "\n", encoding="utf-8")
 
     print(f"[grafana-export] dashboard + annotations written; panel queries collected={collected} failed={failed}; capture contracts written={len(contracts)}")

@@ -122,7 +122,8 @@ ExecStart=/usr/bin/docker run \
   --rm \
   --network travel-planner-monitoring \
   --publish 127.0.0.1:3000:3000 \
-  --env GF_AUTH_ANONYMOUS_ENABLED=false \
+  --env GF_AUTH_ANONYMOUS_ENABLED=${grafana_anonymous_viewer_enabled} \
+  --env GF_AUTH_ANONYMOUS_ORG_ROLE=${grafana_anonymous_org_role} \
   --volume /etc/travel-planner/grafana/provisioning:/etc/grafana/provisioning:ro \
   --volume /etc/travel-planner/grafana/dashboards:/var/lib/grafana/dashboards:ro \
   --volume /var/lib/travel-planner/grafana:/var/lib/grafana \

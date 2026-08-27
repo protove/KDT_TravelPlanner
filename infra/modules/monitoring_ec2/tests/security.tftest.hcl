@@ -62,12 +62,19 @@ run "monitoring_ec2_is_private_and_encrypted" {
       strcontains(aws_instance.monitoring.user_data, var.loki_image_reference) &&
       strcontains(aws_instance.monitoring.user_data, var.grafana_image_reference) &&
       strcontains(aws_instance.monitoring.user_data, "--publish 3100:3100") &&
+      strcontains(aws_instance.monitoring.user_data, "GF_AUTH_ANONYMOUS_ENABLED=false") &&
+      strcontains(aws_instance.monitoring.user_data, "GF_AUTH_ANONYMOUS_ORG_ROLE=") &&
       strcontains(aws_instance.monitoring.user_data, "--config.file=/etc/prometheus/prometheus.yml") &&
       strcontains(aws_instance.monitoring.user_data, "127.0.0.1:9090:9090") &&
       !strcontains(aws_instance.monitoring.user_data, "web.enable-remote-write-receiver") &&
       !strcontains(aws_instance.monitoring.user_data, ":latest")
     )
     error_message = "Monitoring EC2 must have no public IP, require IMDSv2, use encrypted gp3 storage, publish Loki on host port 3100 for private Backend Alloy pushes, replace on user-data changes and run pinned monitoring images."
+  }
+
+  assert {
+    condition     = !strcontains(aws_instance.monitoring.user_data, "GF_AUTH_ANONYMOUS_ORG_ROLE=Viewer")
+    error_message = "Grafana anonymous Viewer access must remain disabled by default."
   }
 
   assert {
@@ -162,5 +169,22 @@ run "eks_profile_is_unique_and_receives_remote_writes" {
       length(output.monitoring_config_revision) == 64
     )
     error_message = "The EKS dashboard must be part of the EKS configuration revision and bucket."
+  }
+}
+
+run "anonymous_viewer_is_action_time_only" {
+  command = plan
+
+  variables {
+    grafana_anonymous_viewer_enabled = true
+  }
+
+  assert {
+    condition = (
+      strcontains(aws_instance.monitoring.user_data, "GF_AUTH_ANONYMOUS_ENABLED=true") &&
+      strcontains(aws_instance.monitoring.user_data, "GF_AUTH_ANONYMOUS_ORG_ROLE=Viewer") &&
+      strcontains(aws_instance.monitoring.user_data, "--publish 127.0.0.1:3000:3000")
+    )
+    error_message = "Anonymous Viewer must be an explicit action-time option and remain loopback-bound."
   }
 }

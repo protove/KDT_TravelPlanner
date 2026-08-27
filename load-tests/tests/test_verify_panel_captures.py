@@ -72,6 +72,18 @@ def build_fixture(root: Path, *, panel_ids=(2, 3), png_size=(800, 400)) -> None:
         (panels / f"panel-{panel_id}.png").write_bytes(make_png(*png_size))
 
 
+def add_dashboard_capture(root: Path, *, png_size=(1280, 720)) -> None:
+    summary = json.loads((root / "recovery-export-summary.json").read_text())
+    contract = {
+        **summary,
+        "dashboardUrl": "http://127.0.0.1:3000/d/aws-recovery",
+        "captureUrl": "http://127.0.0.1:3000/d/aws-recovery?from=1&to=2&tz=utc",
+        "expectedPngPath": "grafana/dashboard.png",
+    }
+    (root / "grafana/dashboard.capture.json").write_text(json.dumps(contract), encoding="utf-8")
+    (root / "grafana/dashboard.png").write_bytes(make_png(*png_size))
+
+
 class CaptureVerifierTests(unittest.TestCase):
     def test_valid_captures_promote_status_to_captured(self) -> None:
         with TemporaryDirectory() as raw:
@@ -170,6 +182,25 @@ class NoDataPanelTests(unittest.TestCase):
             with self.assertRaisesRegex(MODULE.CaptureVerificationError, "missing its query JSON"):
                 MODULE.verify_captures(root)
 
+
+class DashboardCaptureTests(unittest.TestCase):
+    def test_full_dashboard_png_is_verified_when_contract_exists(self) -> None:
+        with TemporaryDirectory() as raw:
+            root = Path(raw)
+            build_fixture(root, panel_ids=(2,))
+            add_dashboard_capture(root)
+            status = MODULE.verify_captures(root)
+            self.assertEqual(status["dashboard"]["status"], "captured")
+            self.assertEqual(status["dashboard"]["pngPath"], "grafana/dashboard.png")
+
+    def test_full_dashboard_contract_without_png_fails_closed(self) -> None:
+        with TemporaryDirectory() as raw:
+            root = Path(raw)
+            build_fixture(root, panel_ids=(2,))
+            add_dashboard_capture(root)
+            (root / "grafana/dashboard.png").unlink()
+            with self.assertRaisesRegex(MODULE.CaptureVerificationError, "full-dashboard"):
+                MODULE.verify_captures(root)
 
 if __name__ == "__main__":
     unittest.main()

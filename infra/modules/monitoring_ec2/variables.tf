@@ -24,6 +24,12 @@ variable "platform" {
   }
 }
 
+variable "grafana_anonymous_viewer_enabled" {
+  type        = bool
+  description = "Action-time-only Grafana anonymous Viewer access for an authorized loopback/SSM capture; remains disabled by default."
+  default     = false
+}
+
 variable "name_suffix" {
   type        = string
   description = "Optional lowercase suffix used to keep disposable platform resources uniquely named."

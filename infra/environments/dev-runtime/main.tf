@@ -70,6 +70,7 @@ module "monitoring_ec2" {
   app_subnet_id                      = data.terraform_remote_state.persistent.outputs.app_subnet_ids[0]
   aws_region                         = var.aws_region
   environment                        = local.environment
+  grafana_anonymous_viewer_enabled   = var.grafana_anonymous_viewer_enabled
   prometheus_image_reference         = var.monitoring_image_references.prometheus
   loki_image_reference               = var.monitoring_image_references.loki
   grafana_image_reference            = var.monitoring_image_references.grafana
