@@ -523,11 +523,21 @@ class Coordinator:
         quoted = " ".join(shlex.quote(item) for item in argv)
         command = f"cd {shlex.quote(repo)} && {quoted}"
         if background:
-            detached = shlex.quote(quoted)
+            # SSM Run Command tracks descendants in its execution cgroup. A
+            # plain nohup/setsid child therefore keeps the invocation InProgress
+            # until k6 exits and is killed at executionTimeout. systemd-run
+            # creates a separate transient unit and --no-block returns after
+            # handing off the workload; k6 still owns RUN_END/run-status and no
+            # recovery action is automated here.
+            unit_suffix = re.sub(r"[^A-Za-z0-9_.-]", "-", str(self.config["runId"]))
+            unit = f"scrum43-recovery-{unit_suffix}"[:240]
+            detached = shlex.quote(
+                f"{quoted} >> {shlex.quote(self.config['runner']['runDir'])}/coordinator-workload.log 2>&1"
+            )
             command = (
-                f"cd {shlex.quote(repo)} && nohup setsid sh -c {detached} "
-                f">> {shlex.quote(self.config['runner']['runDir'])}/coordinator-workload.log 2>&1 "
-                f"< /dev/null & echo started:$!"
+                f"systemd-run --unit={shlex.quote(unit)} --collect --no-block "
+                f"--working-directory={shlex.quote(repo)} /bin/sh -c {detached} "
+                f"> /dev/null 2>&1 && echo started:{shlex.quote(unit)}"
             )
         return self.ssm.run(command, timeout_seconds=timeout_seconds, comment=comment)
 

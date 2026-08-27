@@ -28,6 +28,7 @@ RUNNER_ID=""
 RUNNER_INSTANCE_TYPE="t3.small"
 BASE_URL=""
 RATE=""
+TARGET_HOST_IPS="${AWS_TARGET_HOST_IPS:-}"
 K6_IMAGE=""
 DATA_FILE=""
 FREEZE_METADATA=""
@@ -82,6 +83,7 @@ Required for run:
 
 Optional:
   --runner-instance-type TYPE  default: t3.small
+  --target-host-ips CSV       approved current ALB IPv4s for Docker bridge resolution
   --observability-status PATH   defaults to <run-dir>/monitoring/required-metrics.json
   --event EVENT                 event mode: T0/T1/T2/T3/T4/T5 or OPERATOR_RECOVERY (v1.1)
   --detail TEXT                 sanitized event detail (max 200 chars)
@@ -110,6 +112,7 @@ while [[ "$#" -gt 0 ]]; do
     --runner-instance-type) RUNNER_INSTANCE_TYPE="$2"; shift 2 ;;
     --base-url) BASE_URL="$2"; shift 2 ;;
     --rate) RATE="$2"; shift 2 ;;
+    --target-host-ips) TARGET_HOST_IPS="$2"; shift 2 ;;
     --k6-image) K6_IMAGE="$2"; shift 2 ;;
     --data-file) DATA_FILE="$2"; shift 2 ;;
     --freeze-metadata) FREEZE_METADATA="$2"; shift 2 ;;
@@ -203,6 +206,24 @@ modern_validate_inputs() {
     echo "--base-url must be a custom HTTPS origin, not an AWS DNS name" >&2
     exit 2
   }
+  if [[ -n "$TARGET_HOST_IPS" ]]; then
+    python3 - "$TARGET_HOST_IPS" <<'PY'
+import ipaddress
+import sys
+
+raw = sys.argv[1]
+values = [item.strip() for item in raw.split(",") if item.strip()]
+if not values:
+    raise SystemExit("--target-host-ips must contain at least one IPv4 address")
+for value in values:
+    try:
+        address = ipaddress.ip_address(value)
+    except ValueError as error:
+        raise SystemExit("--target-host-ips contains an invalid IP address") from error
+    if address.version != 4:
+        raise SystemExit("--target-host-ips accepts IPv4 addresses only")
+PY
+  fi
   [[ "$TARGET_GROUP_ARN" =~ ^arn:aws:elasticloadbalancing:[a-z0-9-]+:[0-9]{12}:targetgroup/.+/.+$ ]] || {
     echo "--target-group-arn must be an exact ALB target-group ARN" >&2
     exit 2
@@ -374,7 +395,7 @@ PY
   if [[ "$TARGET_PLATFORM" == "eks" ]]; then
     write_modern_immutable "$RUN_DIR/aws-bastion.json" "$bastion"
   fi
-  python3 - "$RUN_DIR/metadata.json" "$RUN_ID" "$PROFILE" "$SLO_CONTRACT" "$REGION" "$ENVIRONMENT" "$TARGET_PLATFORM" "$RATE" "$BASE_URL" "$EXPECTED_ACCOUNT_ID" "$SOURCE_SHA" "$ALB_ARN" "$TARGET_GROUP_ARN" "$ASG_NAME" "$LAUNCH_TEMPLATE_ID" "$LAUNCH_TEMPLATE_VERSION" "$RUNNER_ID" "$CLUSTER_NAME" "$NODE_GROUP_NAME" "$EKS_BASTION_ID" <<'PY'
+  python3 - "$RUN_DIR/metadata.json" "$RUN_ID" "$PROFILE" "$SLO_CONTRACT" "$REGION" "$ENVIRONMENT" "$TARGET_PLATFORM" "$RATE" "$BASE_URL" "$EXPECTED_ACCOUNT_ID" "$SOURCE_SHA" "$ALB_ARN" "$TARGET_GROUP_ARN" "$ASG_NAME" "$LAUNCH_TEMPLATE_ID" "$LAUNCH_TEMPLATE_VERSION" "$RUNNER_ID" "$CLUSTER_NAME" "$NODE_GROUP_NAME" "$EKS_BASTION_ID" "$TARGET_HOST_IPS" <<'PY'
 import hashlib
 import json
 import sys
@@ -383,7 +404,7 @@ from pathlib import Path
 
 (output, run_id, profile_path, contract_path, region, environment, platform, rate, base_url, account,
  source_sha, alb_arn, target_group_arn, asg_name, lt_id, lt_version, runner_id, cluster_name,
- node_group_name, bastion_id) = sys.argv[1:]
+ node_group_name, bastion_id, target_host_ips_raw) = sys.argv[1:]
 profile_sha = hashlib.sha256(Path(profile_path).read_bytes()).hexdigest()
 contract_sha = hashlib.sha256(Path(contract_path).read_bytes()).hexdigest() if contract_path else None
 metadata = {
@@ -393,6 +414,7 @@ metadata = {
     "environment": environment,
     "region": region,
     "baseUrl": base_url,
+    "targetHostIps": [item.strip() for item in target_host_ips_raw.split(",") if item.strip()],
     "rate": float(rate),
     "sloVersion": json.loads(Path(contract_path).read_text(encoding="utf-8")).get("sloVersion") if contract_path else "v1.1-frozen",
     "profileSha256": profile_sha,
@@ -446,13 +468,13 @@ modern_reuse_preflight() {
       exit 2
     }
   done
-  python3 - "$RUN_DIR/metadata.json" "$RUN_ID" "$TARGET_PLATFORM" "$RATE" "$SOURCE_SHA" <<'PY'
+  python3 - "$RUN_DIR/metadata.json" "$RUN_ID" "$TARGET_PLATFORM" "$RATE" "$SOURCE_SHA" "$TARGET_HOST_IPS" <<'PY'
 import json
 import math
 import sys
 from pathlib import Path
 
-metadata_path, run_id, platform, rate_raw, source_sha = sys.argv[1:]
+metadata_path, run_id, platform, rate_raw, source_sha, target_host_ips_raw = sys.argv[1:]
 metadata = json.loads(Path(metadata_path).read_text(encoding="utf-8"))
 if metadata.get("scenarioId") != "AWS-RECOVERY-COMPARISON":
     raise SystemExit("comparison run preflight metadata has an unexpected scenario")
@@ -466,6 +488,9 @@ if not math.isclose(float(metadata.get("rate")), rate, rel_tol=0, abs_tol=1e-9):
     raise SystemExit("comparison run preflight rate does not match action-time input")
 if metadata.get("sourceCommitSha") != source_sha:
     raise SystemExit("comparison run preflight source SHA does not match action-time input")
+expected_host_ips = [item.strip() for item in target_host_ips_raw.split(",") if item.strip()]
+if metadata.get("targetHostIps", []) != expected_host_ips:
+    raise SystemExit("comparison run preflight target host IPs do not match action-time input")
 if not metadata.get("startedAtUtc"):
     raise SystemExit("comparison run preflight metadata has no start timestamp")
 PY
@@ -487,7 +512,7 @@ modern_main() {
       else
         modern_target_preflight
       fi
-      export REPOSITORY_ROOT BASE_URL RUN_ID REGION ENVIRONMENT RATE DATA_FILE TARGET_PLATFORM
+      export REPOSITORY_ROOT BASE_URL RUN_ID REGION ENVIRONMENT RATE DATA_FILE TARGET_PLATFORM AWS_TARGET_HOST_IPS="$TARGET_HOST_IPS"
       export K6_IMAGE_DIGEST="$K6_IMAGE" AWS_RECOVERY_PROFILE_FILE="$PROFILE"
       export AWS_SLO_CONTRACT_FILE="${SLO_CONTRACT:-$REPOSITORY_ROOT/load-tests/aws/contracts/slo-v1.1-candidate.json}"
       EFFECTIVE_MAX_VUS="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["recovery"]["maxVUs"])' "$PROFILE")"
