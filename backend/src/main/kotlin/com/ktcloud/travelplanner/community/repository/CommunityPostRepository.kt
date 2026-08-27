@@ -32,8 +32,8 @@ interface CommunityPostRepository : JpaRepository<CommunityPost, UUID> {
 			JOIN post.author author
 			WHERE (:categoryCode IS NULL OR category.code = :categoryCode)
 				AND (:tagName IS NULL OR EXISTS (SELECT 1 FROM post.tags t WHERE t.name = :tagName))
-				AND (CAST(:periodStart AS timestamp) IS NULL OR post.createdAt >= CAST(:periodStart AS timestamp))
-				AND (CAST(:periodEnd AS timestamp) IS NULL OR post.createdAt < CAST(:periodEnd AS timestamp))
+				AND (CAST(CAST(:periodStart AS string) AS timestamp) IS NULL OR post.createdAt >= CAST(CAST(:periodStart AS string) AS timestamp))
+				AND (CAST(CAST(:periodEnd AS string) AS timestamp) IS NULL OR post.createdAt < CAST(CAST(:periodEnd AS string) AS timestamp))
 				AND (:keyword IS NULL OR (
 					(:searchScope = 'TITLE' AND LOWER(post.title) LIKE LOWER(CONCAT('%', CAST(:keyword AS string), '%')))
 					OR (:searchScope = 'AUTHOR' AND LOWER(author.nickname) LIKE LOWER(CONCAT('%', CAST(:keyword AS string), '%')))
@@ -55,8 +55,8 @@ interface CommunityPostRepository : JpaRepository<CommunityPost, UUID> {
 			JOIN post.author author
 			WHERE (:categoryCode IS NULL OR category.code = :categoryCode)
 				AND (:tagName IS NULL OR EXISTS (SELECT 1 FROM post.tags t WHERE t.name = :tagName))
-				AND (CAST(:periodStart AS timestamp) IS NULL OR post.createdAt >= CAST(:periodStart AS timestamp))
-				AND (CAST(:periodEnd AS timestamp) IS NULL OR post.createdAt < CAST(:periodEnd AS timestamp))
+				AND (CAST(CAST(:periodStart AS string) AS timestamp) IS NULL OR post.createdAt >= CAST(CAST(:periodStart AS string) AS timestamp))
+				AND (CAST(CAST(:periodEnd AS string) AS timestamp) IS NULL OR post.createdAt < CAST(CAST(:periodEnd AS string) AS timestamp))
 				AND (:keyword IS NULL OR (
 					(:searchScope = 'TITLE' AND LOWER(post.title) LIKE LOWER(CONCAT('%', CAST(:keyword AS string), '%')))
 					OR (:searchScope = 'AUTHOR' AND LOWER(author.nickname) LIKE LOWER(CONCAT('%', CAST(:keyword AS string), '%')))
