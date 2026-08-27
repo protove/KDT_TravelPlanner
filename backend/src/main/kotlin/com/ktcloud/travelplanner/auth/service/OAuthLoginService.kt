@@ -27,13 +27,16 @@ class OAuthLoginService(
 ) {
 	private val providerClients = providerClients.associateBy(OAuthProviderClient::provider)
 
-	fun createAuthorizationRedirect(providerName: String): OAuthAuthorizationRedirect {
+	fun createAuthorizationRedirect(
+		providerName: String,
+		forceAccountSelection: Boolean = false,
+	): OAuthAuthorizationRedirect {
 		val provider = resolveProvider(providerName)
 		val client = resolveClient(provider)
 		val frontendRedirectUrl = redirectValidator.validate(flowProperties.frontendRedirectUrl)
 		val state = stateService.issue(provider, frontendRedirectUrl.toASCIIString())
 		return OAuthAuthorizationRedirect(
-			location = client.createAuthorizationUrl(state),
+			location = client.createAuthorizationUrl(state, forceAccountSelection),
 			state = state,
 		)
 	}

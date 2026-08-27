@@ -34,18 +34,21 @@ class GoogleOAuthClient(
 ) : OAuthProviderClient {
 	override val provider: OAuthProvider = OAuthProvider.GOOGLE
 
-	override fun createAuthorizationUrl(state: String): URI {
+	override fun createAuthorizationUrl(
+		state: String,
+		forceAccountSelection: Boolean,
+	): URI {
 		properties.requireConfigured()
-		return UriComponentsBuilder.fromUri(properties.authorizationUri)
+		val builder = UriComponentsBuilder.fromUri(properties.authorizationUri)
 			.queryParam("client_id", properties.clientId)
 			.queryParam("redirect_uri", properties.redirectUri)
 			.queryParam("response_type", "code")
 			.queryParam("scope", SCOPES.joinToString(" "))
 			.queryParam("state", state)
-			.queryParam("prompt", "select_account")
-			.build()
-			.encode()
-			.toUri()
+		if (forceAccountSelection) {
+			builder.queryParam("prompt", "select_account")
+		}
+		return builder.build().encode().toUri()
 	}
 
 	override fun fetchUserProfile(grant: OAuthAuthorizationGrant): OAuthUserProfile {
