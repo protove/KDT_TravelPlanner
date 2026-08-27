@@ -3,7 +3,7 @@ package com.ktcloud.travelplanner.travel.dto
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.ktcloud.travelplanner.travel.model.CompanionType
 import com.ktcloud.travelplanner.travel.model.TravelPurpose
-import com.ktcloud.travelplanner.user.dto.PatchField
+import com.ktcloud.travelplanner.global.dto.PatchField
 import jakarta.validation.Constraint
 import jakarta.validation.ConstraintValidator
 import jakarta.validation.ConstraintValidatorContext

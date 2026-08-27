@@ -1,7 +1,7 @@
 package com.ktcloud.travelplanner.user.service
 
 import com.ktcloud.travelplanner.testsupport.TestFixtures
-import com.ktcloud.travelplanner.user.dto.PatchField
+import com.ktcloud.travelplanner.global.dto.PatchField
 import com.ktcloud.travelplanner.user.dto.UserProfileUpdateRequest
 import com.ktcloud.travelplanner.user.model.Gender
 import com.ktcloud.travelplanner.user.model.OAuthProvider

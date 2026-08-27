@@ -18,7 +18,7 @@ import com.ktcloud.travelplanner.travel.model.Travel
 import com.ktcloud.travelplanner.travel.model.TravelPurpose
 import com.ktcloud.travelplanner.travel.repository.PlannerPurposeRepository
 import com.ktcloud.travelplanner.travel.repository.TravelRepository
-import com.ktcloud.travelplanner.user.dto.PatchField
+import com.ktcloud.travelplanner.global.dto.PatchField
 import org.springframework.dao.OptimisticLockingFailureException
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
