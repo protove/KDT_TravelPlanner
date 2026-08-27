@@ -70,15 +70,17 @@ fi
 AWS_SLO_CONTRACT_FILE="${AWS_SLO_CONTRACT_FILE:-$CONTRACT_DIR/slo-v1.0.json}"
 [[ -f "$AWS_SLO_CONTRACT_FILE" ]] || { echo "missing SLO contract: $AWS_SLO_CONTRACT_FILE" >&2; exit 2; }
 [[ -f "$DATA_FILE" ]] || { echo "missing seeded credential file: $DATA_FILE" >&2; exit 2; }
-python3 - "$DATA_FILE" "$EFFECTIVE_MAX_VUS" <<'PY'
+python3 - "$DATA_FILE" "$EFFECTIVE_MAX_VUS" "$RUN_ID" <<'PY'
 import json
 import sys
 from pathlib import Path
 
-path, required_raw = sys.argv[1:]
+path, required_raw, run_id = sys.argv[1:]
 required = int(required_raw)
 payload = json.loads(Path(path).read_text(encoding="utf-8"))
 credentials = payload.get("credentials") if isinstance(payload, dict) else None
+if payload.get("runId") != run_id:
+    raise SystemExit("seeded credential file runId must match the recovery run")
 if payload.get("seedState") != "complete" or payload.get("fixtureState") != "verified":
     raise SystemExit("seeded credential file must have seedState=complete and fixtureState=verified")
 if not isinstance(credentials, list) or len(credentials) < required:

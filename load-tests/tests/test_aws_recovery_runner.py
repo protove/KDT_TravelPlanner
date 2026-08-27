@@ -34,6 +34,11 @@ class AwsRecoveryRunnerContractTest(unittest.TestCase):
         self.assertIn("DOCKER_HOST_ARGS+=(--add-host", source)
         self.assertIn('"method": "docker-add-host"', source)
 
+    def test_runner_rejects_cross_run_seed_credentials(self):
+        source = RUNNER.read_text(encoding="utf-8")
+        self.assertIn('payload.get("runId") != run_id', source)
+        self.assertIn("seeded credential file runId must match the recovery run", source)
+
     def test_planned_entrypoint_delegates_to_k6_runner(self):
         source = ENTRYPOINT.read_text(encoding="utf-8")
         self.assertIn("run-k6-aws-recovery.sh", source)
