@@ -4,6 +4,8 @@ import com.ktcloud.travelplanner.community.dto.CommentCreateRequest
 import com.ktcloud.travelplanner.community.dto.CommentResponse
 import com.ktcloud.travelplanner.community.dto.MyCommentResponse
 import com.ktcloud.travelplanner.community.model.CommunityComment
+import com.ktcloud.travelplanner.community.port.AuthorSummary
+import com.ktcloud.travelplanner.community.port.UserLookupPort
 import com.ktcloud.travelplanner.community.repository.CommunityCommentRepository
 import com.ktcloud.travelplanner.community.repository.CommunityPostRepository
 import com.ktcloud.travelplanner.global.exception.DomainException
@@ -23,7 +25,10 @@ import java.util.UUID
 class CommunityCommentService(
 	private val communityPostRepository: CommunityPostRepository,
 	private val communityCommentRepository: CommunityCommentRepository,
+	// 댓글 생성 시 CommunityComment.author: User 엔티티 관계를 채우는 데 필요 — 이번 스코프에서
+	// 엔티티를 authorId: UUID로 바꾸지 않기로 했으므로 직접 유지 (CommunityPostService와 동일 사유).
 	private val userRepository: UserRepository,
+	private val userLookupPort: UserLookupPort,
 ) {
 	// community-api-contract.md 2절 — 댓글 목록. 단일 depth, 페이지네이션 없음, 인증 불필요.
 	// 게시글이 없거나 소프트 삭제된 경우 404(CommunityPost의 @SQLRestriction이 findById에서 걸러줌).
@@ -73,7 +78,9 @@ class CommunityCommentService(
 			content = request.content,
 		)
 		val saved = communityCommentRepository.save(comment)
-		return CommentResponse.from(saved, isMine = true, reactionCount = 0, isReacted = false)
+		// author 엔티티를 이미 로딩했으니 Port를 다시 호출하지 않고 그대로 AuthorSummary로 변환한다.
+		val authorSummary = AuthorSummary(id = authorId, nickname = author.nickname, profileImageUrl = author.profileImageUrl)
+		return CommentResponse.from(saved, authorSummary, isMine = true, reactionCount = 0, isReacted = false)
 	}
 
 	// PATCH /comments/{commentId} — 작성자 본인만, 내용만 바꿀 수 있다(카테고리/게시글 이동 없음).
@@ -91,7 +98,8 @@ class CommunityCommentService(
 
 		val reactionCount = communityCommentRepository.countReactions(commentId)
 		val isReacted = communityCommentRepository.existsReaction(commentId, requesterId)
-		return CommentResponse.from(comment, isMine = true, reactionCount = reactionCount, isReacted = isReacted)
+		val author = userLookupPort.findAuthor(requireNotNull(comment.author.id))
+		return CommentResponse.from(comment, author, isMine = true, reactionCount = reactionCount, isReacted = isReacted)
 	}
 
 	// community-api-contract.md 2절 — 댓글 삭제(soft), 작성자 본인만.
@@ -129,8 +137,10 @@ class CommunityCommentService(
 		}
 
 		val reactionCount = communityCommentRepository.countReactions(commentId)
+		val author = userLookupPort.findAuthor(requireNotNull(comment.author.id))
 		return CommentResponse.from(
 			comment = comment,
+			author = author,
 			isMine = requesterId == comment.author.id,
 			reactionCount = reactionCount,
 			isReacted = !alreadyReacted,

@@ -13,11 +13,9 @@ import com.ktcloud.travelplanner.community.repository.CommunityPostRepository
 import com.ktcloud.travelplanner.community.repository.CommunityPostTagNameRow
 import com.ktcloud.travelplanner.community.repository.CommunityTagRepository
 import com.ktcloud.travelplanner.community.validation.InvalidBodyJsonException
-import com.ktcloud.travelplanner.membership.model.TravelRole
-import com.ktcloud.travelplanner.membership.repository.TravelMemberRepository
-import com.ktcloud.travelplanner.travel.model.Travel
-import com.ktcloud.travelplanner.travel.repository.TravelRepository
-import com.ktcloud.travelplanner.user.dto.PatchField
+import com.ktcloud.travelplanner.community.port.TravelAccessPort
+import com.ktcloud.travelplanner.community.port.UserLookupPort
+import com.ktcloud.travelplanner.global.dto.PatchField
 import com.ktcloud.travelplanner.user.model.OAuthProvider
 import com.ktcloud.travelplanner.user.model.User
 import com.ktcloud.travelplanner.user.repository.UserRepository
@@ -46,16 +44,16 @@ class CommunityPostServiceTest {
 	private val communityTagRepository = mock(CommunityTagRepository::class.java)
 	private val communityPostRepository = mock(CommunityPostRepository::class.java)
 	private val userRepository = mock(UserRepository::class.java)
-	private val travelRepository = mock(TravelRepository::class.java)
-	private val travelMemberRepository = mock(TravelMemberRepository::class.java)
+	private val userLookupPort = mock(UserLookupPort::class.java)
+	private val travelAccessPort = mock(TravelAccessPort::class.java)
 	private val objectMapper = ObjectMapper()
 	private val service = CommunityPostService(
 		communityCategoryRepository,
 		communityTagRepository,
 		communityPostRepository,
 		userRepository,
-		travelRepository,
-		travelMemberRepository,
+		userLookupPort,
+		travelAccessPort,
 		objectMapper,
 	)
 
@@ -208,27 +206,14 @@ class CommunityPostServiceTest {
 		}
 	}
 
+	// 오너/ACCEPTED 멤버 구분 로직 자체는 TravelAccessPort 구현체(JpaTravelAccessAdapter)로 옮겨졌고
+	// 별도 단위 테스트(JpaTravelAccessAdapterTest)로 커버한다. 여기서는 Port 계약(접근 허용/거부/없음)만 검증.
 	@Test
-	fun `allows the travel owner to attach sourceTravelId without a member lookup`() {
+	fun `allows attaching sourceTravelId when the requester has travel read access`() {
 		stubAuthorAndCategory()
 		val travelId = UUID.randomUUID()
-		val travel = travelOwnedBy(authorId)
-		`when`(travelRepository.findById(travelId)).thenReturn(Optional.of(travel))
-		`when`(communityPostRepository.save(any(CommunityPost::class.java)))
-			.thenAnswer { it.getArgument<CommunityPost>(0) }
-
-		service.createPost(authorId, request(sourceTravelId = travelId))
-
-		verify(travelMemberRepository, never()).findAcceptedRole(travelId, authorId)
-	}
-
-	@Test
-	fun `allows an accepted member to attach sourceTravelId`() {
-		stubAuthorAndCategory()
-		val travelId = UUID.randomUUID()
-		val travel = travelOwnedBy(UUID.randomUUID())
-		`when`(travelRepository.findById(travelId)).thenReturn(Optional.of(travel))
-		`when`(travelMemberRepository.findAcceptedRole(travelId, authorId)).thenReturn(TravelRole.READ_ONLY)
+		`when`(travelAccessPort.exists(travelId)).thenReturn(true)
+		`when`(travelAccessPort.hasReadAccess(travelId, authorId)).thenReturn(true)
 		`when`(communityPostRepository.save(any(CommunityPost::class.java)))
 			.thenAnswer { it.getArgument<CommunityPost>(0) }
 
@@ -236,12 +221,11 @@ class CommunityPostServiceTest {
 	}
 
 	@Test
-	fun `rejects sourceTravelId when the requester has no accepted access`() {
+	fun `rejects sourceTravelId when the requester has no read access`() {
 		stubAuthorAndCategory()
 		val travelId = UUID.randomUUID()
-		val travel = travelOwnedBy(UUID.randomUUID())
-		`when`(travelRepository.findById(travelId)).thenReturn(Optional.of(travel))
-		`when`(travelMemberRepository.findAcceptedRole(travelId, authorId)).thenReturn(null)
+		`when`(travelAccessPort.exists(travelId)).thenReturn(true)
+		`when`(travelAccessPort.hasReadAccess(travelId, authorId)).thenReturn(false)
 
 		assertThrows<CommunityPostSourceTravelAccessDeniedException> {
 			service.createPost(authorId, request(sourceTravelId = travelId))
@@ -254,7 +238,7 @@ class CommunityPostServiceTest {
 	fun `rejects a sourceTravelId that does not exist`() {
 		stubAuthorAndCategory()
 		val travelId = UUID.randomUUID()
-		`when`(travelRepository.findById(travelId)).thenReturn(Optional.empty())
+		`when`(travelAccessPort.exists(travelId)).thenReturn(false)
 
 		assertThrows<CommunityPostSourceTravelNotFoundException> {
 			service.createPost(authorId, request(sourceTravelId = travelId))
@@ -685,14 +669,6 @@ class CommunityPostServiceTest {
 	private fun stubAuthorAndCategory() {
 		`when`(communityCategoryRepository.findByCodeAndIsActiveTrue("TRAVEL_REVIEW")).thenReturn(category)
 		`when`(userRepository.findById(authorId)).thenReturn(Optional.of(author))
-	}
-
-	private fun travelOwnedBy(ownerId: UUID): Travel {
-		val owner = mock(User::class.java)
-		`when`(owner.id).thenReturn(ownerId)
-		val travel = mock(Travel::class.java)
-		`when`(travel.owner).thenReturn(owner)
-		return travel
 	}
 
 	private fun tiptapDoc(vararg paragraphs: String): JsonNode {

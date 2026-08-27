@@ -2,6 +2,7 @@ package com.ktcloud.travelplanner.community.dto
 
 import com.fasterxml.jackson.databind.JsonNode
 import com.ktcloud.travelplanner.community.model.CommunityPost
+import com.ktcloud.travelplanner.community.port.AuthorSummary
 import java.time.Instant
 import java.util.UUID
 
@@ -28,10 +29,13 @@ data class CommunityPostDetailResponse(
 	val version: Int,
 ) {
 	companion object {
+		// author는 UserLookupPort로 조회한 값을 받는다(post.author를 직접 안 읽음) — 단건 조회라
+		// 배치 문제 없고, 이 경로가 실제 서비스 분리 시 HTTP Adapter로 그대로 교체된다.
 		fun from(
 			post: CommunityPost,
 			bodyJson: JsonNode,
 			itinerarySnapshotJson: JsonNode?,
+			author: AuthorSummary?,
 			viewCount: Int,
 			commentCount: Long,
 			reactionCount: Long,
@@ -43,8 +47,8 @@ data class CommunityPostDetailResponse(
 			title = post.title,
 			bodyPreview = post.bodyPreview,
 			tags = post.tags.map { it.name },
-			authorNickname = post.author.nickname,
-			authorProfileImageUrl = post.author.profileImageUrl,
+			authorNickname = author?.nickname,
+			authorProfileImageUrl = author?.profileImageUrl,
 			viewCount = viewCount,
 			commentCount = commentCount,
 			reactionCount = reactionCount,

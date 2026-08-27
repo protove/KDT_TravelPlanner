@@ -1,7 +1,7 @@
 package com.ktcloud.travelplanner.community.dto
 
 import com.fasterxml.jackson.databind.JsonNode
-import com.ktcloud.travelplanner.user.dto.PatchField
+import com.ktcloud.travelplanner.global.dto.PatchField
 import jakarta.validation.constraints.PositiveOrZero
 
 // community-api-contract.md 1절 CommunityPostUpdatePatch. categoryCode/sourceTravelId/

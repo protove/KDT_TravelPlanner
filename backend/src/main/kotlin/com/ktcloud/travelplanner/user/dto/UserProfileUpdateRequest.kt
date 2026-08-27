@@ -1,5 +1,6 @@
 package com.ktcloud.travelplanner.user.dto
 
+import com.ktcloud.travelplanner.global.dto.PatchField
 import com.ktcloud.travelplanner.user.model.Gender
 import jakarta.validation.Constraint
 import jakarta.validation.ConstraintValidator

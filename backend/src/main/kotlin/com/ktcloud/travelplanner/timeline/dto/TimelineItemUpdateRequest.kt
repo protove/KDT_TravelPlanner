@@ -1,7 +1,7 @@
 package com.ktcloud.travelplanner.timeline.dto
 
 import com.ktcloud.travelplanner.timeline.model.TimelineCategory
-import com.ktcloud.travelplanner.user.dto.PatchField
+import com.ktcloud.travelplanner.global.dto.PatchField
 import java.time.LocalDate
 
 data class TimelineItemUpdateRequest(

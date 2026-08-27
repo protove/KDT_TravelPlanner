@@ -11,7 +11,7 @@ import com.ktcloud.travelplanner.travel.dto.TravelUpdateRequest
 import com.ktcloud.travelplanner.travel.model.Travel
 import com.ktcloud.travelplanner.travel.repository.PlannerPurposeRepository
 import com.ktcloud.travelplanner.travel.repository.TravelRepository
-import com.ktcloud.travelplanner.user.dto.PatchField
+import com.ktcloud.travelplanner.global.dto.PatchField
 import com.ktcloud.travelplanner.user.model.User
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows

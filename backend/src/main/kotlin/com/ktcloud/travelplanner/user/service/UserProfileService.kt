@@ -2,7 +2,7 @@ package com.ktcloud.travelplanner.user.service
 
 import com.ktcloud.travelplanner.global.exception.DomainException
 import com.ktcloud.travelplanner.global.exception.ErrorCode
-import com.ktcloud.travelplanner.user.dto.PatchField
+import com.ktcloud.travelplanner.global.dto.PatchField
 import com.ktcloud.travelplanner.user.dto.UserProfileResponse
 import com.ktcloud.travelplanner.user.dto.UserProfileUpdateRequest
 import com.ktcloud.travelplanner.user.repository.UserRepository
