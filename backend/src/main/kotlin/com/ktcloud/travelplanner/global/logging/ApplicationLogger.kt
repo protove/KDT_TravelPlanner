@@ -69,6 +69,18 @@ internal object RequestLogLevelPolicy {
 internal object ApplicationLogger {
 	private val logger = LoggerFactory.getLogger(ApplicationLogger::class.java)
 
+	fun info(message: String, vararg arguments: Any?) {
+		logger.info(message, *arguments)
+	}
+
+	fun warn(message: String, vararg arguments: Any?) {
+		logger.warn(message, *arguments)
+	}
+
+	fun error(message: String, vararg arguments: Any?) {
+		logger.error(message, *arguments)
+	}
+
 	fun logRequestCompleted(requestLog: RequestCompletedLog, level: RequestLogLevel) {
 		val loggingEvent = loggingEvent(level)
 			.addKeyValue(EVENT_KEY, HTTP_REQUEST_COMPLETED_EVENT)

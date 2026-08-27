@@ -2,6 +2,7 @@ package com.ktcloud.travelplanner.travel.service
 
 import com.ktcloud.travelplanner.membership.model.TravelPermission
 import com.ktcloud.travelplanner.membership.model.TravelRole
+import com.ktcloud.travelplanner.membership.repository.TravelMemberRepository
 import com.ktcloud.travelplanner.testsupport.TestFixtures
 import com.ktcloud.travelplanner.travel.dto.TravelCreateRequest
 import com.ktcloud.travelplanner.travel.model.Travel
@@ -25,12 +26,15 @@ import java.time.LocalDate
 import java.util.Optional
 import java.util.UUID
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertSame
+import kotlin.test.assertTrue
 
 class TravelServiceTest {
 	private val travelRepository = mock(TravelRepository::class.java)
+	private val travelMemberRepository = mock(TravelMemberRepository::class.java)
 	private val userRepository = mock(UserRepository::class.java)
-	private val service = TravelService(travelRepository, userRepository, TestFixtures.FIXED_CLOCK)
+	private val service = TravelService(travelRepository, travelMemberRepository, userRepository, TestFixtures.FIXED_CLOCK)
 
 	@Test
 	fun `uses authenticated user as owner and returns generated travel id`() {
@@ -70,30 +74,60 @@ class TravelServiceTest {
 			row(title = "도쿄 소유 여행", memberRole = null),
 			row(title = "도쿄 공유 여행", memberRole = TravelRole.READ_ONLY),
 		)
-		`when`(travelRepository.findAccessibleTravels(userId, "도쿄", pageable))
+		`when`(travelRepository.findAccessibleTravels(userId, "도쿄", "ALL", "0001-01-01", "9999-12-31", pageable))
 			.thenReturn(PageImpl(rows, pageable, 5))
 
-		val response = service.getTravels(userId, "  도쿄  ", 1, 2)
+		val response = service.getTravels(userId, "  도쿄  ", null, null, null, 1, 2)
 
 		assertEquals(1, response.page)
 		assertEquals(2, response.size)
 		assertEquals(5, response.totalElements)
 		assertEquals(3, response.totalPages)
 		assertEquals(listOf(TravelPermission.OWNER, TravelPermission.READ_ONLY), response.content.map { it.permission })
-		verify(travelRepository).findAccessibleTravels(userId, "도쿄", pageable)
+		verify(travelRepository).findAccessibleTravels(userId, "도쿄", "ALL", "0001-01-01", "9999-12-31", pageable)
 	}
 
 	@Test
 	fun `null and blank keywords use non-null empty search condition`() {
 		val userId = UUID.randomUUID()
 		val pageable = PageRequest.of(0, 20)
-		`when`(travelRepository.findAccessibleTravels(userId, "", pageable))
+		`when`(travelRepository.findAccessibleTravels(userId, "", "ALL", "0001-01-01", "9999-12-31", pageable))
 			.thenReturn(PageImpl(emptyList(), pageable, 0))
 
-		service.getTravels(userId, null, 0, 20)
-		service.getTravels(userId, "  ", 0, 20)
+		service.getTravels(userId, null, null, null, null, 0, 20)
+		service.getTravels(userId, "  ", null, null, null, 0, 20)
 
-		verify(travelRepository, times(2)).findAccessibleTravels(userId, "", pageable)
+		verify(travelRepository, times(2)).findAccessibleTravels(userId, "", "ALL", "0001-01-01", "9999-12-31", pageable)
+	}
+
+	@Test
+	fun `unknown search scope silently falls back to ALL and known scopes pass through uppercased`() {
+		val userId = UUID.randomUUID()
+		val pageable = PageRequest.of(0, 20)
+		`when`(travelRepository.findAccessibleTravels(userId, "keyword", "ALL", "0001-01-01", "9999-12-31", pageable))
+			.thenReturn(PageImpl(emptyList(), pageable, 0))
+		`when`(travelRepository.findAccessibleTravels(userId, "keyword", "DESTINATION", "0001-01-01", "9999-12-31", pageable))
+			.thenReturn(PageImpl(emptyList(), pageable, 0))
+
+		service.getTravels(userId, "keyword", "not-a-real-scope", null, null, 0, 20)
+		service.getTravels(userId, "keyword", "destination", null, null, 0, 20)
+
+		verify(travelRepository).findAccessibleTravels(userId, "keyword", "ALL", "0001-01-01", "9999-12-31", pageable)
+		verify(travelRepository).findAccessibleTravels(userId, "keyword", "DESTINATION", "0001-01-01", "9999-12-31", pageable)
+	}
+
+	@Test
+	fun `passes period bounds through to the repository unchanged`() {
+		val userId = UUID.randomUUID()
+		val pageable = PageRequest.of(0, 20)
+		val start = LocalDate.parse("2026-08-01")
+		val end = LocalDate.parse("2026-08-31")
+		`when`(travelRepository.findAccessibleTravels(userId, "", "ALL", "2026-08-01", "2026-08-31", pageable))
+			.thenReturn(PageImpl(emptyList(), pageable, 0))
+
+		service.getTravels(userId, null, null, start, end, 0, 20)
+
+		verify(travelRepository).findAccessibleTravels(userId, "", "ALL", "2026-08-01", "2026-08-31", pageable)
 	}
 
 	@Test
@@ -125,6 +159,48 @@ class TravelServiceTest {
 		assertThrows<TravelDeleteAccessDeniedException> {
 			service.deleteTravel(travel.id, TestFixtures.USER_ID)
 		}
+	}
+
+	@Test
+	fun `checkReadAccess reports exists false without a member lookup when the travel is missing or soft deleted`() {
+		val travelId = UUID.randomUUID()
+		`when`(travelRepository.findById(travelId)).thenReturn(Optional.empty())
+
+		val response = service.checkReadAccess(travelId, TestFixtures.USER_ID)
+
+		assertEquals(travelId, response.travelId)
+		assertFalse(response.exists)
+		assertFalse(response.hasReadAccess)
+		verifyNoInteractions(travelMemberRepository)
+	}
+
+	@Test
+	fun `checkReadAccess grants the owner access without a member lookup`() {
+		val owner = mock(User::class.java)
+		val travel = travel(owner)
+		`when`(owner.id).thenReturn(TestFixtures.USER_ID)
+		`when`(travelRepository.findById(travel.id)).thenReturn(Optional.of(travel))
+
+		val response = service.checkReadAccess(travel.id, TestFixtures.USER_ID)
+
+		assertTrue(response.exists)
+		assertTrue(response.hasReadAccess)
+		verifyNoInteractions(travelMemberRepository)
+	}
+
+	@Test
+	fun `checkReadAccess grants an accepted member access and denies everyone else`() {
+		val owner = mock(User::class.java)
+		val travel = travel(owner)
+		val member = UUID.randomUUID()
+		val stranger = UUID.randomUUID()
+		`when`(owner.id).thenReturn(UUID.randomUUID())
+		`when`(travelRepository.findById(travel.id)).thenReturn(Optional.of(travel))
+		`when`(travelMemberRepository.findAcceptedRole(travel.id, member)).thenReturn(TravelRole.READ_ONLY)
+		`when`(travelMemberRepository.findAcceptedRole(travel.id, stranger)).thenReturn(null)
+
+		assertTrue(service.checkReadAccess(travel.id, member).hasReadAccess)
+		assertFalse(service.checkReadAccess(travel.id, stranger).hasReadAccess)
 	}
 
 	private fun request(): TravelCreateRequest = TravelCreateRequest(

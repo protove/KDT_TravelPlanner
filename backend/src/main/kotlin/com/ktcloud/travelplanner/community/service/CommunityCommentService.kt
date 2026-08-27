@@ -2,6 +2,7 @@ package com.ktcloud.travelplanner.community.service
 
 import com.ktcloud.travelplanner.community.dto.CommentCreateRequest
 import com.ktcloud.travelplanner.community.dto.CommentResponse
+import com.ktcloud.travelplanner.community.dto.MyCommentResponse
 import com.ktcloud.travelplanner.community.model.CommunityComment
 import com.ktcloud.travelplanner.community.port.AuthorSummary
 import com.ktcloud.travelplanner.community.port.UserLookupPort
@@ -9,10 +10,15 @@ import com.ktcloud.travelplanner.community.repository.CommunityCommentRepository
 import com.ktcloud.travelplanner.community.repository.CommunityPostRepository
 import com.ktcloud.travelplanner.global.exception.DomainException
 import com.ktcloud.travelplanner.global.exception.ErrorCode
+import com.ktcloud.travelplanner.global.response.PageResponse
+import com.ktcloud.travelplanner.global.util.toExclusiveEndOfDayInstant
+import com.ktcloud.travelplanner.global.util.toStartOfDayInstant
 import com.ktcloud.travelplanner.user.repository.UserRepository
+import org.springframework.data.domain.PageRequest
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
 import java.time.Instant
+import java.time.LocalDate
 import java.util.UUID
 
 @Service
@@ -141,8 +147,36 @@ class CommunityCommentService(
 		)
 	}
 
+	// 마이페이지 "내가 쓴 댓글" 탭 — 본인 댓글만 작성일 역순으로. includeDeleted=true일 때만
+	// 본인이 삭제한 댓글(및 삭제한 글에 달린 댓글)도 함께 보여준다(기본값 false). keyword/기간
+	// 필터는 CommunityPostService.getMyPosts와 동일한 관례.
+	@Transactional(readOnly = true)
+	fun getMyComments(
+		authorId: UUID,
+		keyword: String?,
+		periodStart: LocalDate?,
+		periodEnd: LocalDate?,
+		includeDeleted: Boolean,
+		page: Int,
+		size: Int,
+	): PageResponse<MyCommentResponse> {
+		val normalizedKeyword = keyword?.trim()?.takeIf { it.isNotEmpty() }
+		val pageable = PageRequest.of(page.coerceAtLeast(0), size.coerceIn(MIN_PAGE_SIZE, MAX_PAGE_SIZE))
+		val result = communityCommentRepository.findByAuthorIdIncludingDeletedOrderByCreatedAtDesc(
+			authorId,
+			normalizedKeyword,
+			periodStart?.toStartOfDayInstant(),
+			periodEnd?.toExclusiveEndOfDayInstant(),
+			includeDeleted,
+			pageable,
+		)
+		return PageResponse.from(result.map(MyCommentResponse::from))
+	}
+
 	companion object {
 		private const val SUPPORTED_REACTION_TYPE = "LIKE"
+		private const val MIN_PAGE_SIZE = 1
+		private const val MAX_PAGE_SIZE = 50
 	}
 }
 

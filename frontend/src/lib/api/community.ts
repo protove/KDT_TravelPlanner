@@ -6,7 +6,11 @@ import type {
   CommunityCategory,
   CommunityPostCreateRequest,
   CommunityPostDetail,
+  CommunityPostReactionResponse,
+  CommunityPostSearchScope,
   CommunityPostSummary,
+  CommunityPostUpdatePatch,
+  MyCommentResponse,
 } from "@/lib/types/community";
 
 export interface PageResponse<T> {
@@ -53,11 +57,46 @@ export async function getPost(accessToken: string | null | undefined, postId: st
   return apiFetch<CommunityPostDetail>(`/api/v1/community/posts/${postId}`, accessToken);
 }
 
+/** 게시글을 수정한다(PatchField 방식, version 낙관적 락). 작성자 본인만, 버전 충돌 시 409. */
+export async function updatePost(
+  accessToken: string,
+  postId: string,
+  patch: CommunityPostUpdatePatch,
+): Promise<CommunityPostDetail> {
+  return apiFetch<CommunityPostDetail>(`/api/v1/community/posts/${postId}`, accessToken, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+}
+
+/** 게시글을 삭제한다(soft delete). 작성자 본인만 가능. */
+export async function deletePost(accessToken: string, postId: string): Promise<void> {
+  await apiFetch<unknown>(`/api/v1/community/posts/${postId}`, accessToken, {
+    method: "DELETE",
+  });
+}
+
+/** 게시글 좋아요를 토글한다(이미 눌렀으면 취소). 로그인 필요. */
+export async function togglePostReaction(
+  accessToken: string,
+  postId: string,
+): Promise<CommunityPostReactionResponse> {
+  return apiFetch<CommunityPostReactionResponse>(`/api/v1/community/posts/${postId}/reactions/LIKE`, accessToken, {
+    method: "PUT",
+  });
+}
+
 export interface ListPostsParams {
   category?: string;
   tag?: string;
   keyword?: string;
+  /** keyword 매칭 대상. 생략하면 서버 기본값(ALL). */
+  searchScope?: CommunityPostSearchScope;
   sort?: "popular";
+  /** YYYY-MM-DD. 둘 다 생략하면 전체 기간(서버 기본 동작). */
+  periodStart?: string;
+  periodEnd?: string;
   page?: number;
   size?: number;
 }
@@ -71,7 +110,10 @@ export async function listPosts(
   if (params.category) searchParams.set("category", params.category);
   if (params.tag) searchParams.set("tag", params.tag);
   if (params.keyword) searchParams.set("keyword", params.keyword);
+  if (params.searchScope) searchParams.set("searchScope", params.searchScope);
   if (params.sort) searchParams.set("sort", params.sort);
+  if (params.periodStart) searchParams.set("periodStart", params.periodStart);
+  if (params.periodEnd) searchParams.set("periodEnd", params.periodEnd);
   if (params.page != null) searchParams.set("page", String(params.page));
   if (params.size != null) searchParams.set("size", String(params.size));
   const qs = searchParams.toString();
@@ -127,4 +169,53 @@ export async function toggleCommentReaction(accessToken: string, commentId: stri
   return apiFetch<CommentResponse>(`/api/v1/community/comments/${commentId}/reactions/LIKE`, accessToken, {
     method: "PUT",
   });
+}
+
+export interface MyPageListParams {
+  keyword?: string;
+  /** YYYY-MM-DD. 둘 다 생략하면 전체 기간. */
+  periodStart?: string;
+  periodEnd?: string;
+  /** 기본 false — 본인이 소프트 삭제한 글/댓글은 생략하면 안 보인다. */
+  includeDeleted?: boolean;
+  page?: number;
+  size?: number;
+}
+
+/** 마이페이지 "내가 쓴 글" 탭. 로그인 필요(토큰만으로 본인 글을 식별). */
+export async function listMyPosts(
+  accessToken: string,
+  params: MyPageListParams = {},
+): Promise<PageResponse<CommunityPostSummary>> {
+  const searchParams = new URLSearchParams();
+  if (params.keyword) searchParams.set("keyword", params.keyword);
+  if (params.periodStart) searchParams.set("periodStart", params.periodStart);
+  if (params.periodEnd) searchParams.set("periodEnd", params.periodEnd);
+  if (params.includeDeleted) searchParams.set("includeDeleted", "true");
+  if (params.page != null) searchParams.set("page", String(params.page));
+  if (params.size != null) searchParams.set("size", String(params.size));
+  const qs = searchParams.toString();
+  return apiFetch<PageResponse<CommunityPostSummary>>(
+    `/api/v1/community/me/posts${qs ? `?${qs}` : ""}`,
+    accessToken,
+  );
+}
+
+/** 마이페이지 "내가 쓴 댓글" 탭. 로그인 필요. */
+export async function listMyComments(
+  accessToken: string,
+  params: MyPageListParams = {},
+): Promise<PageResponse<MyCommentResponse>> {
+  const searchParams = new URLSearchParams();
+  if (params.keyword) searchParams.set("keyword", params.keyword);
+  if (params.periodStart) searchParams.set("periodStart", params.periodStart);
+  if (params.periodEnd) searchParams.set("periodEnd", params.periodEnd);
+  if (params.includeDeleted) searchParams.set("includeDeleted", "true");
+  if (params.page != null) searchParams.set("page", String(params.page));
+  if (params.size != null) searchParams.set("size", String(params.size));
+  const qs = searchParams.toString();
+  return apiFetch<PageResponse<MyCommentResponse>>(
+    `/api/v1/community/me/comments${qs ? `?${qs}` : ""}`,
+    accessToken,
+  );
 }

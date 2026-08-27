@@ -189,6 +189,31 @@ class NaverOAuthFlowIntegrationTest(
 		)
 	}
 
+	@Test
+	fun `start endpoint omits auth_type by default and forces reprompt only when switchAccount=true`() {
+		val defaultLocation = mockMvc.get("/api/v1/auth/oauth2/naver")
+			.andExpect { status { isFound() } }
+			.andReturn()
+			.response
+			.redirectedUrl
+		assertEquals(
+			null,
+			UriComponentsBuilder.fromUriString(requireNotNull(defaultLocation)).build().queryParams.getFirst("auth_type"),
+		)
+
+		val switchAccountLocation = mockMvc.get("/api/v1/auth/oauth2/naver") {
+			param("switchAccount", "true")
+		}
+			.andExpect { status { isFound() } }
+			.andReturn()
+			.response
+			.redirectedUrl
+		assertEquals(
+			"reprompt",
+			UriComponentsBuilder.fromUriString(requireNotNull(switchAccountLocation)).build().queryParams.getFirst("auth_type"),
+		)
+	}
+
 	private fun startNaverLogin(): Pair<String, Cookie> {
 		val response = mockMvc.get("/api/v1/auth/oauth2/naver")
 			.andExpect {
