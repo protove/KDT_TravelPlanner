@@ -3,8 +3,10 @@ package com.ktcloud.travelplanner.travel.service
 import com.ktcloud.travelplanner.global.exception.DomainException
 import com.ktcloud.travelplanner.global.exception.ErrorCode
 import com.ktcloud.travelplanner.global.response.PageResponse
+import com.ktcloud.travelplanner.membership.repository.TravelMemberRepository
 import com.ktcloud.travelplanner.travel.dto.TravelCreateRequest
 import com.ktcloud.travelplanner.travel.dto.TravelCreateResponse
+import com.ktcloud.travelplanner.travel.dto.TravelReadAccessResponse
 import com.ktcloud.travelplanner.travel.dto.TravelSummaryResponse
 import com.ktcloud.travelplanner.travel.model.Travel
 import com.ktcloud.travelplanner.travel.repository.TravelRepository
@@ -21,6 +23,7 @@ import java.util.UUID
 @Service
 class TravelService(
 	private val travelRepository: TravelRepository,
+	private val travelMemberRepository: TravelMemberRepository,
 	private val userRepository: UserRepository,
 	@Qualifier("utcClock") private val clock: Clock,
 ) {
@@ -65,6 +68,23 @@ class TravelService(
 			pageable = PageRequest.of(page, size),
 		)
 		return PageResponse.from(result.map(TravelSummaryResponse::from))
+	}
+
+	// MSA 전환용 내부 API — CommunityPostService.verifySourceTravelReadAccess가 하던
+	// "travelRepository.findById + travelMemberRepository.findAcceptedRole" 조합을 Travel 서비스
+	// 소유 로직으로 옮긴 것. 존재하지 않으면 예외 대신 exists=false로 응답한다(호출 측이
+	// 404/403을 구분해서 처리할 수 있도록). 소프트 삭제된 travel은 @SQLRestriction으로
+	// findById에서 걸러지므로 exists=false가 된다.
+	@Transactional(readOnly = true)
+	fun checkReadAccess(
+		travelId: UUID,
+		requesterId: UUID,
+	): TravelReadAccessResponse {
+		val travel = travelRepository.findById(travelId).orElse(null)
+			?: return TravelReadAccessResponse(travelId, exists = false, hasReadAccess = false)
+		val hasReadAccess = travel.owner.id == requesterId ||
+			travelMemberRepository.findAcceptedRole(travelId, requesterId) != null
+		return TravelReadAccessResponse(travelId, exists = true, hasReadAccess = hasReadAccess)
 	}
 
 	companion object {

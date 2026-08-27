@@ -6,6 +6,7 @@ import com.ktcloud.travelplanner.global.security.AuthenticatedUserPrincipal
 import com.ktcloud.travelplanner.travel.dto.TravelCreateRequest
 import com.ktcloud.travelplanner.travel.dto.TravelCreateResponse
 import com.ktcloud.travelplanner.travel.dto.TravelDetailResponse
+import com.ktcloud.travelplanner.travel.dto.TravelReadAccessResponse
 import com.ktcloud.travelplanner.travel.dto.TravelSummaryResponse
 import com.ktcloud.travelplanner.travel.dto.TravelUpdateRequest
 import com.ktcloud.travelplanner.travel.service.TravelDetailService
@@ -63,6 +64,15 @@ class TravelController(
 		@AuthenticationPrincipal principal: AuthenticatedUserPrincipal,
 	): ApiResponse<TravelDetailResponse> =
 		ApiResponse.success(travelDetailService.getTravelDetail(travelId, principal.userId))
+
+	// MSA 전환용 내부 API — 다른 서비스(community 등)가 특정 travel에 대한 요청자의 조회 권한을
+	// 확인하는 데 쓴다. 원 요청의 JWT를 그대로 forward해서 호출하는 것을 전제로 principal.userId를 본다.
+	@GetMapping("/{travelId}/read-access")
+	fun checkTravelReadAccess(
+		@PathVariable travelId: UUID,
+		@AuthenticationPrincipal principal: AuthenticatedUserPrincipal,
+	): ApiResponse<TravelReadAccessResponse> =
+		ApiResponse.success(travelService.checkReadAccess(travelId, principal.userId))
 
 	@PatchMapping("/{travelId}")
 	fun updateTravel(

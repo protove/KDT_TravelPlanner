@@ -2,6 +2,7 @@ package com.ktcloud.travelplanner.travel.service
 
 import com.ktcloud.travelplanner.membership.model.TravelPermission
 import com.ktcloud.travelplanner.membership.model.TravelRole
+import com.ktcloud.travelplanner.membership.repository.TravelMemberRepository
 import com.ktcloud.travelplanner.testsupport.TestFixtures
 import com.ktcloud.travelplanner.travel.dto.TravelCreateRequest
 import com.ktcloud.travelplanner.travel.model.Travel
@@ -25,12 +26,15 @@ import java.time.LocalDate
 import java.util.Optional
 import java.util.UUID
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertSame
+import kotlin.test.assertTrue
 
 class TravelServiceTest {
 	private val travelRepository = mock(TravelRepository::class.java)
+	private val travelMemberRepository = mock(TravelMemberRepository::class.java)
 	private val userRepository = mock(UserRepository::class.java)
-	private val service = TravelService(travelRepository, userRepository, TestFixtures.FIXED_CLOCK)
+	private val service = TravelService(travelRepository, travelMemberRepository, userRepository, TestFixtures.FIXED_CLOCK)
 
 	@Test
 	fun `uses authenticated user as owner and returns generated travel id`() {
@@ -155,6 +159,48 @@ class TravelServiceTest {
 		assertThrows<TravelDeleteAccessDeniedException> {
 			service.deleteTravel(travel.id, TestFixtures.USER_ID)
 		}
+	}
+
+	@Test
+	fun `checkReadAccess reports exists false without a member lookup when the travel is missing or soft deleted`() {
+		val travelId = UUID.randomUUID()
+		`when`(travelRepository.findById(travelId)).thenReturn(Optional.empty())
+
+		val response = service.checkReadAccess(travelId, TestFixtures.USER_ID)
+
+		assertEquals(travelId, response.travelId)
+		assertFalse(response.exists)
+		assertFalse(response.hasReadAccess)
+		verifyNoInteractions(travelMemberRepository)
+	}
+
+	@Test
+	fun `checkReadAccess grants the owner access without a member lookup`() {
+		val owner = mock(User::class.java)
+		val travel = travel(owner)
+		`when`(owner.id).thenReturn(TestFixtures.USER_ID)
+		`when`(travelRepository.findById(travel.id)).thenReturn(Optional.of(travel))
+
+		val response = service.checkReadAccess(travel.id, TestFixtures.USER_ID)
+
+		assertTrue(response.exists)
+		assertTrue(response.hasReadAccess)
+		verifyNoInteractions(travelMemberRepository)
+	}
+
+	@Test
+	fun `checkReadAccess grants an accepted member access and denies everyone else`() {
+		val owner = mock(User::class.java)
+		val travel = travel(owner)
+		val member = UUID.randomUUID()
+		val stranger = UUID.randomUUID()
+		`when`(owner.id).thenReturn(UUID.randomUUID())
+		`when`(travelRepository.findById(travel.id)).thenReturn(Optional.of(travel))
+		`when`(travelMemberRepository.findAcceptedRole(travel.id, member)).thenReturn(TravelRole.READ_ONLY)
+		`when`(travelMemberRepository.findAcceptedRole(travel.id, stranger)).thenReturn(null)
+
+		assertTrue(service.checkReadAccess(travel.id, member).hasReadAccess)
+		assertFalse(service.checkReadAccess(travel.id, stranger).hasReadAccess)
 	}
 
 	private fun request(): TravelCreateRequest = TravelCreateRequest(
