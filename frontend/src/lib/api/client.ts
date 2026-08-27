@@ -29,7 +29,10 @@ export class ApiError extends Error {
 }
 
 async function parseApiError(res: Response): Promise<ApiError> {
-  const body = (await res.json().catch(() => null)) as ApiErrorResponse | null;
+  const body = (await res
+    .json()
+    .catch(() => null)) as ApiErrorResponse | null;
+
   return new ApiError(
     res.status,
     body?.code ?? "UNKNOWN",
@@ -39,7 +42,9 @@ async function parseApiError(res: Response): Promise<ApiError> {
   );
 }
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8080";
+const API_BASE_URL =
+  process.env.NEXT_PUBLIC_API_BASE_URL ??
+  "http://localhost:8080";
 
 // access token TTL(기본 30분)이 지나면 화면은 로그인 상태(isLoggedIn: true)로 남아 있는데
 // 실제 API 호출은 계속 401을 받는 문제가 있었다 — AuthProvider의 silent refresh는 앱 부팅
@@ -56,7 +61,11 @@ async function fetchWithReauth(
     ...options,
     headers: {
       ...options.headers,
-      ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+      ...(accessToken
+        ? {
+            Authorization: `Bearer ${accessToken}`,
+          }
+        : {}),
     },
     credentials: "include",
   });
@@ -85,5 +94,6 @@ export async function apiFetch<T>(
   const res = await fetchWithReauth(path, accessToken, options, false);
   if (!res.ok) throw await parseApiError(res);
   const body = (await res.json()) as ApiResponse<T>;
+
   return body.data;
 }

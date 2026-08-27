@@ -69,9 +69,12 @@ class GoogleRoutesAdapterTest {
 	@Test
 	fun `rejects malformed route and maps provider errors`() {
 		handler.set { exchange -> respond(exchange, 200, """{"routes":[]}""") }
-		assertThrows<GoogleRoutesProviderException> {
-			adapter().calculateRoute(listOf("a", "b"), TransportationType.DRIVE)
-		}
+		val noRoute = adapter().calculateRoute(listOf("a", "b"), TransportationType.DRIVE)
+		assertEquals(null, noRoute.encodedPolyline)
+		assertTrue(noRoute.encodedPolylines.isEmpty())
+		assertEquals(0, noRoute.totalDistanceMeters)
+		assertEquals(0, noRoute.totalDurationSeconds)
+		assertTrue(noRoute.legs.isEmpty())
 
 		handler.set { exchange -> respond(exchange, 429, "{}") }
 		assertThrows<GoogleRoutesQuotaExceededException> {

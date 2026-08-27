@@ -67,6 +67,7 @@ class TravelRouteControllerIntegrationTest(
 			.thenReturn(
 				RouteCalculation(
 					encodedPolyline = "encoded-polyline",
+					encodedPolylines = listOf("encoded-polyline"),
 					totalDistanceMeters = 12400,
 					totalDurationSeconds = 2100,
 					legs = listOf(RouteLegCalculation(12400, 2100)),
