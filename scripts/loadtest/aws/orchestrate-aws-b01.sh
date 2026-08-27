@@ -848,7 +848,14 @@ target_stage() {
     asg_json='{"note":"dry-run"}'
   else
     backend_target_ids_text="$(python3 -c 'import json,sys; print("\n".join(target.get("Target", {}).get("Id", "") for target in json.loads(sys.argv[1]).get("TargetHealthDescriptions", []) if target.get("TargetHealth", {}).get("State") == "healthy"))' "$target_health_json")"
-    mapfile -t backend_target_ids <<<"$backend_target_ids_text"
+    # macOS ships Bash 3.2, which does not provide mapfile/readarray. Keep
+    # the target list construction portable because this orchestrator runs
+    # from the operator workstation while the workload itself runs on the
+    # Runner EC2.
+    backend_target_ids=()
+    while IFS= read -r target_id; do
+      [[ -n "$target_id" ]] && backend_target_ids+=("$target_id")
+    done <<<"$backend_target_ids_text"
     if [[ "${#backend_target_ids[@]}" -eq 0 ]]; then
       echo "ALB target group has no healthy backend target" >&2
       exit 1
