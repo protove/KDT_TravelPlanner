@@ -112,6 +112,30 @@ class ResolveRunIdTest(unittest.TestCase):
                 EXPORT.resolve_run_id(Path(directory), "")
 
 
+class LocalTelemetryEvidenceTest(unittest.TestCase):
+    def test_operation_mix_and_mock_validity_keep_explicit_local_provenance(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "k6" / "rate-256" / "mock").mkdir(parents=True)
+            (root / "k6" / "rate-256" / "summary.json").write_text(json.dumps({
+                "scenario": "aws-eks-monolith-breakpoint",
+                "runId": "run-1",
+                "requestMixVersion": "aws-eks-current-feature-coverage-v2",
+                "operationMix": {"totalSelections": 10, "operations": {}},
+            }), encoding="utf-8")
+            (root / "k6" / "rate-256" / "mock" / "evidence.json").write_text(json.dumps({
+                "validity": "VALID",
+                "health": {"ok": True},
+                "requests": {"http5xxLines": 0},
+                "headroom": {"maxCpuPercent": 2},
+            }), encoding="utf-8")
+            mix, mock = EXPORT.load_local_operation_and_mock_evidence(root)
+            self.assertEqual(mix["records"][0]["sourcePath"], "k6/rate-256/summary.json")
+            self.assertEqual(mock["records"][0]["sourcePath"], "k6/rate-256/mock/evidence.json")
+            self.assertTrue(mock["records"][0]["independentlySourced"])
+            self.assertTrue(mock["records"][0]["annotationOnly"])
+
+
 class ResourceDimensionsValidationTest(unittest.TestCase):
     COMPLETE = {
         "albDimension": "app/kdt-travelplanner-dev-api/51b33ebe03b9146c",

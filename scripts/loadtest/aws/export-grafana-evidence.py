@@ -574,6 +574,72 @@ def summarize_query_records(queries_dir: Path) -> dict[str, int]:
     return counts
 
 
+def load_local_operation_and_mock_evidence(evidence_root: Path) -> tuple[dict, dict]:
+    """Collect bounded local mix/mock summaries with explicit provenance.
+
+    These files are not datasource telemetry: operation mix comes from each
+    k6 summary and mock validity comes from the separately sealed Runner
+    evidence.  Keeping the source path beside the summary prevents a Grafana
+    annotation from being mistaken for an independently scraped metric.
+    """
+    operation_records: list[dict] = []
+    summary_paths = []
+    root_summary = evidence_root / "summary.json"
+    if root_summary.exists():
+        summary_paths.append(root_summary)
+    summary_paths.extend(sorted((evidence_root / "k6").glob("*/summary.json")))
+    for path in summary_paths:
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        mix = payload.get("operationMix")
+        if isinstance(mix, dict):
+            operation_records.append({
+                "sourcePath": str(path.relative_to(evidence_root)),
+                "scenario": payload.get("scenario"),
+                "runId": payload.get("runId"),
+                "requestMixVersion": payload.get("requestMixVersion"),
+                "operationMix": mix,
+            })
+
+    mock_records: list[dict] = []
+    mock_paths = []
+    root_mock = evidence_root / "mock" / "evidence.json"
+    if root_mock.exists():
+        mock_paths.append(root_mock)
+    mock_paths.extend(sorted((evidence_root / "k6").glob("*/mock/evidence.json")))
+    for path in mock_paths:
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        # Deliberately copy only the sealed summary fields; raw access/error
+        # logs stay in the evidence bundle and are not promoted to Grafana.
+        mock_records.append({
+            "sourcePath": str(path.relative_to(evidence_root)),
+            "validity": payload.get("validity"),
+            "health": payload.get("health"),
+            "requests": payload.get("requests"),
+            "headroom": payload.get("headroom"),
+            "container": payload.get("container"),
+            "independentlySourced": True,
+            "annotationOnly": True,
+        })
+    return (
+        {
+            "schemaVersion": "aws-load-test-operation-mix/v1",
+            "provenance": "k6-summary-operation-selection-counters",
+            "records": operation_records,
+        },
+        {
+            "schemaVersion": "google-api-mock-validity/v1",
+            "provenance": "Runner-local-sealed-mock-evidence",
+            "records": mock_records,
+        },
+    )
+
+
 def build_dashboard_url(grafana_url: str, dashboard_uid: str, resource_dimensions: dict | None = None) -> str:
     """Build a dashboard URL with run-specific CloudWatch variables."""
     base_url = f"{grafana_url.rstrip('/')}/d/{dashboard_uid}"
@@ -741,6 +807,14 @@ def main() -> int:
     queries_dir.mkdir(parents=True, exist_ok=True)
     panels_dir.mkdir(parents=True, exist_ok=True)
 
+    operation_mix_evidence, mock_validity_evidence = load_local_operation_and_mock_evidence(evidence_root)
+    (grafana_dir / "operation-mix.json").write_text(
+        json.dumps(operation_mix_evidence, indent=2) + "\n", encoding="utf-8",
+    )
+    (grafana_dir / "mock-validity.json").write_text(
+        json.dumps(mock_validity_evidence, indent=2) + "\n", encoding="utf-8",
+    )
+
     auth_header = None if args.anonymous_viewer else basic_auth_header(args.user, args.password)
 
     dashboard_payload = fetch_dashboard(args.grafana_url, auth_header, args.dashboard_uid)
@@ -849,6 +923,9 @@ def main() -> int:
         "panelCount": len(contracts),
         "dashboardCapturePath": "grafana/dashboard.capture.json",
         "expectedDashboardPngPath": "grafana/dashboard.png",
+        "operationMixPath": "grafana/operation-mix.json",
+        "mockValidityPath": "grafana/mock-validity.json",
+        "mockValidityProvenance": "Runner-local sealed evidence; Grafana annotation is summary-only",
         "accessMode": "anonymous-viewer" if args.anonymous_viewer else "basic-auth",
     }, indent=2) + "\n", encoding="utf-8")
 

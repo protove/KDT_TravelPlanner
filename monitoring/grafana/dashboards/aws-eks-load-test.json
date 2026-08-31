@@ -105,7 +105,7 @@
       "id": 6,
       "options": { "legend": { "displayMode": "table", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
       "targets": [
-        { "expr": "sum(rate(http_server_requests_seconds_count{app=\"travel-planner-backend\",environment=\"$environment\"}[5m]))", "legendFormat": "backend request rate", "refId": "A" }
+        { "expr": "sum(rate(http_server_requests_seconds_count{app=\"travel-planner-backend\",environment=\"$environment\"}[1m]))", "legendFormat": "backend request rate", "refId": "A" }
       ],
       "title": "Backend throughput",
       "type": "timeseries"
@@ -118,7 +118,7 @@
       "id": 7,
       "options": { "legend": { "displayMode": "table", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
       "targets": [
-        { "expr": "histogram_quantile(0.95,sum by (le) (rate(http_server_requests_seconds_bucket{app=\"travel-planner-backend\",environment=\"$environment\"}[5m])))", "legendFormat": "backend p95", "refId": "A" }
+        { "expr": "histogram_quantile(0.95,sum by (le) (rate(http_server_requests_seconds_bucket{app=\"travel-planner-backend\",environment=\"$environment\"}[1m])))", "legendFormat": "backend p95", "refId": "A" }
       ],
       "title": "Backend latency p95",
       "type": "timeseries"
@@ -131,7 +131,7 @@
       "id": 8,
       "options": { "legend": { "displayMode": "table", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
       "targets": [
-        { "expr": "100 * sum(rate(http_server_requests_seconds_count{app=\"travel-planner-backend\",environment=\"$environment\",status=~\"5..\"}[5m])) / clamp_min(sum(rate(http_server_requests_seconds_count{app=\"travel-planner-backend\",environment=\"$environment\"}[5m])),0.001)", "legendFormat": "5xx ratio", "refId": "A" }
+        { "expr": "100 * sum(rate(http_server_requests_seconds_count{app=\"travel-planner-backend\",environment=\"$environment\",status=~\"5..\"}[1m])) / clamp_min(sum(rate(http_server_requests_seconds_count{app=\"travel-planner-backend\",environment=\"$environment\"}[1m])),0.001)", "legendFormat": "5xx ratio", "refId": "A" }
       ],
       "title": "Backend 5xx ratio",
       "type": "timeseries"
@@ -144,7 +144,7 @@
       "id": 9,
       "options": { "legend": { "displayMode": "table", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
       "targets": [
-        { "expr": "100 * avg(rate(process_cpu_seconds_total{app=\"travel-planner-backend\",environment=\"$environment\"}[5m]))", "legendFormat": "backend process CPU", "refId": "A" }
+        { "expr": "100 * avg(rate(process_cpu_seconds_total{app=\"travel-planner-backend\",environment=\"$environment\"}[1m]))", "legendFormat": "backend process CPU", "refId": "A" }
       ],
       "title": "Backend process CPU",
       "type": "timeseries"
@@ -175,6 +175,123 @@
       ],
       "title": "Backend Hikari connections",
       "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "description": "Restart, CrashLoopBackOff and OOMKilled signals for the Backend Pods.",
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 48 },
+      "id": 12,
+      "options": { "legend": { "displayMode": "table", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        { "expr": "sum(increase(kube_pod_container_status_restarts_total{namespace=\"$namespace\",container=\"backend\"}[1m]))", "legendFormat": "restarts", "refId": "A" },
+        { "expr": "sum(kube_pod_container_status_waiting_reason{namespace=\"$namespace\",container=\"backend\",reason=\"CrashLoopBackOff\"})", "legendFormat": "CrashLoopBackOff", "refId": "B" },
+        { "expr": "sum(kube_pod_container_status_last_terminated_reason{namespace=\"$namespace\",container=\"backend\",reason=\"OOMKilled\"})", "legendFormat": "OOMKilled", "refId": "C" }
+      ],
+      "title": "Backend Pod health / restart / OOM",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "cloudwatch", "uid": "cloudwatch" },
+      "description": "ALB request, latency, healthy target and 5xx signals over the same one-minute window.",
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 48 },
+      "id": 13,
+      "options": { "legend": { "displayMode": "table", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        { "datasource": { "type": "cloudwatch", "uid": "cloudwatch" }, "dimensions": { "LoadBalancer": "$alb_dimension" }, "expression": "", "matchExact": true, "metricName": "RequestCount", "metricQueryType": 0, "namespace": "AWS/ApplicationELB", "period": "60", "queryMode": "Metrics", "refId": "A", "region": "ap-northeast-2", "statistic": "Sum" },
+        { "datasource": { "type": "cloudwatch", "uid": "cloudwatch" }, "dimensions": { "LoadBalancer": "$alb_dimension", "TargetGroup": "$target_group_dimension" }, "expression": "", "matchExact": true, "metricName": "TargetResponseTime", "metricQueryType": 0, "namespace": "AWS/ApplicationELB", "period": "60", "queryMode": "Metrics", "refId": "B", "region": "ap-northeast-2", "statistic": "Average" },
+        { "datasource": { "type": "cloudwatch", "uid": "cloudwatch" }, "dimensions": { "LoadBalancer": "$alb_dimension", "TargetGroup": "$target_group_dimension" }, "expression": "", "matchExact": true, "metricName": "HealthyHostCount", "metricQueryType": 0, "namespace": "AWS/ApplicationELB", "period": "60", "queryMode": "Metrics", "refId": "C", "region": "ap-northeast-2", "statistic": "Minimum" },
+        { "datasource": { "type": "cloudwatch", "uid": "cloudwatch" }, "dimensions": { "LoadBalancer": "$alb_dimension" }, "expression": "", "matchExact": true, "metricName": "HTTPCode_ELB_5XX_Count", "metricQueryType": 0, "namespace": "AWS/ApplicationELB", "period": "60", "queryMode": "Metrics", "refId": "D", "region": "ap-northeast-2", "statistic": "Sum" },
+        { "datasource": { "type": "cloudwatch", "uid": "cloudwatch" }, "dimensions": { "LoadBalancer": "$alb_dimension", "TargetGroup": "$target_group_dimension" }, "expression": "", "matchExact": true, "metricName": "HTTPCode_Target_5XX_Count", "metricQueryType": 0, "namespace": "AWS/ApplicationELB", "period": "60", "queryMode": "Metrics", "refId": "E", "region": "ap-northeast-2", "statistic": "Sum" }
+      ],
+      "title": "ALB request / target health / 5xx",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "cloudwatch", "uid": "cloudwatch" },
+      "description": "Backing managed node-group ASG desired, in-service and pending instances.",
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 56 },
+      "id": 14,
+      "options": { "legend": { "displayMode": "table", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        { "datasource": { "type": "cloudwatch", "uid": "cloudwatch" }, "dimensions": { "AutoScalingGroupName": "$autoscaling_group_name" }, "expression": "", "matchExact": true, "metricName": "GroupDesiredCapacity", "metricQueryType": 0, "namespace": "AWS/AutoScaling", "period": "60", "queryMode": "Metrics", "refId": "A", "region": "ap-northeast-2", "statistic": "Average" },
+        { "datasource": { "type": "cloudwatch", "uid": "cloudwatch" }, "dimensions": { "AutoScalingGroupName": "$autoscaling_group_name" }, "expression": "", "matchExact": true, "metricName": "GroupInServiceInstances", "metricQueryType": 0, "namespace": "AWS/AutoScaling", "period": "60", "queryMode": "Metrics", "refId": "B", "region": "ap-northeast-2", "statistic": "Average" },
+        { "datasource": { "type": "cloudwatch", "uid": "cloudwatch" }, "dimensions": { "AutoScalingGroupName": "$autoscaling_group_name" }, "expression": "", "matchExact": true, "metricName": "GroupPendingInstances", "metricQueryType": 0, "namespace": "AWS/AutoScaling", "period": "60", "queryMode": "Metrics", "refId": "C", "region": "ap-northeast-2", "statistic": "Average" }
+      ],
+      "title": "EKS node-group / ASG capacity",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "cloudwatch", "uid": "cloudwatch" },
+      "description": "RDS and Redis pressure signals used to attribute a data-tier breakpoint.",
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 56 },
+      "id": 15,
+      "options": { "legend": { "displayMode": "table", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        { "datasource": { "type": "cloudwatch", "uid": "cloudwatch" }, "dimensions": { "DBInstanceIdentifier": "$db_instance_identifier" }, "expression": "", "matchExact": true, "metricName": "CPUUtilization", "metricQueryType": 0, "namespace": "AWS/RDS", "period": "60", "queryMode": "Metrics", "refId": "A", "region": "ap-northeast-2", "statistic": "Average" },
+        { "datasource": { "type": "cloudwatch", "uid": "cloudwatch" }, "dimensions": { "DBInstanceIdentifier": "$db_instance_identifier" }, "expression": "", "matchExact": true, "metricName": "DatabaseConnections", "metricQueryType": 0, "namespace": "AWS/RDS", "period": "60", "queryMode": "Metrics", "refId": "B", "region": "ap-northeast-2", "statistic": "Average" },
+        { "datasource": { "type": "cloudwatch", "uid": "cloudwatch" }, "dimensions": { "CacheClusterId": "$cache_cluster_id" }, "expression": "", "matchExact": true, "metricName": "EngineCPUUtilization", "metricQueryType": 0, "namespace": "AWS/ElastiCache", "period": "60", "queryMode": "Metrics", "refId": "C", "region": "ap-northeast-2", "statistic": "Average" },
+        { "datasource": { "type": "cloudwatch", "uid": "cloudwatch" }, "dimensions": { "CacheClusterId": "$cache_cluster_id" }, "expression": "", "matchExact": true, "metricName": "Evictions", "metricQueryType": 0, "namespace": "AWS/ElastiCache", "period": "60", "queryMode": "Metrics", "refId": "D", "region": "ap-northeast-2", "statistic": "Sum" }
+      ],
+      "title": "RDS / Redis pressure",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "description": "Backend request rate grouped by bounded route families. The grouping is a URI-to-feature-family view of the frozen 26-operation workload; no user, travel or request identifiers are labels.",
+      "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] },
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 64 },
+      "id": 16,
+      "options": { "legend": { "displayMode": "table", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        { "expr": "sum(rate(http_server_requests_seconds_count{app=\"travel-planner-backend\",environment=\"$environment\",uri=~\"^/api/v1/auth/.*\"}[1m]))", "legendFormat": "auth-control", "refId": "A" },
+        { "expr": "sum(rate(http_server_requests_seconds_count{app=\"travel-planner-backend\",environment=\"$environment\",uri=~\"^/api/v1/users/me/profile$\"}[1m]))", "legendFormat": "profile", "refId": "B" },
+        { "expr": "sum(rate(http_server_requests_seconds_count{app=\"travel-planner-backend\",environment=\"$environment\",uri=~\"^/api/v1/travels/.*\"}[1m]))", "legendFormat": "travel", "refId": "C" },
+        { "expr": "sum(rate(http_server_requests_seconds_count{app=\"travel-planner-backend\",environment=\"$environment\",uri=~\"^/api/v1/(countries|places)/.*\"}[1m]))", "legendFormat": "location / places", "refId": "D" },
+        { "expr": "sum(rate(http_server_requests_seconds_count{app=\"travel-planner-backend\",environment=\"$environment\",uri=~\"^/api/v1/users/me/travel-invitations$\"}[1m]))", "legendFormat": "membership", "refId": "E" },
+        { "expr": "sum(rate(http_server_requests_seconds_count{app=\"travel-planner-backend\",environment=\"$environment\",uri=~\"^/api/v1/community/.*\"}[1m]))", "legendFormat": "community", "refId": "F" }
+      ],
+      "title": "Backend request rate by feature family",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "description": "Backend p95 latency by the same bounded URI families used by the request-rate panel.",
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 74 },
+      "id": 17,
+      "options": { "legend": { "displayMode": "table", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        { "expr": "histogram_quantile(0.95,sum by (le) (rate(http_server_requests_seconds_bucket{app=\"travel-planner-backend\",environment=\"$environment\",uri=~\"^/api/v1/auth/.*\"}[1m])))", "legendFormat": "auth-control", "refId": "A" },
+        { "expr": "histogram_quantile(0.95,sum by (le) (rate(http_server_requests_seconds_bucket{app=\"travel-planner-backend\",environment=\"$environment\",uri=~\"^/api/v1/users/me/profile$\"}[1m])))", "legendFormat": "profile", "refId": "B" },
+        { "expr": "histogram_quantile(0.95,sum by (le) (rate(http_server_requests_seconds_bucket{app=\"travel-planner-backend\",environment=\"$environment\",uri=~\"^/api/v1/travels/.*\"}[1m])))", "legendFormat": "travel", "refId": "C" },
+        { "expr": "histogram_quantile(0.95,sum by (le) (rate(http_server_requests_seconds_bucket{app=\"travel-planner-backend\",environment=\"$environment\",uri=~\"^/api/v1/(countries|places)/.*\"}[1m])))", "legendFormat": "location / places", "refId": "D" },
+        { "expr": "histogram_quantile(0.95,sum by (le) (rate(http_server_requests_seconds_bucket{app=\"travel-planner-backend\",environment=\"$environment\",uri=~\"^/api/v1/users/me/travel-invitations$\"}[1m])))", "legendFormat": "membership", "refId": "E" },
+        { "expr": "histogram_quantile(0.95,sum by (le) (rate(http_server_requests_seconds_bucket{app=\"travel-planner-backend\",environment=\"$environment\",uri=~\"^/api/v1/community/.*\"}[1m])))", "legendFormat": "community", "refId": "F" }
+      ],
+      "title": "Backend p95 by feature family",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "description": "Backend 5xx percentage by bounded URI family; an empty low-volume family is kept distinct from zero by the fixed-range exporter.",
+      "fieldConfig": { "defaults": { "unit": "percent" }, "overrides": [] },
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 84 },
+      "id": 18,
+      "options": { "legend": { "displayMode": "table", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        { "expr": "100 * sum(rate(http_server_requests_seconds_count{app=\"travel-planner-backend\",environment=\"$environment\",uri=~\"^/api/v1/auth/.*\",status=~\"5..\"}[1m])) / clamp_min(sum(rate(http_server_requests_seconds_count{app=\"travel-planner-backend\",environment=\"$environment\",uri=~\"^/api/v1/auth/.*\"}[1m])),0.001)", "legendFormat": "auth-control", "refId": "A" },
+        { "expr": "100 * sum(rate(http_server_requests_seconds_count{app=\"travel-planner-backend\",environment=\"$environment\",uri=~\"^/api/v1/users/me/profile$\",status=~\"5..\"}[1m])) / clamp_min(sum(rate(http_server_requests_seconds_count{app=\"travel-planner-backend\",environment=\"$environment\",uri=~\"^/api/v1/users/me/profile$\"}[1m])),0.001)", "legendFormat": "profile", "refId": "B" },
+        { "expr": "100 * sum(rate(http_server_requests_seconds_count{app=\"travel-planner-backend\",environment=\"$environment\",uri=~\"^/api/v1/travels/.*\",status=~\"5..\"}[1m])) / clamp_min(sum(rate(http_server_requests_seconds_count{app=\"travel-planner-backend\",environment=\"$environment\",uri=~\"^/api/v1/travels/.*\"}[1m])),0.001)", "legendFormat": "travel", "refId": "C" },
+        { "expr": "100 * sum(rate(http_server_requests_seconds_count{app=\"travel-planner-backend\",environment=\"$environment\",uri=~\"^/api/v1/(countries|places)/.*\",status=~\"5..\"}[1m])) / clamp_min(sum(rate(http_server_requests_seconds_count{app=\"travel-planner-backend\",environment=\"$environment\",uri=~\"^/api/v1/(countries|places)/.*\"}[1m])),0.001)", "legendFormat": "location / places", "refId": "D" },
+        { "expr": "100 * sum(rate(http_server_requests_seconds_count{app=\"travel-planner-backend\",environment=\"$environment\",uri=~\"^/api/v1/users/me/travel-invitations$\",status=~\"5..\"}[1m])) / clamp_min(sum(rate(http_server_requests_seconds_count{app=\"travel-planner-backend\",environment=\"$environment\",uri=~\"^/api/v1/users/me/travel-invitations$\"}[1m])),0.001)", "legendFormat": "membership", "refId": "E" },
+        { "expr": "100 * sum(rate(http_server_requests_seconds_count{app=\"travel-planner-backend\",environment=\"$environment\",uri=~\"^/api/v1/community/.*\",status=~\"5..\"}[1m])) / clamp_min(sum(rate(http_server_requests_seconds_count{app=\"travel-planner-backend\",environment=\"$environment\",uri=~\"^/api/v1/community/.*\"}[1m])),0.001)", "legendFormat": "community", "refId": "F" }
+      ],
+      "title": "Backend 5xx by feature family",
+      "type": "timeseries"
     }
   ],
   "schemaVersion": 41,
@@ -182,7 +299,12 @@
   "templating": {
     "list": [
       { "current": { "text": "dev-eks", "value": "dev-eks" }, "hide": 0, "includeAll": false, "label": "Environment", "name": "environment", "options": [{ "selected": true, "text": "dev-eks", "value": "dev-eks" }], "query": "dev-eks", "type": "custom" },
-      { "current": { "text": "All", "value": "$__all" }, "datasource": { "type": "prometheus", "uid": "prometheus" }, "definition": "label_values(kube_pod_info{environment=\"$environment\"}, namespace)", "includeAll": true, "label": "Namespace", "name": "namespace", "options": [], "query": "label_values(kube_pod_info{environment=\"$environment\"}, namespace)", "refresh": 1, "type": "query" }
+      { "current": { "text": "All", "value": "$__all" }, "datasource": { "type": "prometheus", "uid": "prometheus" }, "definition": "label_values(kube_pod_info{environment=\"$environment\"}, namespace)", "includeAll": true, "label": "Namespace", "name": "namespace", "options": [], "query": "label_values(kube_pod_info{environment=\"$environment\"}, namespace)", "refresh": 1, "type": "query" },
+      { "current": { "text": "__runtime__", "value": "__runtime__" }, "description": "Runtime-only ALB ARN suffix; export-grafana-evidence.py injects the sanitized value from aws/resource-dimensions.json.", "includeAll": false, "label": "ALB dimension", "name": "alb_dimension", "options": [], "query": "__runtime__", "type": "custom" },
+      { "current": { "text": "__runtime__", "value": "__runtime__" }, "description": "Runtime-only targetgroup/ dimension.", "includeAll": false, "label": "Target group", "name": "target_group_dimension", "options": [], "query": "__runtime__", "type": "custom" },
+      { "current": { "text": "__runtime__", "value": "__runtime__" }, "description": "Runtime-only backing node-group ASG name.", "includeAll": false, "label": "Node ASG", "name": "autoscaling_group_name", "options": [], "query": "__runtime__", "type": "custom" },
+      { "current": { "text": "__runtime__", "value": "__runtime__" }, "description": "Runtime-only RDS DBInstanceIdentifier.", "includeAll": false, "label": "RDS instance", "name": "db_instance_identifier", "options": [], "query": "__runtime__", "type": "custom" },
+      { "current": { "text": "__runtime__", "value": "__runtime__" }, "description": "Runtime-only ElastiCache CacheClusterId.", "includeAll": false, "label": "Redis cluster", "name": "cache_cluster_id", "options": [], "query": "__runtime__", "type": "custom" }
     ]
   },
   "time": { "from": "now-1h", "to": "now" },
@@ -190,5 +312,5 @@
   "timezone": "browser",
   "title": "AWS EKS Load Test",
   "uid": "aws-eks-load-test",
-  "version": 2
+  "version": 3
 }

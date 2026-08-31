@@ -35,6 +35,24 @@ def build_run_dir(root: Path) -> Path:
 
 
 class AnnotationPublisherTests(unittest.TestCase):
+    def test_payloads_include_bounded_mock_provenance_when_sealed(self) -> None:
+        with TemporaryDirectory() as raw:
+            run_dir = build_run_dir(Path(raw))
+            (run_dir / "mock").mkdir()
+            (run_dir / "mock" / "evidence.json").write_text(json.dumps({
+                "validity": "VALID",
+                "health": {"ok": True},
+                "requests": {"accessLogLines": 12, "http5xxLines": 0},
+                "headroom": {"maxCpuPercent": 4.5, "maxMemoryPercent": 8.0},
+            }), encoding="utf-8")
+            annotations = MODULE.payloads(run_dir, "aws-eks")
+            self.assertEqual(len(annotations), 4)
+            mock_annotation = annotations[-1]
+            self.assertIn("mock-validity", mock_annotation["tags"])
+            self.assertIn("mock-validity:VALID", mock_annotation["tags"])
+            self.assertIn("provenance:runner-mock-evidence", mock_annotation["tags"])
+            self.assertIn("source=mock/evidence.json", mock_annotation["text"])
+
     def test_payloads_use_requested_context_tag(self) -> None:
         with TemporaryDirectory() as raw:
             run_dir = build_run_dir(Path(raw))

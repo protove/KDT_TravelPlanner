@@ -26,6 +26,11 @@ EVENT_TAGS = {
     "T5": "target-healthy",
     "T5_FAIL": "target-health-failed",
     "T6": "slo-recovered",
+    "STAGE_START": "adaptive-stage-start",
+    "STAGE_END": "adaptive-stage-end",
+    "STAGE_EXTENSION": "adaptive-stage-extension",
+    "TERMINAL": "breakpoint-terminal",
+    "INCOMPLETE": "incomplete-stop",
 }
 
 
@@ -36,11 +41,13 @@ def epoch_millis(value: str) -> int:
 def payloads(run_dir: Path, context_tag: str) -> list[dict]:
     metadata = json.loads((run_dir / "metadata.json").read_text(encoding="utf-8"))
     payload = []
+    event_times: list[int] = []
     for line in (run_dir / "operations.jsonl").read_text(encoding="utf-8").splitlines():
         event = json.loads(line)
         name = event["event"]
         if name not in EVENT_TAGS:
             continue
+        event_times.append(epoch_millis(event["ts"]))
         payload.append({
             "time": epoch_millis(event["ts"]),
             "tags": [
@@ -50,6 +57,45 @@ def payloads(run_dir: Path, context_tag: str) -> list[dict]:
                 f"run:{metadata.get('runId', run_dir.name)}",
             ],
             "text": f"{name}: {str(event.get('detail', ''))[:200]}",
+        })
+    mock_path = run_dir / "mock" / "evidence.json"
+    if mock_path.is_file():
+        mock = json.loads(mock_path.read_text(encoding="utf-8"))
+        health = mock.get("health") if isinstance(mock.get("health"), dict) else {}
+        requests = mock.get("requests") if isinstance(mock.get("requests"), dict) else {}
+        headroom = mock.get("headroom") if isinstance(mock.get("headroom"), dict) else {}
+        validity = str(mock.get("validity", "unknown"))[:32]
+        health_state = "ok" if health.get("ok") is True else "failed"
+        five_xx = int(requests.get("http5xxLines", 0) or 0)
+        cpu = headroom.get("maxCpuPercent")
+        memory = headroom.get("maxMemoryPercent")
+        headroom_state = "limited" if any(
+            isinstance(value, (int, float)) and value >= 90 for value in (cpu, memory)
+        ) else "ok"
+        started_at = metadata.get("startedAtUtc")
+        fallback_time = epoch_millis(started_at) if isinstance(started_at, str) else 0
+        annotation_time = max(event_times or [fallback_time])
+        payload.append({
+            "time": annotation_time,
+            "tags": [
+                context_tag,
+                "mock-validity",
+                f"mock-validity:{validity}",
+                f"mock-health:{health_state}",
+                f"mock-5xx:{min(max(five_xx, 0), 999999)}",
+                f"mock-headroom:{headroom_state}",
+                f"scenario:{metadata.get('scenario', 'unknown')}",
+                f"run:{metadata.get('runId', run_dir.name)}",
+                "provenance:runner-mock-evidence",
+            ],
+            "text": (
+                "MOCK_VALIDITY: "
+                f"validity={validity} health={health_state} "
+                f"requests={min(max(int(requests.get('accessLogLines', 0) or 0), 0), 999999)} "
+                f"http5xx={min(max(five_xx, 0), 999999)} "
+                f"maxCpuPercent={cpu} maxMemoryPercent={memory}; "
+                "source=mock/evidence.json (Runner-local sealed evidence)"
+            )[:500],
         })
     return payload
 

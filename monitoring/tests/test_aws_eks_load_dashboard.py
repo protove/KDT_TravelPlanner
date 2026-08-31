@@ -24,7 +24,7 @@ class EksLoadDashboardTest(unittest.TestCase):
     def test_panel_ids_and_datasources_are_bounded(self):
         panels = self.dashboard["panels"]
         self.assertEqual(len({panel["id"] for panel in panels}), len(panels))
-        self.assertTrue(all(panel["datasource"]["uid"] == "prometheus" for panel in panels))
+        self.assertTrue(all(panel["datasource"]["uid"] in {"prometheus", "cloudwatch"} for panel in panels))
 
     def test_queries_use_kubernetes_metrics_and_safe_labels(self):
         serialized = json.dumps(self.dashboard)
