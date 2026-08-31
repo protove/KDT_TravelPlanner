@@ -41,7 +41,21 @@ jobs:
           done
 
       - name: Run EKS renderer and runner contracts
-        run: python3 -m unittest discover -s scripts/eks/tests -p 'test_*.py'
+        run: |
+          set -euo pipefail
+          # PR CI runs only repository-contained contracts. The remaining
+          # operator-continuity suites intentionally bind ignored backend.hcl,
+          # authenticated handoffs, private evidence, or local reference docs
+          # and remain part of the local pre-apply verification boundary.
+          python3 -m unittest \
+            scripts.eks.tests.test_bastion_repair \
+            scripts.eks.tests.test_bastion_user_data \
+            scripts.eks.tests.test_bootstrap_backend_secret \
+            scripts.eks.tests.test_dev_eks_complete_verify_destroy \
+            scripts.eks.tests.test_dev_eks_destroy_verifier \
+            scripts.eks.tests.test_dev_eks_repair_smoke \
+            scripts.eks.tests.test_render_action_time \
+            scripts.eks.tests.test_run_dev_eks_deployment
 
       - name: Check EKS shell syntax and lint
         run: |
