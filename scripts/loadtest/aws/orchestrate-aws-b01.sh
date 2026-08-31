@@ -57,6 +57,7 @@ MAX_RATE=""
 MAX_VUS=""
 RUN_ID=""
 K6_IMAGE=""
+GOOGLE_MOCK_IMAGE="${GOOGLE_MOCK_IMAGE_REFERENCE:-nginxinc/nginx-unprivileged:1.27.1-alpine3.20-perl@sha256:86b08eb3082f1f796f0ce1ef75a1c356a116fafc5f88754924fba2286fbd0221}"
 CONFIRMED_RATE=""
 USERS=80
 DATABASE_HOST=""
@@ -126,6 +127,7 @@ Required:
 Also required for most modes:
   --s3-bucket NAME                (seed/export/all) evidence S3 bucket
   --k6-image DIGEST                (smoke/ramp/baseline/eks-baseline/pod-scale-out/node-scale-out-breakpoint/recovery/spike/soak/scale-step/capacity-stress/all) digest-pinned k6 image
+  --mock-image DIGEST              Private EKS Google API mock image (digest-pinned)
   --database-host/--database-name/--database-secret-arn   (seed/cleanup/all)
                                     --database-secret-arn must be a dedicated test-only Secret,
                                     JSON {"username":..,"password":..} (never the RDS master secret)
@@ -186,6 +188,7 @@ while [[ "$#" -gt 0 ]]; do
     --max-vus) MAX_VUS="$2"; shift 2 ;;
     --run-id) RUN_ID="$2"; shift 2 ;;
     --k6-image) K6_IMAGE="$2"; shift 2 ;;
+    --mock-image) GOOGLE_MOCK_IMAGE="$2"; shift 2 ;;
     --confirmed-rate) CONFIRMED_RATE="$2"; shift 2 ;;
     --users) USERS="$2"; shift 2 ;;
     --database-host) DATABASE_HOST="$2"; shift 2 ;;
@@ -291,6 +294,10 @@ if [[ ! "$BASE_URL" =~ ^https://[^/]+$ || "$BASE_URL" == *amazonaws.com* ]]; the
 fi
 if [[ ! "$RUNNER_INSTANCE_TYPE" =~ ^(t3\.[a-z0-9]+|c6i\.(2xlarge|4xlarge))$ ]]; then
   echo "--runner-instance-type must be a t3 family type or c6i.2xlarge/c6i.4xlarge" >&2
+  exit 2
+fi
+if [[ ! "$GOOGLE_MOCK_IMAGE" =~ ^nginxinc/nginx-unprivileged:[A-Za-z0-9._-]+@sha256:[0-9a-f]{64}$ ]]; then
+  echo "--mock-image must be a digest-pinned nginxinc/nginx-unprivileged image" >&2
   exit 2
 fi
 if [[ "$TARGET_PLATFORM" == "eks" ]]; then
@@ -404,7 +411,7 @@ stage_input_digest() {
     "${TARGET_PLATFORM:-ec2}" "${EKS_CLUSTER_NAME:-}" "${EKS_NODE_GROUP_NAME:-}" "${EKS_BASTION_ID:-}" \
     "${BACKEND_NAMESPACE:-}" "${BACKEND_DEPLOYMENT:-}" "${TARGET_GROUP_ARN:-}" \
     "$REGION" "$ENVIRONMENT" "$EXPECTED_ACCOUNT_ID" "$ALB_ARN" "$BASE_URL" \
-    "$RUNNER_ID" "$RUNNER_INSTANCE_TYPE" "$MAX_RATE" "$MAX_VUS" "$K6_IMAGE" "$USERS" \
+    "$RUNNER_ID" "$RUNNER_INSTANCE_TYPE" "$MAX_RATE" "$MAX_VUS" "$K6_IMAGE" "${GOOGLE_MOCK_IMAGE:-}" "$USERS" \
     "$DATABASE_HOST" "$DATABASE_PORT" "$DATABASE_NAME" "$DATABASE_SECRET_ARN" \
     "$DB_INSTANCE_IDENTIFIER" "$REDIS_HOST" "$REDIS_PORT" "$REDIS_IAM_USER" \
     "$REDIS_REPLICATION_GROUP_ID" "$CACHE_CLUSTER_ID" "$S3_BUCKET" "$S3_PREFIX" \
@@ -424,7 +431,7 @@ import sys
     target_platform, eks_cluster_name, eks_node_group_name, eks_bastion_id,
     backend_namespace, backend_deployment, target_group_arn,
     region, environment, expected_account_id, alb_arn, base_url,
-    runner_id, runner_instance_type, max_rate, max_vus, k6_image, users,
+    runner_id, runner_instance_type, max_rate, max_vus, k6_image, mock_image, users,
     database_host, database_port, database_name, database_secret_arn,
     db_instance_identifier, redis_host, redis_port, redis_iam_user,
     redis_replication_group_id, cache_cluster_id, s3_bucket, s3_prefix,
@@ -446,6 +453,7 @@ common = {
     "baseUrl": base_url,
     "runnerId": runner_id,
     "runnerInstanceType": runner_instance_type,
+    "mockImage": mock_image if target_platform == "eks" else None,
     "maxRate": max_rate,
     "maxVus": max_vus,
 }
@@ -700,6 +708,69 @@ if len(items) != 1 or items[0].get("PingStatus") != "Online":
 PY
 }
 
+validate_runner_bootstrap_readiness() {
+  [[ "$TARGET_PLATFORM" == "eks" && "$ADAPTIVE_BREAKPOINT_PROFILE" == "1" ]] || return 0
+  local receipt="$EVIDENCE_ROOT/aws/runner-readiness-verification.json"
+  local runner_receipt="/var/lib/travel-planner/load-test-evidence/runner-readiness.json"
+  if [[ "$DRY_RUN" == "1" ]]; then
+    cat >"$receipt" <<EOF
+{"schemaVersion":"scrum80-runner-readiness/v1","status":"dry-run","runId":"$RUN_ID","sourceCommitSha":"$SOURCE_COMMIT_SHA","rawOutputStored":false}
+EOF
+    return 0
+  fi
+  local base_receipt="/var/lib/travel-planner/load-test-evidence/base-ready.json"
+  [[ -s "$base_receipt" ]] || {
+    echo "Runner base-ready receipt is missing; cloud-init did not finish" >&2
+    return 1
+  }
+  python3 - "$base_receipt" "$SOURCE_COMMIT_SHA" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+if payload.get("status") != "base-ready" or payload.get("sourceCommitShaExpected") != sys.argv[2]:
+    raise SystemExit("Runner base-ready receipt does not match the approved source")
+PY
+  [[ -s "$runner_receipt" ]] || {
+    echo "Runner full-readiness receipt is missing; run the private S3+SSM bootstrap before seed" >&2
+    return 1
+  }
+  python3 - "$runner_receipt" "$RUN_ID" "$SOURCE_COMMIT_SHA" "$K6_IMAGE" "$GOOGLE_MOCK_IMAGE" "$receipt" <<'PY'
+import hashlib
+import json
+import sys
+from pathlib import Path
+
+runner_path, run_id, source_sha, k6_image, mock_image, output = sys.argv[1:]
+payload = json.loads(Path(runner_path).read_text(encoding="utf-8"))
+if payload.get("status") != "ready":
+    raise SystemExit("Runner full-readiness receipt is not ready")
+if payload.get("runId") != run_id or payload.get("sourceCommitSha") != source_sha:
+    raise SystemExit("Runner full-readiness receipt run/source does not match this run")
+if k6_image and payload.get("k6ImageReference") != k6_image:
+    raise SystemExit("Runner full-readiness k6 image does not match this run")
+if payload.get("mockImageReference") != mock_image:
+    raise SystemExit("Runner full-readiness mock image does not match this run")
+mock = payload.get("mock") if isinstance(payload.get("mock"), dict) else {}
+if mock.get("healthStatus") != "ok" or int(mock.get("contractRoutesVerified", 0)) < 4:
+    raise SystemExit("Runner private mock health/body contract is incomplete")
+Path(output).write_text(json.dumps({
+    "schemaVersion": "scrum80-runner-readiness-verification/v1",
+    "status": "ready",
+    "runId": run_id,
+    "sourceCommitSha": source_sha,
+    "k6ImageReference": payload.get("k6ImageReference"),
+    "mockImageReference": payload.get("mockImageReference"),
+    "mockHealthStatus": mock.get("healthStatus"),
+    "contractRoutesVerified": mock.get("contractRoutesVerified"),
+    "receiptSha256": hashlib.sha256(Path(runner_path).read_bytes()).hexdigest(),
+    "rawOutputStored": False,
+}, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+PY
+  chmod 0600 "$receipt"
+}
+
 eks_target_stage() {
   echo "[b01] target: verifying account/ALB/Runner and EKS adapter contract"
   local observed_account
@@ -736,6 +807,7 @@ eks_target_stage() {
     runner_validation_json="$(validate_runner_instance "$runner_json" "$RUNNER_ID" "$ENVIRONMENT" "$RUNNER_INSTANCE_TYPE")"
     runner_ssm_json="$(run_aws_json ssm describe-instance-information --filters "Key=InstanceIds,Values=$RUNNER_ID" --region "$REGION")"
     validate_runner_ssm "$runner_ssm_json"
+    validate_runner_bootstrap_readiness
     nodegroup_json="$(run_aws_json eks describe-nodegroup --cluster-name "$EKS_CLUSTER_NAME" --nodegroup-name "$EKS_NODE_GROUP_NAME" --region "$REGION")"
     target_health_json="$(run_aws_json elbv2 describe-target-health --target-group-arn "$target_group_arn" --region "$REGION")"
     printf '%s\n' "$nodegroup_json" > "$validation_dir/nodegroup.json"
@@ -1603,7 +1675,8 @@ PY
   local final_reason=""
   local operator_max_vus="$MAX_VUS"
   mkdir -p "$EVIDENCE_ROOT"
-  export REPOSITORY_ROOT EVIDENCE_ROOT BASE_URL REGION ENVIRONMENT TARGET_PLATFORM
+  export REPOSITORY_ROOT EVIDENCE_ROOT BASE_URL REGION ENVIRONMENT TARGET_PLATFORM SOURCE_COMMIT_SHA RUNNER_BOOTSTRAP_RUN_ID="$RUN_ID"
+  export RUNNER_READINESS_FILE="${RUNNER_READINESS_FILE:-/var/lib/travel-planner/load-test-evidence/runner-readiness.json}"
   export RUN_ID AWS_PROFILE_FILE DATA_FILE K6_IMAGE_DIGEST="$K6_IMAGE" AWS_SLO_CONTRACT_FILE="$SLO_CONTRACT"
   export EKS_CLUSTER_NAME EKS_NODE_GROUP_NAME EKS_BASTION_ID BACKEND_NAMESPACE BACKEND_DEPLOYMENT TARGET_GROUP_ARN
   export MAX_RATE MAX_VUS
@@ -1873,7 +1946,8 @@ k6_phase_stage() {
   local fixture_id="$phase${baseline_rep:+-$baseline_rep}"
   echo "[b01] resetting and refreshing fixture before $fixture_id"
   seed_credentials "$fixture_id"
-  export REPOSITORY_ROOT EVIDENCE_ROOT BASE_URL REGION ENVIRONMENT MAX_RATE MAX_VUS
+  export REPOSITORY_ROOT EVIDENCE_ROOT BASE_URL REGION ENVIRONMENT MAX_RATE MAX_VUS SOURCE_COMMIT_SHA RUNNER_BOOTSTRAP_RUN_ID="$RUN_ID"
+  export RUNNER_READINESS_FILE="${RUNNER_READINESS_FILE:-/var/lib/travel-planner/load-test-evidence/runner-readiness.json}"
   export EKS_CLUSTER_NAME EKS_NODE_GROUP_NAME EKS_BASTION_ID BACKEND_NAMESPACE BACKEND_DEPLOYMENT TARGET_GROUP_ARN
   export K6_IMAGE_DIGEST="$K6_IMAGE" AWS_PROFILE_FILE="$PROFILE" RUN_ID="$RUN_ID"
   export DATA_FILE

@@ -18,6 +18,31 @@ output "source_commit_sha" {
   value       = var.source_commit_sha
 }
 
+output "source_delivery_prefix" {
+  description = "Private run-scoped S3 prefix used by the staged source bootstrap."
+  value       = local.evidence_prefix
+}
+
+output "base_readiness_path" {
+  description = "Runner-local cloud-init receipt path; this is not full load-test readiness."
+  value       = "/var/lib/travel-planner/load-test-evidence/base-ready.json"
+}
+
+output "full_readiness_path" {
+  description = "Runner-local staged source/image/mock readiness receipt path."
+  value       = "/var/lib/travel-planner/load-test-evidence/runner-readiness.json"
+}
+
+output "k6_image_reference" {
+  description = "Digest-pinned k6 image to pass to the staged Runner bootstrap."
+  value       = var.k6_image_reference
+}
+
+output "google_mock_image_reference" {
+  description = "Digest-pinned private mock image to pass to the staged Runner bootstrap."
+  value       = var.google_mock_image_reference
+}
+
 output "evidence_bucket_arn" {
   description = "Evidence S3 bucket ARN."
   value       = aws_s3_bucket.evidence.arn

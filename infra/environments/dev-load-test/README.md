@@ -123,8 +123,28 @@ terraform -chdir=infra/environments/dev-load-test apply dev-load-test.tfplan
 ```
 
 apply 후 `load_runner_instance_id`를 SSM target으로 사용한다. 이 모듈은 k6 daemon을 상시
-실행하지 않는다. user data는 Docker, 검토된 source commit과 고정 k6 이미지를 준비하고,
-실제 테스트는 SSM Run Command와 `scripts/loadtest/aws/` orchestration이 시작한다.
+실행하지 않는다. user data는 Docker·Git·AWS CLI와 base-ready receipt만 준비한다. 검토된
+소스는 GitHub를 직접 clone하지 않고, 정확한 pushed commit을 private evidence S3 prefix에
+업로드한 뒤 로컬 [`bootstrap-load-runner-source.sh`](../../../scripts/loadtest/aws/bootstrap-load-runner-source.sh)가
+SSM으로 Runner에 전달한다.
+
+```bash
+RUN_ID="aws-b01-eks-<utc>"
+bash scripts/loadtest/aws/bootstrap-load-runner-source.sh \
+  --repository-root "$PWD" \
+  --source-commit "$(git rev-parse HEAD)" \
+  --run-id "$RUN_ID" --region ap-northeast-2 \
+  --runner-id "<load_runner_instance_id>" \
+  --s3-bucket "$(terraform -chdir=infra/environments/dev-load-test output -raw load_test_evidence_bucket_name)" \
+  --evidence-root "evidence/aws-load-tests/$RUN_ID" \
+  --k6-image "$(terraform -chdir=infra/environments/dev-load-test output -raw load_runner_k6_image_reference)" \
+  --mock-image "$(terraform -chdir=infra/environments/dev-load-test output -raw load_runner_google_mock_image_reference)"
+```
+
+Coordinator는 archive SHA/size와 S3 metadata를 read-back하고, SSM staged bootstrap이
+source `HEAD`, pinned botocore/k6/mock image, private mock health/body contract을 확인한
+뒤 mode-0600 `runner-readiness.json`을 남길 때만 성공한다. 이 receipt가 없는 상태에서는
+EKS target/seed/Smoke를 실행하지 않는다. `--dry-run`은 로컬 archive 계약만 검증한다.
 
 ## 테스트 종료와 destroy
 

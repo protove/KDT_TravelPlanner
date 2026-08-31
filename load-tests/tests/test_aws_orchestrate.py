@@ -24,6 +24,7 @@ SCRIPT = REPOSITORY_ROOT / "scripts/loadtest/aws/orchestrate-aws-b01.sh"
 PROFILE = REPOSITORY_ROOT / "load-tests/aws/profiles/ec2-b01.json"
 DESTROY_GATE = REPOSITORY_ROOT / "scripts/loadtest/aws/check-destroy-gate.sh"
 LOAD_RUNNER_TERRAFORM = REPOSITORY_ROOT / "infra/modules/load_test_runner/main.tf"
+LOAD_RUNNER_USER_DATA = REPOSITORY_ROOT / "infra/modules/load_test_runner/templates/runner-user-data.sh.tftpl"
 AWS_K6_RUNNER = REPOSITORY_ROOT / "scripts/loadtest/aws/run-k6-aws-scenario.sh"
 AWS_PHASE_RUNNER = REPOSITORY_ROOT / "scripts/loadtest/aws/run-aws-b01.sh"
 K6_ROOT = REPOSITORY_ROOT / "load-tests/k6"
@@ -110,6 +111,20 @@ class AwsOrchestrationContractTests(unittest.TestCase):
         self.assertIn('variable = "ssm:resourceTag/Stack"', source)
         self.assertIn('values   = [var.eks_observation_stack]', source)
         self.assertNotIn("eks:AccessKubernetesApi", source)
+
+    def test_eks_target_requires_private_runner_readiness_before_seed(self) -> None:
+        source = SCRIPT.read_text(encoding="utf-8")
+        bootstrap = (REPOSITORY_ROOT / "scripts/loadtest/aws/bootstrap-load-runner-source.sh").read_text(encoding="utf-8")
+        user_data = LOAD_RUNNER_USER_DATA.read_text(encoding="utf-8")
+        self.assertIn("validate_runner_bootstrap_readiness", source)
+        self.assertIn("runner-readiness.json", source)
+        self.assertIn("RUNNER_BOOTSTRAP_RUN_ID", source)
+        self.assertIn("--mock-image DIGEST", source)
+        self.assertIn("s3api put-object", bootstrap)
+        self.assertIn("ssm send-command", bootstrap)
+        self.assertNotIn("git clone", user_data)
+        self.assertNotIn("docker pull", user_data)
+        self.assertNotIn("source_repository_url", LOAD_RUNNER_TERRAFORM.read_text(encoding="utf-8"))
 
     def test_help_exposes_approved_operator_inputs(self) -> None:
         result = subprocess.run(

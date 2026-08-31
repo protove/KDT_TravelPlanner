@@ -53,7 +53,7 @@ variable "instance_type" {
 
 variable "k6_image_reference" {
   type        = string
-  description = "Official DockerHub k6 image pinned to an exact digest (pulled once during bootstrap)."
+  description = "Official k6 image pinned to an exact digest for the staged SSM bootstrap; cloud-init does not pull it."
 
   validation {
     condition     = can(regex("^grafana/k6:[0-9]+\\.[0-9]+\\.[0-9]+@sha256:[0-9a-f]{64}$", var.k6_image_reference))
@@ -63,23 +63,12 @@ variable "k6_image_reference" {
 
 variable "google_mock_image_reference" {
   type        = string
-  description = "Digest-pinned linux/amd64 nginx-unprivileged image used only by the isolated Google API mock container."
+  description = "Digest-pinned linux/amd64 nginx-unprivileged image for the staged private mock bootstrap; cloud-init does not pull it."
   default     = "nginxinc/nginx-unprivileged:1.27.1-alpine3.20-perl@sha256:86b08eb3082f1f796f0ce1ef75a1c356a116fafc5f88754924fba2286fbd0221"
 
   validation {
     condition     = can(regex("^nginxinc/nginx-unprivileged:[A-Za-z0-9._-]+@sha256:[0-9a-f]{64}$", var.google_mock_image_reference))
     error_message = "google_mock_image_reference must be nginxinc/nginx-unprivileged with an exact digest."
-  }
-}
-
-variable "source_repository_url" {
-  type        = string
-  description = "Reviewed public repository URL containing the load-test scripts and k6 workloads."
-  default     = "https://github.com/protove/KDT_TravelPlanner.git"
-
-  validation {
-    condition     = var.source_repository_url == "https://github.com/protove/KDT_TravelPlanner.git"
-    error_message = "source_repository_url must remain the reviewed KDT_TravelPlanner repository."
   }
 }
 

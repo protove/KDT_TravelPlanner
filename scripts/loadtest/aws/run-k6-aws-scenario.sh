@@ -93,7 +93,7 @@ case "$SCENARIO" in
   soak) SCENARIO_FILE="soak.js" ;;
   scale-step) SCENARIO_FILE="scale-step.js" ;;
   capacity-stress)
-    if [[ "$TARGET_PLATFORM" == "eks" || "$PROFILE_VERSION" == "aws-eks-monolith-breakpoint-v1.0" || "$PROFILE_VERSION" == "aws-eks-monolith-breakpoint-v2.0" ]]; then
+    if [[ "$TARGET_PLATFORM" == "eks" || "$PROFILE_VERSION" == "aws-eks-monolith-breakpoint-v1.0" || "$PROFILE_VERSION" == "aws-eks-monolith-breakpoint-v2.0" || "$PROFILE_VERSION" == "aws-eks-monolith-breakpoint-v2.1" ]]; then
       SCENARIO_FILE="eks-scale-capacity.js"
     else
       SCENARIO_FILE="capacity-stress.js"
@@ -152,6 +152,28 @@ if [[ "$TARGET_PLATFORM" == "eks" ]]; then
   # The live EKS render must prove the separately isolated Runner mock is
   # healthy before any measured operation is admitted.  A failed preflight is
   # an incomplete run, never an application terminal.
+  RUNNER_READINESS_FILE="${RUNNER_READINESS_FILE:-/var/lib/travel-planner/load-test-evidence/runner-readiness.json}"
+  [[ -s "$RUNNER_READINESS_FILE" ]] || {
+    echo "Runner full-readiness receipt is missing" >&2
+    exit 3
+  }
+  python3 - "$RUNNER_READINESS_FILE" "${RUNNER_BOOTSTRAP_RUN_ID:-$RUN_ID}" "${SOURCE_COMMIT_SHA:-}" "$K6_IMAGE_DIGEST" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+path, run_id, source_sha, k6_image = sys.argv[1:]
+payload = json.loads(Path(path).read_text(encoding="utf-8"))
+if payload.get("status") != "ready" or payload.get("runId") != run_id:
+    raise SystemExit("Runner full-readiness receipt is not ready for this run")
+if source_sha and payload.get("sourceCommitSha") != source_sha:
+    raise SystemExit("Runner full-readiness source SHA does not match this run")
+if payload.get("k6ImageReference") != k6_image:
+    raise SystemExit("Runner full-readiness k6 image does not match this run")
+mock = payload.get("mock") if isinstance(payload.get("mock"), dict) else {}
+if mock.get("healthStatus") != "ok" or int(mock.get("contractRoutesVerified", 0)) < 4:
+    raise SystemExit("Runner private mock contract is incomplete")
+PY
   if ! curl --fail --silent --show-error --max-time 3 http://127.0.0.1:8080/healthz >/dev/null; then
     echo "Google API mock is not healthy on the Runner" >&2
     exit 3

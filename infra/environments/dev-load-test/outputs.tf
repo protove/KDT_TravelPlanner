@@ -13,6 +13,31 @@ output "load_runner_source_commit_sha" {
   value       = module.load_test_runner.source_commit_sha
 }
 
+output "load_runner_source_delivery_prefix" {
+  description = "Private run-scoped S3 prefix used for exact source delivery."
+  value       = module.load_test_runner.source_delivery_prefix
+}
+
+output "load_runner_base_readiness_path" {
+  description = "Runner-local cloud-init base readiness receipt path."
+  value       = module.load_test_runner.base_readiness_path
+}
+
+output "load_runner_full_readiness_path" {
+  description = "Runner-local full source/image/mock readiness receipt path."
+  value       = module.load_test_runner.full_readiness_path
+}
+
+output "load_runner_k6_image_reference" {
+  description = "Digest-pinned k6 image for the staged Runner bootstrap."
+  value       = module.load_test_runner.k6_image_reference
+}
+
+output "load_runner_google_mock_image_reference" {
+  description = "Digest-pinned private mock image for the staged Runner bootstrap."
+  value       = module.load_test_runner.google_mock_image_reference
+}
+
 output "load_test_evidence_bucket_name" {
   description = "S3 bucket name for raw AWS load-test evidence."
   value       = module.load_test_runner.evidence_bucket_name
