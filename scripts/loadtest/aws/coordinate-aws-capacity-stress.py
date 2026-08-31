@@ -25,8 +25,10 @@ from pathlib import Path
 
 TERMINAL_REASONS = (
     "MAX_CAPACITY_REACHED",
+    "NODE_MAX_PENDING",
     "SLO_COLLAPSE",
     "DATA_TIER_SATURATION",
+    "PROFILE_COMPLETE",
     "HARD_CEILING",
 )
 
@@ -75,23 +77,23 @@ def true_for_seconds(snapshots: list[dict], predicate, seconds: float) -> bool:
 
 
 def terminal_reason(snapshots: list[dict], stability_seconds: int) -> str | None:
-    def capacity_at_least_four(item: dict) -> bool:
-        try:
-            capacity = int(item.get("logicalCapacity", 0) or 0)
-        except (TypeError, ValueError):
-            capacity = 0
-        return bool(item.get("capacityHealthy")) and capacity >= 4
-
-    if true_for_seconds(
-        snapshots,
-        lambda item: bool(item.get("logicalCapacityStable")) or capacity_at_least_four(item),
-        stability_seconds,
-    ):
+    # A desired/ready node count of four is only scale-out evidence. Maximum
+    # capacity is terminal only when the observer explicitly proves a
+    # max-node Pending/scheduling ceiling or emits maxCapacityReached.
+    if true_for_seconds(snapshots, lambda item: item.get("maxCapacityReached") is True, stability_seconds):
         return "MAX_CAPACITY_REACHED"
+
+    if true_for_seconds(snapshots, lambda item: item.get("nodeMaxPending") is True, stability_seconds):
+        return "NODE_MAX_PENDING"
 
     # The observer should emit one 60-second SLO window per entry. Requiring
     # two marked windows keeps the evaluator independent of polling cadence.
-    slo_windows = [item for item in snapshots if item.get("sloWindow") and item.get("sloBreached")]
+    slo_windows = [
+        item for item in snapshots
+        if item.get("sloWindow") is True
+        and item.get("sloBreached") is True
+        and (item.get("sloWindowComplete") is True or item.get("sloWindowSeconds") == 60)
+    ]
     if len(slo_windows) >= 2:
         first = timestamp(slo_windows[-2].get("ts") or slo_windows[-2].get("timestamp"))
         last = timestamp(slo_windows[-1].get("ts") or slo_windows[-1].get("timestamp"))
@@ -100,7 +102,7 @@ def terminal_reason(snapshots: list[dict], stability_seconds: int) -> str | None
 
     if true_for_seconds(
         snapshots,
-        lambda item: bool(item.get("dataTierSaturated")),
+        lambda item: item.get("dataTierSaturated") is True,
         stability_seconds,
     ):
         return "DATA_TIER_SATURATION"
@@ -195,11 +197,11 @@ def main() -> int:
         exit_code = process.wait()
         elapsed = time.monotonic() - started
         if reason is None:
-            # A zero-exit after the preregistered 29-minute schedule is the
-            # normal terminal, not an invalid early completion.  Anything
-            # shorter remains WORKLOAD_COMPLETED and the evaluator rejects it.
+            # A clean exit after the preregistered schedule is profile
+            # completion, distinct from a hard time ceiling. Anything shorter
+            # remains WORKLOAD_COMPLETED and the evaluator rejects it.
             reason = (
-                "HARD_CEILING"
+                "PROFILE_COMPLETE"
                 if elapsed >= args.complete_schedule_seconds and exit_code == 0
                 else "HARD_CEILING"
                 if elapsed >= args.hard_time_ceiling_seconds

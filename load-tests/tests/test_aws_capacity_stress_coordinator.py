@@ -38,20 +38,30 @@ class CapacityStressCoordinatorTest(unittest.TestCase):
 
     def test_capacity_terminal_requires_the_registered_stability_window(self) -> None:
         snapshots = [
-            {"ts": utc(0), "capacityHealthy": True, "logicalCapacity": 4},
-            {"ts": utc(119), "capacityHealthy": True, "logicalCapacity": 4},
+            {"ts": utc(0), "maxCapacityReached": True, "logicalCapacity": 4},
+            {"ts": utc(119), "maxCapacityReached": True, "logicalCapacity": 4},
         ]
         self.assertIsNone(MODULE.terminal_reason(snapshots, 120))
-        snapshots.append({"ts": utc(120), "capacityHealthy": True, "logicalCapacity": 4})
+        snapshots.append({"ts": utc(120), "maxCapacityReached": True, "logicalCapacity": 4})
         self.assertEqual(MODULE.terminal_reason(snapshots, 120), "MAX_CAPACITY_REACHED")
 
     def test_slo_terminal_requires_two_sixty_second_windows(self) -> None:
         snapshots = [
-            {"ts": utc(0), "sloWindow": True, "sloBreached": True},
+            {"ts": utc(0), "sloWindow": True, "sloWindowComplete": True, "sloWindowSeconds": 60, "sloBreached": True},
         ]
         self.assertIsNone(MODULE.terminal_reason(snapshots, 120))
-        snapshots.append({"ts": utc(60), "sloWindow": True, "sloBreached": True})
+        snapshots.append({"ts": utc(60), "sloWindow": True, "sloWindowComplete": True, "sloWindowSeconds": 60, "sloBreached": True})
         self.assertEqual(MODULE.terminal_reason(snapshots, 120), "SLO_COLLAPSE")
+
+    def test_node_max_pending_is_terminal_only_when_explicitly_observed(self) -> None:
+        snapshots = [
+            {"ts": utc(0), "logicalCapacity": 4, "capacityAtMax": True},
+            {"ts": utc(120), "logicalCapacity": 4, "capacityAtMax": True},
+        ]
+        self.assertIsNone(MODULE.terminal_reason(snapshots, 120))
+        snapshots[0]["nodeMaxPending"] = True
+        snapshots[1]["nodeMaxPending"] = True
+        self.assertEqual(MODULE.terminal_reason(snapshots, 120), "NODE_MAX_PENDING")
 
     def test_coordinator_stops_workload_without_operator_or_aws_actions(self) -> None:
         source = SCRIPT.read_text(encoding="utf-8")
@@ -69,8 +79,8 @@ class CapacityStressCoordinatorTest(unittest.TestCase):
             snapshots = root / "snapshots.jsonl"
             snapshots.write_text(
                 "\n".join([
-                    json.dumps({"ts": utc(0), "logicalCapacityStable": True}),
-                    json.dumps({"ts": utc(120), "logicalCapacityStable": True}),
+                    json.dumps({"ts": utc(0), "maxCapacityReached": True}),
+                    json.dumps({"ts": utc(120), "maxCapacityReached": True}),
                 ])
                 + "\n",
                 encoding="utf-8",

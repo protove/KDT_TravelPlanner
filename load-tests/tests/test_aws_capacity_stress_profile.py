@@ -10,6 +10,7 @@ from pathlib import Path
 ROOT = Path(__file__).parents[2]
 PROFILE = ROOT / "load-tests/aws/profiles/ec2-eks-capacity-stress-v1.0.json"
 PROFILE_V11 = ROOT / "load-tests/aws/profiles/ec2-eks-capacity-stress-v1.1.json"
+EKS_BREAKPOINT_PROFILE = ROOT / "load-tests/aws/profiles/eks-monolith-breakpoint-v1.0.json"
 VALIDATOR_PATH = ROOT / "scripts/loadtest/aws/validate-aws-profile.py"
 SPEC = importlib.util.spec_from_file_location("validate_aws_profile_capacity", VALIDATOR_PATH)
 MODULE = importlib.util.module_from_spec(SPEC)
@@ -68,6 +69,24 @@ class CapacityStressProfileTest(unittest.TestCase):
         self.assertEqual(stress["maxVUs"], 320)
         self.assertEqual(stress["seededUsers"], 320)
         self.assertEqual(profile["sloVersion"], "v1.1-frozen")
+
+    def test_eks_breakpoint_profile_is_monotonic_and_keeps_base_capacity(self) -> None:
+        profile = json.loads(EKS_BREAKPOINT_PROFILE.read_text(encoding="utf-8"))
+        self.assertTrue(MODULE.validate(profile))
+        self.assertEqual(profile["target"]["platform"], "eks")
+        self.assertEqual(profile["eks"]["instanceType"], "t3.small")
+        self.assertEqual(profile["eks"]["nodeGroup"], {"min": 2, "desired": 2, "max": 4})
+        self.assertEqual(profile["eks"]["baseHpa"], {"minReplicas": 2, "maxReplicas": 4})
+        multipliers = profile["capacityStress"]["stageMultipliers"]
+        self.assertGreaterEqual(len(multipliers), 5)
+        self.assertEqual(multipliers, [1, 2, 4, 8, 16])
+        self.assertTrue(profile["capacityStress"]["requiresCompleteSloWindows"])
+
+    def test_eks_breakpoint_rejects_non_monotonic_stage(self) -> None:
+        profile = json.loads(EKS_BREAKPOINT_PROFILE.read_text(encoding="utf-8"))
+        profile["capacityStress"]["stageMultipliers"] = [1, 2, 4, 8, 8]
+        with self.assertRaisesRegex(ValueError, "double monotonically"):
+            MODULE.validate(profile)
 
 
 if __name__ == "__main__":

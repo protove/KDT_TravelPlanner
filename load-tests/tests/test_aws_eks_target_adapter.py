@@ -96,6 +96,47 @@ class EksTargetAdapterTests(unittest.TestCase):
         self.assertEqual(result["nodeCount"], 2)
         self.assertEqual(result["backendPods"]["readyCount"], 2)
 
+    def test_capacity_curve_uses_allocatable_requests_and_renders_n4_plus_one(self) -> None:
+        nodes = {
+            "items": [
+                {"metadata": {"name": "node-a"}, "status": {
+                    "allocatable": {"cpu": "2", "memory": "4Gi", "pods": "20"},
+                    "conditions": [{"type": "Ready", "status": "True"}],
+                }},
+                {"metadata": {"name": "node-b"}, "status": {
+                    "allocatable": {"cpu": "2", "memory": "4Gi", "pods": "20"},
+                    "conditions": [{"type": "Ready", "status": "True"}],
+                }},
+            ]
+        }
+        deployment = {"spec": {"template": {"spec": {"containers": [
+            {"name": "backend", "resources": {"requests": {"cpu": "500m", "memory": "512Mi"}}},
+        ]}}}}
+        curve = MODULE.calculate_capacity_curve(nodes, deployment)
+        self.assertTrue(curve["valid"])
+        self.assertEqual(curve["N1"], 4)
+        self.assertEqual(curve["N2"], 8)
+        self.assertEqual(curve["N4"], 16)
+        patch = MODULE.build_hpa_override(curve)
+        self.assertEqual(patch["spec"]["maxReplicas"], 17)
+
+    def test_pending_backend_pod_is_separate_from_node_scale_out(self) -> None:
+        kubectl = json.loads(json.dumps(self.fixture["kubectl"]))
+        kubectl["pods"]["items"].append({
+            "metadata": {"name": "backend-pending"},
+            "spec": {},
+            "status": {"phase": "Pending", "reason": "FailedScheduling", "conditions": [{"reason": "Insufficient cpu"}]},
+        })
+        evidence = MODULE.build_evidence(
+            node_group=MODULE.resolve_node_group(self.fixture["nodeGroup"], expected_cluster=self.fixture["clusterName"], expected_node_group=self.fixture["nodeGroupName"]),
+            target_health=MODULE.validate_alb_target_health(self.fixture["targetHealth"], target_group_arn=self.fixture["targetGroupArn"]),
+            hpa=kubectl["hpa"], deployment=kubectl["deployment"], pods=kubectl["pods"], nodes=kubectl["nodes"], events=kubectl["events"], asg_activities=self.fixture["asgActivities"],
+        )
+        self.assertEqual(evidence["backendPods"]["pendingCount"], 1)
+        self.assertIn("FailedScheduling", evidence["backendPods"]["pendingReasons"])
+        self.assertFalse(evidence["nodeScaleOut"] if "nodeScaleOut" in evidence else False)
+        self.assertFalse(evidence["maxCapacityReached"])
+
     def test_fixture_has_no_credentials_private_ips_or_live_account_ids(self) -> None:
         text = FIXTURE.read_text(encoding="utf-8")
         self.assertNotIn("password", text.lower())

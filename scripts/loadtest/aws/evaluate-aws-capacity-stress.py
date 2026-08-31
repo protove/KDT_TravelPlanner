@@ -132,10 +132,17 @@ def summary_metrics(summary: dict) -> dict:
     def metric(name: str, key: str, default=None):
         value = metrics.get(name)
         return value.get(key, default) if isinstance(value, dict) else default
+    iterations_rate = metric("iterations", "rate")
+    http_rate = metric("http_reqs", "rate")
     return {
         "p95Ms": metric("http_req_duration", "p(95)"),
         "p99Ms": metric("http_req_duration", "p(99)"),
-        "achievedRps": metric("http_reqs", "rate"),
+        # Arrival-rate stages are measured by completed iterations. HTTP
+        # request rate also includes the multi-request flow and must not be
+        # used as the workload rate when comparing stages.
+        "achievedRps": iterations_rate,
+        "iterationsRate": iterations_rate,
+        "httpRequestRate": http_rate,
         "droppedIterations": metric("dropped_iterations", "count", 0),
         "coreCompleted": metric("core_completed_operations_total", "count", 0),
         "coreSuccessful": metric("core_successful_operations_total", "count", 0),
@@ -162,16 +169,16 @@ def window_duration(snapshots: list[dict], predicate) -> float:
     return longest
 
 
-def derive_slo_breach(item: dict, slo: dict) -> bool:
+def derive_slo_breach(item: dict, slo: dict) -> bool | None:
     if "sloBreached" in item:
-        return bool(item["sloBreached"])
+        return item["sloBreached"] if isinstance(item["sloBreached"], bool) else None
     p95 = number(item.get("p95Ms"))
     success = number(item.get("successRate"))
     unexpected = number(item.get("unexpectedErrorRate"))
     contract = number(item.get("contractFailureRate"))
     dropped = number(item.get("droppedIterations"))
     if p95 is None or success is None or unexpected is None or contract is None or dropped is None:
-        return False
+        return None
     return (
         p95 > float(slo.get("p95Ms", 500))
         or success < float(slo.get("successRate", 0.99))
@@ -179,6 +186,28 @@ def derive_slo_breach(item: dict, slo: dict) -> bool:
         or contract >= float(slo.get("contractFailureRate", 0.01))
         or dropped != 0
     )
+
+
+def complete_slo_window(item: dict, slo: dict) -> bool:
+    """Require a complete, non-empty 60-second SLO window."""
+    if item.get("sloWindow") is not True:
+        return False
+    if item.get("sloWindowComplete") is True:
+        duration = number(item.get("sloWindowSeconds"))
+        return duration is None or duration >= 60
+    if item.get("sloWindowSeconds") == 60:
+        return True
+    values = (item.get("p95Ms"), item.get("successRate"), item.get("unexpectedErrorRate"), item.get("contractFailureRate"), item.get("droppedIterations"))
+    return all(number(value) is not None for value in values)
+
+
+def first_timestamp(snapshots: list[dict], predicate) -> str | None:
+    for item in snapshots:
+        if predicate(item):
+            value = item.get("ts") or item.get("timestamp")
+            if isinstance(value, str):
+                return value
+    return None
 
 
 def evaluate(args: argparse.Namespace) -> dict:
@@ -225,13 +254,24 @@ def evaluate(args: argparse.Namespace) -> dict:
 
     capacity_stable = window_duration(
         snapshots,
-        lambda item: bool(item.get("logicalCapacityStable"))
-        or (bool(item.get("capacityHealthy")) and (number(item.get("logicalCapacity")) or 0) >= 4),
+        lambda item: item.get("logicalCapacityStable") is True,
     ) >= args.capacity_stability_seconds
     data_saturated = window_duration(snapshots, lambda item: bool(item.get("dataTierSaturated"))) >= args.capacity_stability_seconds
-    slo_window_count = sum(1 for item in snapshots if item.get("sloWindow") and derive_slo_breach(item, slo))
+    requires_complete_slo = bool(metadata.get("effectiveInputs", {}).get("requiresCompleteSloWindows"))
+    complete_windows = [item for item in snapshots if complete_slo_window(item, slo)]
+    slo_breaches = [derive_slo_breach(item, slo) for item in complete_windows]
+    slo_window_count = sum(1 for breach in slo_breaches if breach is True)
+    window_by_id = {id(item): breach for item, breach in zip(complete_windows, slo_breaches)}
+    stable_snapshots = [item for item in snapshots if window_by_id.get(id(item)) is False]
+    failed_snapshots = [
+        item for item in snapshots
+        if window_by_id.get(id(item)) is True or item.get("requiredObservationsValid", True) is False
+    ]
     terminal = controller.get("terminalReason")
     valid_metric_window = bool(snapshots) and all(timestamp(item.get("ts") or item.get("timestamp")) is not None for item in snapshots)
+    valid_metric_window = valid_metric_window and all(item.get("requiredObservationsValid", True) is not False for item in snapshots)
+    if requires_complete_slo and not complete_windows:
+        valid_metric_window = False
     validity = "VALID"
     invalid_reason = None
     if runner_invalid:
@@ -240,13 +280,15 @@ def evaluate(args: argparse.Namespace) -> dict:
     elif not valid_metric_window:
         validity = "INVALID_METRIC_WINDOW"
         invalid_reason = "No complete sanitized observer snapshot window"
-    elif terminal not in {"MAX_CAPACITY_REACHED", "SLO_COLLAPSE", "DATA_TIER_SATURATION", "HARD_CEILING"}:
+    elif terminal not in {"MAX_CAPACITY_REACHED", "NODE_MAX_PENDING", "SLO_COLLAPSE", "DATA_TIER_SATURATION", "PROFILE_COMPLETE", "HARD_CEILING"}:
         validity = "INVALID_TERMINAL_REASON"
         invalid_reason = "Controller did not record a preregistered terminal reason"
 
     if validity == "VALID":
-        if terminal == "MAX_CAPACITY_REACHED" or capacity_stable:
+        if terminal == "MAX_CAPACITY_REACHED" or any(item.get("maxCapacityReached") is True for item in snapshots):
             bottleneck = "max-capacity"
+        elif terminal == "NODE_MAX_PENDING" or any(item.get("nodeMaxPending") is True for item in snapshots):
+            bottleneck = "node-max-pending"
         elif terminal == "DATA_TIER_SATURATION" or data_saturated:
             bottleneck = "data-tier"
         elif terminal == "SLO_COLLAPSE" or slo_window_count >= 2:
@@ -279,10 +321,22 @@ def evaluate(args: argparse.Namespace) -> dict:
             "invalid": runner_invalid,
         },
         "stageCurve": stage_rows,
+        "scaleOut": {
+            "podScaleOut": any(item.get("podScaleOut") is True for item in snapshots),
+            "nodeScaleOut": any(item.get("nodeScaleOut") is True for item in snapshots),
+            "podScaleOutAt": first_timestamp(snapshots, lambda item: item.get("podScaleOut") is True),
+            "nodeScaleOutAt": first_timestamp(snapshots, lambda item: item.get("nodeScaleOut") is True),
+            "nodeMaxPendingAt": first_timestamp(snapshots, lambda item: item.get("nodeMaxPending") is True),
+        },
+        "stability": {
+            "lastStableAt": (stable_snapshots[-1].get("ts") if stable_snapshots else None),
+            "firstFailureAt": (failed_snapshots[0].get("ts") if failed_snapshots else None),
+        },
         "snapshotWindow": {
             "samples": len(snapshots),
+            "completeSloWindows": len(complete_windows),
             "sloBreachedWindows": slo_window_count,
-            "capacityStableSeconds": round(window_duration(snapshots, lambda item: bool(item.get("logicalCapacityStable")) or (bool(item.get("capacityHealthy")) and (number(item.get("logicalCapacity")) or 0) >= 4)), 3),
+            "capacityStableSeconds": round(window_duration(snapshots, lambda item: item.get("logicalCapacityStable") is True), 3),
             "dataSaturatedSeconds": round(window_duration(snapshots, lambda item: bool(item.get("dataTierSaturated"))), 3),
             "scaleInCensored": not any(bool(item.get("scaleInStable")) for item in snapshots),
         },

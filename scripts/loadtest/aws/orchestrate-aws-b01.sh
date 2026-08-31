@@ -94,8 +94,8 @@ SOAK_PREALLOCATED_VUS="${SOAK_PREALLOCATED_VUS:-}"
 SOAK_MAX_VUS="${SOAK_MAX_VUS:-}"
 SCALE_STEP_PREALLOCATED_VUS="${SCALE_STEP_PREALLOCATED_VUS:-}"
 SCALE_STEP_MAX_VUS="${SCALE_STEP_MAX_VUS:-}"
-CAPACITY_STRESS_PREALLOCATED_VUS="${CAPACITY_STRESS_PREALLOCATED_VUS:-100}"
-CAPACITY_STRESS_MAX_VUS="${CAPACITY_STRESS_MAX_VUS:-320}"
+CAPACITY_STRESS_PREALLOCATED_VUS="${CAPACITY_STRESS_PREALLOCATED_VUS:-}"
+CAPACITY_STRESS_MAX_VUS="${CAPACITY_STRESS_MAX_VUS:-}"
 
 usage() {
   cat <<'USAGE'
@@ -728,6 +728,21 @@ EOF
       --alb-summary-json "$validation_dir/alb-summary.json" \
       --asg-activities-json "$EVIDENCE_ROOT/aws/asg-activities.json" \
       > "$EVIDENCE_ROOT/aws/eks-evidence.json"
+    # Render the disposable N4+1 HPA patch from the observed allocatable /
+    # request curve. It is evidence and a future SCRUM-80 input only; this
+    # orchestrator never applies it to the canonical dev-eks workload.
+    python3 - "$EVIDENCE_ROOT/aws/eks-evidence.json" "$validation_dir/capacity-curve.json" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+evidence_path, curve_path = map(Path, sys.argv[1:])
+evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+curve_path.write_text(json.dumps(evidence.get("capacityCurve", {}), indent=2) + "\n", encoding="utf-8")
+PY
+    python3 "$adapter" render-hpa-override --cluster-name "$EKS_CLUSTER_NAME" \
+      --capacity-curve-json "$validation_dir/capacity-curve.json" \
+      --output "$EVIDENCE_ROOT/aws/eks-hpa-node-scale-override.yaml" >/dev/null
   fi
 
   python3 - "$EVIDENCE_ROOT/aws/resource-dimensions.json" "$ALB_ARN" "$target_group_arn" "$asg_name" "$DB_INSTANCE_IDENTIFIER" "$CACHE_CLUSTER_ID" "$EKS_CLUSTER_NAME" "$EKS_NODE_GROUP_NAME" <<'PY'
@@ -1017,6 +1032,93 @@ print(f"[b01] credential capacity verified: phase={phase} users={users} maxVUs={
 PY
 }
 
+capacity_stress_schedule_seconds() {
+  python3 - "$PROFILE" <<'PY'
+import json
+import re
+import sys
+from pathlib import Path
+
+profile = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+durations = (profile.get("capacityStress") or {}).get("stageDurations") or []
+total = 0
+for raw in durations:
+    match = re.fullmatch(r"([1-9][0-9]*)([smh])", str(raw))
+    if not match:
+        raise SystemExit("capacityStress.stageDurations must use whole s/m/h values")
+    total += int(match.group(1)) * {"s": 1, "m": 60, "h": 3600}[match.group(2)]
+if total < 1:
+    raise SystemExit("capacityStress.stageDurations must contain at least one duration")
+print(total)
+PY
+}
+
+capacity_stress_stage() {
+  local capacity_run_dir="$EVIDENCE_ROOT/k6/capacity-stress"
+  local snapshot_file="$capacity_run_dir/snapshots.jsonl"
+  local schedule_seconds hard_ceiling_seconds
+  schedule_seconds="$(capacity_stress_schedule_seconds)"
+  hard_ceiling_seconds="$(python3 - "$PROFILE" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+profile = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+value = (profile.get("capacityStress") or {}).get("hardTimeCeilingSeconds")
+if not isinstance(value, int) or value <= 0:
+    raise SystemExit("capacityStress.hardTimeCeilingSeconds must be a positive integer")
+print(value)
+PY
+)"
+  if [[ "$DRY_RUN" == "1" ]]; then
+    echo "[dry-run] observer + coordinator + evaluator for EKS capacity-stress (schedule=${schedule_seconds}s ceiling=${hard_ceiling_seconds}s)" >&2
+    echo "[dry-run] run-aws-b01.sh capacity-stress" >&2
+    return 0
+  fi
+  mkdir -p "$capacity_run_dir"
+  local observer_pid=""
+  local observer_status=0
+  local coordinator_status=0
+  local evaluator_status=0
+  python3 "$REPOSITORY_ROOT/scripts/loadtest/aws/observe-aws-capacity-stress.py" \
+    --run-dir "$capacity_run_dir" --metadata-file "$capacity_run_dir/metadata.json" \
+    --platform eks --region "$REGION" --cluster-name "$EKS_CLUSTER_NAME" \
+    --node-group-name "$EKS_NODE_GROUP_NAME" \
+    --eks-evidence-file "$EVIDENCE_ROOT/aws/eks-evidence.json" \
+    --runner-stats-file "$capacity_run_dir/runner-stats.jsonl" \
+    --slo-window-file "$capacity_run_dir/slo-windows.jsonl" \
+    --snapshot-file "$snapshot_file" --poll-seconds "${CAPACITY_OBSERVER_POLL_SECONDS:-10}" \
+    > "$capacity_run_dir/observer.log" 2>&1 &
+  observer_pid=$!
+  set +e
+  python3 "$REPOSITORY_ROOT/scripts/loadtest/aws/coordinate-aws-capacity-stress.py" \
+    --run-dir "$capacity_run_dir" --snapshot-file "$snapshot_file" \
+    --complete-schedule-seconds "$schedule_seconds" \
+    --hard-time-ceiling-seconds "$hard_ceiling_seconds" \
+    --capacity-stability-seconds "${CAPACITY_STABILITY_SECONDS:-120}" \
+    --poll-seconds "${CAPACITY_COORDINATOR_POLL_SECONDS:-10}" -- \
+    "$REPOSITORY_ROOT/scripts/loadtest/aws/run-aws-b01.sh" capacity-stress
+  coordinator_status=$?
+  if kill -0 "$observer_pid" 2>/dev/null; then
+    kill "$observer_pid" 2>/dev/null || true
+  fi
+  wait "$observer_pid" 2>/dev/null
+  observer_status=$?
+  if [[ -f "$capacity_run_dir/summary.json" ]]; then
+    python3 "$REPOSITORY_ROOT/scripts/loadtest/aws/evaluate-aws-capacity-stress.py" \
+      --run-dir "$capacity_run_dir" --slo-contract "$SLO_CONTRACT" \
+      --capacity-stability-seconds "${CAPACITY_STABILITY_SECONDS:-120}"
+    evaluator_status=$?
+  else
+    echo "[b01] capacity-stress evaluator skipped: summary.json is missing" >&2
+    evaluator_status=2
+  fi
+  set -e
+  if [[ "$coordinator_status" -ne 0 ]]; then return "$coordinator_status"; fi
+  if [[ "$observer_status" -ne 0 ]]; then return "$observer_status"; fi
+  return "$evaluator_status"
+}
+
 k6_phase_stage() {
   local phase="$1"
   local baseline_rep="${2:-}"
@@ -1027,6 +1129,10 @@ k6_phase_stage() {
   fi
   if [[ "$DRY_RUN" == "1" ]]; then
     echo "[dry-run] refresh credentials before $phase" >&2
+    if [[ "$phase" == "capacity-stress" && "$TARGET_PLATFORM" == "eks" ]]; then
+      capacity_stress_stage
+      return 0
+    fi
     echo "[dry-run] run-aws-b01.sh $phase (RUN_ID=$RUN_ID rate=${CONFIRMED_RATE:-<profile>})" >&2
     return 0
   fi
@@ -1055,6 +1161,8 @@ k6_phase_stage() {
         "$REPOSITORY_ROOT/scripts/loadtest/aws/run-aws-b01.sh" baseline "$rep"
       done
     fi
+  elif [[ "$phase" == "capacity-stress" && "$TARGET_PLATFORM" == "eks" ]]; then
+    capacity_stress_stage
   else
     "$REPOSITORY_ROOT/scripts/loadtest/aws/run-aws-b01.sh" "$phase"
   fi

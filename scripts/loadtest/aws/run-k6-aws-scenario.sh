@@ -79,6 +79,11 @@ PY
   done
 fi
 
+if [[ ! -f "$AWS_PROFILE_FILE" ]]; then
+  echo "missing AWS profile file: $AWS_PROFILE_FILE" >&2
+  exit 2
+fi
+PROFILE_VERSION="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("profileVersion", ""))' "$AWS_PROFILE_FILE")"
 case "$SCENARIO" in
   smoke) SCENARIO_FILE="smoke.js" ;;
   ramp) SCENARIO_FILE="b01-ramp.js" ;;
@@ -86,7 +91,13 @@ case "$SCENARIO" in
   spike) SCENARIO_FILE="b01-spike.js" ;;
   soak) SCENARIO_FILE="soak.js" ;;
   scale-step) SCENARIO_FILE="scale-step.js" ;;
-  capacity-stress) SCENARIO_FILE="capacity-stress.js" ;;
+  capacity-stress)
+    if [[ "$TARGET_PLATFORM" == "eks" || "$PROFILE_VERSION" == "aws-eks-monolith-breakpoint-v1.0" ]]; then
+      SCENARIO_FILE="eks-scale-capacity.js"
+    else
+      SCENARIO_FILE="capacity-stress.js"
+    fi
+    ;;
   *) SCENARIO_FILE="" ;;
 esac
 if [[ -z "$SCENARIO_FILE" ]]; then
@@ -95,10 +106,6 @@ if [[ -z "$SCENARIO_FILE" ]]; then
 fi
 if [[ "$K6_IMAGE_DIGEST" != *@sha256:* ]]; then
   echo "K6_IMAGE_DIGEST must include a digest: $K6_IMAGE_DIGEST" >&2
-  exit 2
-fi
-if [[ ! -f "$AWS_PROFILE_FILE" ]]; then
-  echo "missing AWS profile file: $AWS_PROFILE_FILE" >&2
   exit 2
 fi
 if [[ ! -f "$AWS_SLO_CONTRACT_FILE" ]]; then
@@ -209,11 +216,17 @@ elif scenario == "capacity-stress":
         "maxVUs": int(os.environ.get("MAX_VUS") or stress.get("maxVUs")),
         "preAllocatedVUs": int(os.environ.get("PREALLOCATED_VUS") or stress.get("preAllocatedVUs")),
         "terminalConditions": [
+            "NODE_MAX_PENDING",
             "MAX_CAPACITY_REACHED",
             "SLO_COLLAPSE",
             "DATA_TIER_SATURATION",
+            "PROFILE_COMPLETE",
             "HARD_CEILING",
         ],
+        "requiresCompleteSloWindows": stress.get("requiresCompleteSloWindows", False),
+        "capacityModel": profile.get("eks", {}).get("capacityMethod"),
+        "nodeGroupContract": profile.get("eks", {}).get("nodeGroup"),
+        "baseHpaContract": profile.get("eks", {}).get("baseHpa"),
     })
 Path(output).write_text(json.dumps({
     "runId": run_id,

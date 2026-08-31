@@ -35,6 +35,7 @@ CAPACITY_STRESS_PROFILE_VERSIONS = {
     "aws-ec2-eks-capacity-stress-v1.0",
     "aws-ec2-eks-capacity-stress-v1.1",
 }
+EKS_BREAKPOINT_PROFILE_VERSION = "aws-eks-monolith-breakpoint-v1.0"
 
 
 def load_profile(path):
@@ -110,6 +111,8 @@ def validate(profile):
         _validate_mix_sums_to_100(request_mix["soak"], "requestMix.soak")
     if profile.get("profileVersion") in CAPACITY_STRESS_PROFILE_VERSIONS:
         _validate_capacity_stress(profile)
+    if profile.get("profileVersion") == EKS_BREAKPOINT_PROFILE_VERSION:
+        _validate_eks_breakpoint(profile)
 
     return True
 
@@ -226,6 +229,66 @@ def _validate_capacity_stress(profile):
         "scenarios.capacity-stress.preAllocatedVUs does not match capacityStress",
     )
     _require("normal" in profile.get("requestMix", {}), "requestMix.normal is missing for capacity stress")
+    _validate_mix_sums_to_100(profile["requestMix"]["normal"], "requestMix.normal")
+
+
+def _validate_eks_breakpoint(profile):
+    """Validate the EKS-only breakpoint contract without changing the base
+    2/2/4 node group or 2-4 HPA.  The final stage is a bounded observation
+    ceiling; it is not a claim that the platform's maximum capacity was found.
+    """
+    target = profile.get("target") or {}
+    _require(target.get("platform") == "eks", "EKS breakpoint target.platform must be eks")
+    eks = profile.get("eks")
+    _require(isinstance(eks, dict), "eks settings are missing")
+    _require(eks.get("instanceType") == "t3.small", "EKS breakpoint must use t3.small nodes")
+    _require(eks.get("nodeGroup") == {"min": 2, "desired": 2, "max": 4}, "EKS node group must remain 2/2/4")
+    _require(eks.get("baseHpa") == {"minReplicas": 2, "maxReplicas": 4}, "base HPA must remain 2-4")
+    stress = profile.get("capacityStress")
+    _require(isinstance(stress, dict), "capacityStress is missing")
+    multipliers = stress.get("stageMultipliers")
+    durations = stress.get("stageDurations")
+    _require(
+        isinstance(multipliers, list) and len(multipliers) >= 5 and multipliers[0] == 1,
+        "EKS breakpoint needs at least five stages starting at 1x",
+    )
+    _require(
+        all(isinstance(value, int) and value > 0 for value in multipliers),
+        "EKS breakpoint stage multipliers must be positive integers",
+    )
+    _require(
+        all(current == previous * 2 for previous, current in zip(multipliers, multipliers[1:])),
+        "EKS breakpoint stage multipliers must double monotonically",
+    )
+    _require(isinstance(durations, list) and len(durations) == len(multipliers), "EKS breakpoint durations must match multipliers")
+    for duration in durations:
+        _require(
+            isinstance(duration, str) and re.fullmatch(r"[1-9][0-9]*[smh]", duration),
+            f"invalid EKS breakpoint duration: {duration}",
+        )
+    for name in (
+        "stageGraceSeconds",
+        "capacityStabilitySeconds",
+        "hardTimeCeilingSeconds",
+        "preAllocatedVUs",
+        "maxVUs",
+        "seededUsers",
+        "runnerRepairLimit",
+    ):
+        value = stress.get(name)
+        _require(isinstance(value, int) and value > 0, f"capacityStress.{name} must be a positive integer")
+    _require(stress["maxVUs"] == profile["limits"]["maxVUs"], "EKS breakpoint maxVUs must equal limits.maxVUs")
+    _require(stress["preAllocatedVUs"] <= stress["maxVUs"], "EKS breakpoint preAllocatedVUs exceeds maxVUs")
+    _require(stress["seededUsers"] >= stress["maxVUs"], "EKS breakpoint seededUsers must cover maxVUs")
+    _require(stress["runnerRepairLimit"] == 1, "capacityStress.runnerRepairLimit must be exactly one")
+    _require(stress.get("requiresCompleteSloWindows") is True, "EKS breakpoint must require complete SLO windows")
+    scenario = profile.get("scenarios", {}).get("capacity-stress")
+    _require(isinstance(scenario, dict), "scenarios.capacity-stress is missing")
+    _require(scenario.get("stageMultipliers") == multipliers, "EKS breakpoint scenario multipliers do not match capacityStress")
+    _require(scenario.get("stageDurations") == durations, "EKS breakpoint scenario durations do not match capacityStress")
+    _require(scenario.get("maxVUs") == stress["maxVUs"], "EKS breakpoint scenario maxVUs does not match capacityStress")
+    _require(scenario.get("preAllocatedVUs") == stress["preAllocatedVUs"], "EKS breakpoint scenario preAllocatedVUs does not match capacityStress")
+    _require("normal" in profile.get("requestMix", {}), "requestMix.normal is missing for EKS breakpoint")
     _validate_mix_sums_to_100(profile["requestMix"]["normal"], "requestMix.normal")
 
 

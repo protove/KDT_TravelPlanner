@@ -155,6 +155,22 @@ class AwsOrchestrationContractTests(unittest.TestCase):
         self.assertNotIn("describe-auto-scaling-instances", eks_source)
         self.assertIn("EKS ALB targets Pod IPs", eks_source)
 
+    def test_eks_capacity_path_wires_observer_coordinator_and_evaluator(self) -> None:
+        source = SCRIPT.read_text(encoding="utf-8")
+        self.assertIn("capacity_stress_stage()", source)
+        self.assertIn("observe-aws-capacity-stress.py", source)
+        self.assertIn("coordinate-aws-capacity-stress.py", source)
+        self.assertIn("evaluate-aws-capacity-stress.py", source)
+        self.assertIn("--eks-evidence-file", source)
+        self.assertIn('phase" == "capacity-stress" && "$TARGET_PLATFORM" == "eks"', source)
+
+    def test_eks_breakpoint_profile_is_referenced_by_the_runner_contract(self) -> None:
+        profile = REPOSITORY_ROOT / "load-tests/aws/profiles/eks-monolith-breakpoint-v1.0.json"
+        self.assertTrue(profile.is_file())
+        runner_source = AWS_K6_RUNNER.read_text(encoding="utf-8")
+        self.assertIn("aws-eks-monolith-breakpoint-v1.0", runner_source)
+        self.assertIn("eks-scale-capacity.js", runner_source)
+
     def test_shared_k6_profile_gets_action_time_platform_environment(self) -> None:
         runner_source = AWS_PHASE_RUNNER.parent.joinpath("run-k6-aws-scenario.sh").read_text(encoding="utf-8")
         config_source = (K6_ROOT / "aws/config.js").read_text(encoding="utf-8")

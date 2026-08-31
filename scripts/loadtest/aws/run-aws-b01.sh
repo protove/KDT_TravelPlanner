@@ -176,8 +176,32 @@ PY
   capacity-stress)
     : "${CONFIRMED_RATE:?CONFIRMED_RATE is required for capacity-stress (frozen normal rate)}"
     export RATE="$CONFIRMED_RATE"
-    export PREALLOCATED_VUS="${CAPACITY_STRESS_PREALLOCATED_VUS:-100}"
-    configure_phase_max_vus capacity-stress "${CAPACITY_STRESS_MAX_VUS:-320}"
+    capacity_profile_preallocated_vus="$(python3 - "$AWS_PROFILE_FILE" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+profile = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+value = profile.get("scenarios", {}).get("capacity-stress", {}).get("preAllocatedVUs")
+if not isinstance(value, int) or value < 1:
+    raise SystemExit("profile.scenarios.capacity-stress.preAllocatedVUs must be a positive integer")
+print(value)
+PY
+)"
+    export PREALLOCATED_VUS="${CAPACITY_STRESS_PREALLOCATED_VUS:-$capacity_profile_preallocated_vus}"
+    capacity_profile_max_vus="$(python3 - "$AWS_PROFILE_FILE" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+profile = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+value = profile.get("scenarios", {}).get("capacity-stress", {}).get("maxVUs")
+if not isinstance(value, int) or value < 1:
+    raise SystemExit("profile.scenarios.capacity-stress.maxVUs must be a positive integer")
+print(value)
+PY
+)"
+    configure_phase_max_vus capacity-stress "${CAPACITY_STRESS_MAX_VUS:-$capacity_profile_max_vus}"
     ALLOW_K6_FAILURE=1 "$REPOSITORY_ROOT/scripts/loadtest/aws/run-k6-aws-scenario.sh" capacity-stress "$run_dir"
     ;;
 esac

@@ -44,7 +44,8 @@ class CapacityStressEvaluatorTest(unittest.TestCase):
         write_json(root / "summary.json", {
             "metrics": {
                 "http_req_duration": {"p(95)": 210, "p(99)": 310},
-                "http_reqs": {"rate": 128},
+                "http_reqs": {"rate": 512},
+                "iterations": {"rate": 128},
                 "dropped_iterations": {"count": 0},
                 "core_completed_operations_total": {"count": 1000},
                 "core_successful_operations_total": {"count": 1000},
@@ -131,6 +132,42 @@ class CapacityStressEvaluatorTest(unittest.TestCase):
             self.assertEqual(result["validity"], "VALID")
             self.assertEqual(result["stageCurve"][0]["observedSamples"], 3)
             self.assertEqual(result["stageCurve"][1]["observedSamples"], 0)
+
+    def test_iterations_rate_is_used_for_stage_curve_not_http_request_rate(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.fixture(root)
+            result = MODULE.evaluate(self.args(root))
+            self.assertEqual(result["metrics"]["achievedRps"], 128)
+            self.assertEqual(result["metrics"]["httpRequestRate"], 512)
+
+    def test_node_count_four_alone_does_not_prove_max_capacity(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.fixture(root)
+            controller = json.loads((root / "controller-result.json").read_text(encoding="utf-8"))
+            controller["terminalReason"] = "PROFILE_COMPLETE"
+            write_json(root / "controller-result.json", controller)
+            snapshots = [json.loads(line) for line in (root / "snapshots.jsonl").read_text().splitlines()]
+            for item in snapshots:
+                item["logicalCapacity"] = 4
+                item["capacityHealthy"] = True
+                item["maxCapacityReached"] = False
+            (root / "snapshots.jsonl").write_text("\n".join(json.dumps(item) for item in snapshots) + "\n", encoding="utf-8")
+            result = MODULE.evaluate(self.args(root))
+            self.assertEqual(result["validity"], "VALID")
+            self.assertEqual(result["bottleneckClass"], "ceiling-without-saturation")
+
+    def test_required_complete_slo_window_is_fail_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.fixture(root)
+            metadata = json.loads((root / "metadata.json").read_text(encoding="utf-8"))
+            metadata["profileVersion"] = "aws-eks-monolith-breakpoint-v1.0"
+            metadata["effectiveInputs"]["requiresCompleteSloWindows"] = True
+            write_json(root / "metadata.json", metadata)
+            result = MODULE.evaluate(self.args(root))
+            self.assertEqual(result["validity"], "INVALID_METRIC_WINDOW")
 
 
 if __name__ == "__main__":

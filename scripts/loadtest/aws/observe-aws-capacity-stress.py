@@ -151,6 +151,32 @@ def last_jsonl(path: Path | None) -> dict[str, Any]:
     return {}
 
 
+def _optional_bool(payload: Mapping[str, Any], key: str) -> bool | None:
+    value = payload.get(key)
+    return value if isinstance(value, bool) else None
+
+
+def _first_transition(previous: Mapping[str, Any], current: Mapping[str, Any], key: str, now: str) -> str | None:
+    """Return a transition timestamp only when a state changed from false."""
+    if current.get(key) is True and previous.get(key) is not True:
+        return now
+    previous_value = previous.get(f"{key}At")
+    return previous_value if isinstance(previous_value, str) else None
+
+
+def required_eks_observations(evidence: Mapping[str, Any]) -> dict[str, Any]:
+    """Classify the EKS evidence dimensions without coercing missing data."""
+    required = {
+        "hpa": isinstance(evidence.get("hpa"), Mapping),
+        "deployment": isinstance(evidence.get("deployment"), Mapping),
+        "backendPods": isinstance(evidence.get("backendPods"), Mapping),
+        "nodes": isinstance(evidence.get("nodeCount"), int) and isinstance(evidence.get("nodeReadyCount"), int),
+        "pendingReasons": isinstance((evidence.get("backendPods") or {}).get("pendingReasons"), list) if isinstance(evidence.get("backendPods"), Mapping) else False,
+        "alb": isinstance(evidence.get("alb"), Mapping),
+    }
+    return {"status": "complete" if all(required.values()) else "missing", "required": required}
+
+
 def ec2_capacity(payload: Mapping[str, Any]) -> tuple[int, bool, dict[str, Any]]:
     groups = payload.get("AutoScalingGroups")
     if not isinstance(groups, list) or len(groups) != 1 or not isinstance(groups[0], Mapping):
@@ -218,6 +244,8 @@ def collect_snapshot(args: argparse.Namespace, aws: AwsReadOnly) -> dict[str, An
     if fixture:
         fixture["ts"] = iso(now)
         fixture.setdefault("sources", ["sample-json"])
+        fixture.setdefault("observationErrors", [])
+        fixture.setdefault("requiredObservationStatus", {"status": "fixture"})
         return fixture
     if args.platform == "ec2":
         capacity_payload = aws.call("autoscaling", "describe-auto-scaling-groups", ["--auto-scaling-group-names", args.asg_name])
@@ -275,13 +303,41 @@ def collect_snapshot(args: argparse.Namespace, aws: AwsReadOnly) -> dict[str, An
     if metadata_path is None and getattr(args, "run_dir", None) is not None:
         metadata_path = args.run_dir / "metadata.json"
     metadata = read_optional(metadata_path)
+    previous_path = getattr(args, "snapshot_file", None)
+    if previous_path is None and getattr(args, "run_dir", None) is not None:
+        previous_path = args.run_dir / "snapshots.jsonl"
+    previous = last_jsonl(previous_path)
+    platform_evidence = read_optional(getattr(args, "eks_evidence_file", None)) if args.platform == "eks" else {}
+    backend_pods = platform_evidence.get("backendPods") if isinstance(platform_evidence.get("backendPods"), Mapping) else {}
+    hpa_evidence = platform_evidence.get("hpa") if isinstance(platform_evidence.get("hpa"), Mapping) else {}
+    deployment_evidence = platform_evidence.get("deployment") if isinstance(platform_evidence.get("deployment"), Mapping) else {}
+    evidence_node_count = platform_evidence.get("nodeCount") if isinstance(platform_evidence.get("nodeCount"), int) else None
+    evidence_ready_nodes = platform_evidence.get("nodeReadyCount") if isinstance(platform_evidence.get("nodeReadyCount"), int) else None
+    current_pods = backend_pods.get("count") if isinstance(backend_pods.get("count"), int) else None
+    current_nodes = evidence_node_count
+    baseline_pods = previous.get("initialBackendPodCount") if isinstance(previous.get("initialBackendPodCount"), int) else current_pods
+    baseline_nodes = previous.get("initialNodeCount") if isinstance(previous.get("initialNodeCount"), int) else current_nodes
+    pod_scale_out = current_pods is not None and baseline_pods is not None and current_pods > baseline_pods
+    node_scale_out = current_nodes is not None and baseline_nodes is not None and current_nodes > baseline_nodes
+    required_observations = required_eks_observations(platform_evidence) if args.platform == "eks" else {"status": "not-applicable"}
+    slo_window_present = "sloWindow" in slo
+    slo_window_complete = slo.get("sloWindowComplete") if isinstance(slo.get("sloWindowComplete"), bool) else None
+    data_tier_saturated = _optional_bool(slo, "dataTierSaturated")
+    logical_capacity_stable = _optional_bool(slo, "logicalCapacityStable")
+    scale_in_stable = _optional_bool(slo, "scaleInStable")
+    node_max_pending = platform_evidence.get("nodeMaxPending") if isinstance(platform_evidence.get("nodeMaxPending"), bool) else None
+    max_capacity_reached = platform_evidence.get("maxCapacityReached") if isinstance(platform_evidence.get("maxCapacityReached"), bool) else None
+    if max_capacity_reached is None and isinstance(node_max_pending, bool):
+        max_capacity_reached = node_max_pending and isinstance(capacity.get("max"), int) and logical_capacity >= capacity["max"]
     snapshot = {
         "ts": iso(now),
         "platform": args.platform,
         "logicalCapacity": logical_capacity,
         "capacityHealthy": capacity_healthy,
-        "logicalCapacityStable": bool(capacity_healthy and logical_capacity >= 4),
-        "scaleInStable": bool(slo.get("scaleInStable", False)),
+        "logicalCapacityStable": logical_capacity_stable,
+        "capacityAtMax": logical_capacity == capacity.get("max") if isinstance(capacity.get("max"), int) else None,
+        "maxCapacityReached": max_capacity_reached,
+        "scaleInStable": scale_in_stable,
         "capacity": capacity,
         "backendCpuPercent": slo.get("backendCpuPercent", cloudwatch.get("backendCpuPercent")),
         "runnerCpuPercent": docker.get("CPUPerc"),
@@ -302,10 +358,26 @@ def collect_snapshot(args: argparse.Namespace, aws: AwsReadOnly) -> dict[str, An
             key: value for key, value in cloudwatch.items()
             if key.startswith("rds") or key.startswith("redis")
         },
-        "dataTierSaturated": bool(slo.get("dataTierSaturated", False)),
-        "sloWindow": bool(slo.get("sloWindow", False)),
-        "sloBreached": bool(slo.get("sloBreached", False)),
-        "runnerVusExhausted": bool(slo.get("runnerVusExhausted", False)),
+        "dataTierSaturated": data_tier_saturated,
+        "sloWindow": slo.get("sloWindow") if slo_window_present else None,
+        "sloWindowComplete": slo_window_complete,
+        "sloWindowSeconds": slo.get("sloWindowSeconds"),
+        "sloBreached": slo.get("sloBreached") if isinstance(slo.get("sloBreached"), bool) else None,
+        "runnerVusExhausted": _optional_bool(slo, "runnerVusExhausted"),
+        "backendPods": backend_pods if args.platform == "eks" else None,
+        "hpa": hpa_evidence if args.platform == "eks" else None,
+        "deployment": deployment_evidence if args.platform == "eks" else None,
+        "pendingReasons": backend_pods.get("pendingReasons") if args.platform == "eks" else None,
+        "readyNodeCount": evidence_ready_nodes if args.platform == "eks" else None,
+        "nodeSchedulingPressure": platform_evidence.get("nodeSchedulingPressure") if args.platform == "eks" else None,
+        "requiredObservationStatus": required_observations,
+        "requiredObservationsValid": required_observations.get("status") in {"complete", "not-applicable"},
+        "podScaleOut": pod_scale_out if current_pods is not None and baseline_pods is not None else None,
+        "nodeScaleOut": node_scale_out if current_nodes is not None and baseline_nodes is not None else None,
+        "podScaleOutAt": _first_transition(previous, {"podScaleOut": pod_scale_out, "podScaleOutAt": previous.get("podScaleOutAt")}, "podScaleOut", iso(now)),
+        "nodeScaleOutAt": _first_transition(previous, {"nodeScaleOut": node_scale_out, "nodeScaleOutAt": previous.get("nodeScaleOutAt")}, "nodeScaleOut", iso(now)),
+        "initialBackendPodCount": baseline_pods,
+        "initialNodeCount": baseline_nodes,
         "observationErrors": sorted(set(observation_errors)),
         "sources": [
             "autoscaling" if args.platform == "ec2" else "eks",
@@ -338,6 +410,12 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--runner-stats-file", type=Path, default=None)
     parser.add_argument("--slo-window-file", type=Path, default=None)
+    parser.add_argument(
+        "--eks-evidence-file",
+        type=Path,
+        default=None,
+        help="Optional sanitized adapter evidence refreshed by the read-only EKS observer path.",
+    )
     parser.add_argument("--sample-json", type=Path, default=None)
     parser.add_argument("--snapshot-file", type=Path, default=None)
     parser.add_argument("--poll-seconds", type=float, default=10.0)

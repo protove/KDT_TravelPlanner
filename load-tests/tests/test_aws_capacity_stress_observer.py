@@ -115,6 +115,52 @@ class ObserverContractTests(unittest.TestCase):
         self.assertEqual(late["stageMultiplier"], 8)
         self.assertEqual(late["targetRate"], 128.0)
 
+    def test_eks_required_observations_fail_closed_when_pending_or_node_state_is_missing(self):
+        complete = {
+            "hpa": {},
+            "deployment": {},
+            "backendPods": {"pendingReasons": []},
+            "nodeCount": 2,
+            "nodeReadyCount": 2,
+            "alb": {"healthyTargetCount": 2},
+        }
+        self.assertEqual(MODULE.required_eks_observations(complete)["status"], "complete")
+        incomplete = dict(complete)
+        incomplete.pop("alb")
+        self.assertEqual(MODULE.required_eks_observations(incomplete)["status"], "missing")
+
+    def test_eks_sample_preserves_pod_and_node_scale_dimensions(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            fixture = root / "fixture.json"
+            fixture.write_text(json.dumps({
+                "platform": "eks",
+                "logicalCapacity": 4,
+                "nodeScaleOut": True,
+                "podScaleOut": True,
+                "nodeMaxPending": True,
+                "maxCapacityReached": False,
+                "requiredObservationsValid": True,
+            }), encoding="utf-8")
+            args = argparse.Namespace(
+                sample_json=fixture,
+                platform="eks",
+                asg_name="",
+                cluster_name="",
+                node_group_name="",
+                rds_instance_id="",
+                redis_cluster_id="",
+                t3_instance_ids=[],
+                runner_stats_file=None,
+                slo_window_file=None,
+                snapshot_file=None,
+                eks_evidence_file=None,
+            )
+            snapshot = MODULE.collect_snapshot(args, object())
+            self.assertTrue(snapshot["nodeScaleOut"])
+            self.assertTrue(snapshot["nodeMaxPending"])
+            self.assertTrue(snapshot["requiredObservationsValid"])
+
 
 if __name__ == "__main__":
     unittest.main()

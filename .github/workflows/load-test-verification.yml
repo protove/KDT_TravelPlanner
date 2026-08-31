@@ -30,6 +30,7 @@ jobs:
               Path('load-tests/aws/contracts/slo-v1.1-frozen.json'),
               Path('load-tests/aws/profiles/ec2-eks-comparison-v1.1.json'),
               Path('load-tests/aws/profiles/ec2-eks-recovery-v1.1.json'),
+              Path('load-tests/aws/profiles/eks-monolith-breakpoint-v1.0.json'),
           ]:
               json.loads(path.read_text(encoding='utf-8'))
               print(path)
@@ -41,12 +42,23 @@ jobs:
             load-tests.tests.test_aws_slo_contract \
             load-tests.tests.test_aws_load_profile \
             load-tests.tests.test_aws_eks_target_adapter \
-            load-tests.tests.test_aws_recovery_coordinator
+            load-tests.tests.test_aws_recovery_coordinator \
+            load-tests.tests.test_aws_capacity_stress_profile \
+            load-tests.tests.test_aws_capacity_stress_coordinator \
+            load-tests.tests.test_aws_capacity_stress_observer \
+            load-tests.tests.test_aws_capacity_stress_evaluator \
+            load-tests.tests.test_aws_orchestrate
 
       - name: Check shell and Python syntax
         run: |
           bash -n scripts/loadtest/aws/run-k6-aws-scenario.sh
           bash -n scripts/loadtest/aws/run-aws-b01.sh
           bash -n scripts/loadtest/aws/orchestrate-aws-b01.sh
-          python3 -m py_compile -q scripts/loadtest/aws/eks_target_adapter.py scripts/loadtest/aws/slo_contract.py
+          PYTHONPYCACHEPREFIX=/tmp/pycache python3 -m py_compile -q \
+            scripts/loadtest/aws/eks_target_adapter.py \
+            scripts/loadtest/aws/slo_contract.py \
+            scripts/loadtest/aws/validate-aws-profile.py \
+            scripts/loadtest/aws/coordinate-aws-capacity-stress.py \
+            scripts/loadtest/aws/observe-aws-capacity-stress.py \
+            scripts/loadtest/aws/evaluate-aws-capacity-stress.py
           git diff --check
