@@ -48,6 +48,13 @@ function vuState() {
     const credential = vuCredential();
     vuStates[vuId] = {
       timelineItemIds: (credential.timelineItemIds || []).slice(),
+      placeIds: (credential.placeIds || credential.googlePlaceIds || []).slice(),
+      postId: credential.postId || null,
+      commentId: credential.commentId || null,
+      fixtureMarker: credential.fixtureMarker || null,
+      travelVersion: Number.isInteger(credential.travelVersion) ? credential.travelVersion : 0,
+      postVersion: Number.isInteger(credential.postVersion) ? credential.postVersion : 0,
+      commentSequence: Number.isInteger(credential.commentSequence) ? credential.commentSequence : 0,
       nextVisitOrder: (credential.timelineItemIds || []).length + 1,
     };
   }
@@ -75,4 +82,68 @@ export function nextVisitOrder() {
 
 export function registerTimelineItem(timelineItemId) {
   if (timelineItemId) vuState().timelineItemIds.push(timelineItemId);
+}
+
+export function placeIds() {
+  return vuState().placeIds.slice();
+}
+
+export function postId() {
+  return vuState().postId;
+}
+
+export function commentId() {
+  return vuState().commentId;
+}
+
+export function fixtureMarker() {
+  return vuState().fixtureMarker || null;
+}
+
+export function travelVersion() {
+  return vuState().travelVersion;
+}
+
+export function postVersion() {
+  return vuState().postVersion;
+}
+
+export function commentSequence() {
+  const state = vuState();
+  const value = state.commentSequence;
+  state.commentSequence += 1;
+  return value;
+}
+
+export function registerPlaceIds(ids) {
+  if (Array.isArray(ids)) vuState().placeIds = ids.filter(Boolean).slice();
+}
+
+export function registerPost(post) {
+  if (!post) return;
+  const state = vuState();
+  if (typeof post === 'string') {
+    state.postId = post;
+    return;
+  }
+  if (post.postId) state.postId = post.postId;
+  if (Number.isInteger(post.version)) state.postVersion = post.version;
+}
+
+export function registerComment(comment) {
+  if (!comment) return;
+  const state = vuState();
+  if (typeof comment === 'string') {
+    state.commentId = comment;
+    return;
+  }
+  if (comment.commentId) state.commentId = comment.commentId;
+}
+
+export function setTravelVersion(version) {
+  if (Number.isInteger(version)) vuState().travelVersion = version;
+}
+
+export function setPostVersion(version) {
+  if (Number.isInteger(version)) vuState().postVersion = version;
 }

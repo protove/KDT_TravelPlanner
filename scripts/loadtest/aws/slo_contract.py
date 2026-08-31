@@ -77,8 +77,9 @@ def load_contract(path: Path | None = None, *, expected_version: str | None = No
             ("v1.0", "v1.0-frozen"),
             ("v1.1", "v1.1-candidate"),
             ("v1.1", "v1.1-frozen"),
+            ("v2.0", "v2.0-breakpoint"),
         },
-        "SLO contract must be v1.0-frozen or v1.1 candidate/frozen",
+        "SLO contract must be v1.0-frozen, v1.1 candidate/frozen or v2.0-breakpoint",
     )
     if expected_version is not None:
         _require(slo_version == expected_version, f"SLO sloVersion must be {expected_version}")
@@ -106,7 +107,8 @@ def load_contract(path: Path | None = None, *, expected_version: str | None = No
     recovery = payload.get("recovery")
     _require(isinstance(baseline, dict), "SLO baseline section is missing")
     _require(isinstance(recovery, dict), "SLO recovery section is missing")
-    _require(baseline.get("repetitions") == 3, "SLO baseline repetitions must be 3")
+    expected_repetitions = 1 if contract_version == "v2.0" else 3
+    _require(baseline.get("repetitions") == expected_repetitions, f"SLO baseline repetitions must be {expected_repetitions}")
     _require(baseline.get("warmupExcluded") is True, "SLO baseline warmupExcluded must be true")
     _require(recovery.get("bucketSeconds") == 10, "SLO recovery bucketSeconds must be 10")
     _require(recovery.get("stableWindowSeconds") == 120, "SLO recovery stableWindowSeconds must be 120")
@@ -125,17 +127,17 @@ def load_contract(path: Path | None = None, *, expected_version: str | None = No
     _require(payload.get("spike", {}).get("sloPassRequired") is False, "Spike cannot be an SLO pass gate")
     _require(payload.get("r01", {}).get("unexpectedErrorCount") == 0, "R-01 unexpected error count must be zero")
     _require(payload.get("r01", {}).get("contractFailureCount") == 0, "R-01 contract failure count must be zero")
-    if contract_version == "v1.1":
+    if contract_version in {"v1.1", "v2.0"}:
         comparison = payload.get("comparison")
-        _require(isinstance(comparison, dict), "v1.1 comparison section is missing")
-        _require(comparison.get("platforms") == ["ec2-asg", "eks"], "v1.1 comparison platforms must be EC2 ASG and EKS")
-        expected_instance_family = "t3.medium" if slo_version == "v1.1-frozen" else "t3.small"
+        _require(isinstance(comparison, dict), f"{contract_version} comparison section is missing")
+        _require(comparison.get("platforms") == ["ec2-asg", "eks"], f"{contract_version} comparison platforms must be EC2 ASG and EKS")
+        expected_instance_family = "t3.small" if contract_version == "v2.0" or slo_version == "v1.1-candidate" else "t3.medium"
         _require(
             comparison.get("sameInstanceFamily") == expected_instance_family,
             f"{slo_version} comparison instance family must be {expected_instance_family}",
         )
         capacity_shape = comparison.get("sameCapacityShape")
-        _require(capacity_shape == {"min": 2, "desired": 2, "max": 4}, "v1.1 comparison capacity shape must be 2/2/4")
+        _require(capacity_shape == {"min": 2, "desired": 2, "max": 4}, f"{contract_version} comparison capacity shape must be 2/2/4")
     return payload
 
 

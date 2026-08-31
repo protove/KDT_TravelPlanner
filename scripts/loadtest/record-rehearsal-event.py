@@ -9,7 +9,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 
-ALLOWED_EVENTS = {"T0", "T1", "T2", "T3", "T4", "T5", "T5_FAIL", "T6", "RUN_START", "RUN_END"}
+ALLOWED_EVENTS = {
+    "T0", "T1", "T2", "T3", "T4", "T5", "T5_FAIL", "T6", "RUN_START", "RUN_END",
+    "STAGE_START", "STAGE_END", "STAGE_EXTENSION", "TERMINAL", "INCOMPLETE",
+}
 
 
 def main() -> int:

@@ -30,6 +30,7 @@ ENVIRONMENT="${ENVIRONMENT:?ENVIRONMENT is required}"
 TARGET_PLATFORM="${TARGET_PLATFORM:-ec2}"
 AWS_SLO_CONTRACT_FILE="${AWS_SLO_CONTRACT_FILE:-$CONTRACT_DIR/slo-v1.1-candidate.json}"
 EFFECTIVE_MAX_VUS="${EFFECTIVE_MAX_VUS:?EFFECTIVE_MAX_VUS is required}"
+MOCK_CONTAINER_NAME="${MOCK_CONTAINER_NAME:-travel-planner-google-api-mock}"
 
 # A private Runner may resolve the approved custom hostname on the host via an
 # operator-provided /etc/hosts entry while Docker's bridge network still asks
@@ -92,7 +93,7 @@ case "$SCENARIO" in
   soak) SCENARIO_FILE="soak.js" ;;
   scale-step) SCENARIO_FILE="scale-step.js" ;;
   capacity-stress)
-    if [[ "$TARGET_PLATFORM" == "eks" || "$PROFILE_VERSION" == "aws-eks-monolith-breakpoint-v1.0" ]]; then
+    if [[ "$TARGET_PLATFORM" == "eks" || "$PROFILE_VERSION" == "aws-eks-monolith-breakpoint-v1.0" || "$PROFILE_VERSION" == "aws-eks-monolith-breakpoint-v2.0" ]]; then
       SCENARIO_FILE="eks-scale-capacity.js"
     else
       SCENARIO_FILE="capacity-stress.js"
@@ -147,6 +148,15 @@ print(f"[k6-aws] unique credential capacity verified: credentials={len(credentia
 PY
 
 mkdir -p "$RUN_DIR"
+if [[ "$TARGET_PLATFORM" == "eks" ]]; then
+  # The live EKS render must prove the separately isolated Runner mock is
+  # healthy before any measured operation is admitted.  A failed preflight is
+  # an incomplete run, never an application terminal.
+  if ! curl --fail --silent --show-error --max-time 3 http://127.0.0.1:8080/healthz >/dev/null; then
+    echo "Google API mock is not healthy on the Runner" >&2
+    exit 3
+  fi
+fi
 started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 git_sha="$(git -C "$REPOSITORY_ROOT" rev-parse HEAD)"
 warmup_seconds=0
@@ -200,36 +210,45 @@ if scenario == "spike":
     })
 elif scenario == "capacity-stress":
     stress = profile.get("capacityStress") or {}
-    base_rate_raw = os.environ.get("CONFIRMED_RATE") or rate
+    adaptive = profile.get("profileVersion") == "aws-eks-monolith-breakpoint-v2.0" or stress.get("adaptive") is True
+    base_rate_raw = os.environ.get("CAPACITY_TARGET_RATE") or os.environ.get("CONFIRMED_RATE") or rate
     try:
         base_rate = float(base_rate_raw)
     except (TypeError, ValueError):
-        raise SystemExit("capacity-stress requires a positive CONFIRMED_RATE")
+        raise SystemExit("capacity-stress requires a positive target rate")
+    if base_rate <= 0:
+        raise SystemExit("capacity-stress target rate must be positive")
     multipliers = stress.get("stageMultipliers") or scenario_profile.get("stageMultipliers")
     durations = stress.get("stageDurations") or scenario_profile.get("stageDurations")
     campaign_stage = os.environ.get("CAPACITY_STAGE", "")
-    if campaign_stage == "pod-scale-out":
+    if adaptive:
+        multipliers = [1]
+        durations = [os.environ.get("CAPACITY_STAGE_DURATION") or stress.get("duration") or scenario_profile.get("duration") or "5m"]
+    elif campaign_stage == "pod-scale-out":
         multipliers, durations = multipliers[:2], durations[:2]
     elif campaign_stage == "recovery":
         multipliers, durations = [1], ["2m"]
     effective_inputs.update({
         "campaignStage": campaign_stage or "capacity-stress",
+        "adaptive": adaptive,
+        "targetRate": base_rate if adaptive else None,
+        "stageIndex": int(os.environ.get("CAPACITY_STAGE_INDEX") or 0) if adaptive else None,
         "baseRate": base_rate,
         "stageMultipliers": multipliers,
         "stageDurations": durations,
         "stageRates": [base_rate * float(multiplier) for multiplier in multipliers],
-        "stageGraceSeconds": stress.get("stageGraceSeconds"),
+        "nominalHoldSeconds": stress.get("nominalHoldSeconds"),
+        "conditionalExtensionSeconds": stress.get("conditionalExtensionSeconds"),
+        "maxSingleStageSeconds": stress.get("maxSingleStageSeconds"),
         "capacityStabilitySeconds": stress.get("capacityStabilitySeconds"),
-        "hardTimeCeilingSeconds": stress.get("hardTimeCeilingSeconds"),
+        "fixedRpsCeiling": stress.get("fixedRpsCeiling"),
         "maxVUs": int(os.environ.get("MAX_VUS") or stress.get("maxVUs")),
         "preAllocatedVUs": int(os.environ.get("PREALLOCATED_VUS") or stress.get("preAllocatedVUs")),
         "terminalConditions": [
-            "NODE_MAX_PENDING",
-            "MAX_CAPACITY_REACHED",
-            "SLO_COLLAPSE",
-            "DATA_TIER_SATURATION",
-            "PROFILE_COMPLETE",
-            "HARD_CEILING",
+            "NODE_MAX_PENDING", "NODE_SCALE_NOT_TRIGGERED", "NODE_SCALE_FAILED",
+            "NODE_COMPUTE_SATURATION", "SLO_COLLAPSE", "THROUGHPUT_PLATEAU",
+            "HPA_CAPACITY_EXHAUSTED", "BACKEND_OOM", "BACKEND_UNHEALTHY",
+            "ALB_SATURATION", "DATA_TIER_SATURATION",
         ],
         "requiresCompleteSloWindows": stress.get("requiresCompleteSloWindows", False),
         "capacityModel": profile.get("eks", {}).get("capacityMethod"),
@@ -266,6 +285,7 @@ python3 "$REPOSITORY_ROOT/scripts/loadtest/record-rehearsal-event.py" "$RUN_DIR"
 set +e
 K6_CONTAINER_NAME="loadtest-aws-k6-${RUN_ID//[^A-Za-z0-9_.-]/-}"
 : > "$RUN_DIR/runner-stats.jsonl"
+: > "$RUN_DIR/mock-stats.jsonl"
 slo_producer_pid=""
 slo_producer_status=0
 # Capacity/scale runs need a live SLO stream while k6 is still executing. A
@@ -324,6 +344,9 @@ docker run -i --name "$K6_CONTAINER_NAME" \
   -e PREALLOCATED_VUS="${PREALLOCATED_VUS:-20}" \
   -e MAX_VUS="${MAX_VUS:-}" \
   -e CAPACITY_STAGE="${CAPACITY_STAGE:-}" \
+  -e CAPACITY_TARGET_RATE="${CAPACITY_TARGET_RATE:-}" \
+  -e CAPACITY_STAGE_INDEX="${CAPACITY_STAGE_INDEX:-}" \
+  -e CAPACITY_STAGE_DURATION="${CAPACITY_STAGE_DURATION:-}" \
   -e SPIKE_PEAK_MULTIPLIER="${SPIKE_PEAK_MULTIPLIER:-}" \
   -e SPIKE_HOLD="${SPIKE_HOLD:-}" \
   "$K6_IMAGE_DIGEST" run \
@@ -336,6 +359,13 @@ while kill -0 "$k6_pid" 2>/dev/null; do
   if [[ -n "$stats" ]]; then
     now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     printf '{"ts":"%s","docker":%s}\n' "$now" "$stats" >> "$RUN_DIR/runner-stats.jsonl"
+  fi
+  if [[ "$TARGET_PLATFORM" == "eks" ]]; then
+    mock_stats="$(docker stats --no-stream --format '{{json .}}' "$MOCK_CONTAINER_NAME" 2>/dev/null || true)"
+    if [[ -n "$mock_stats" ]]; then
+      now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+      printf '{"ts":"%s","docker":%s}\n' "$now" "$mock_stats" >> "$RUN_DIR/mock-stats.jsonl"
+    fi
   fi
   sleep 5
 done
@@ -352,6 +382,84 @@ if [[ -n "$inspect_json" ]]; then
   restart_count="$(echo "$inspect_json" | python3 -c "import json,sys; print(json.load(sys.stdin)[0].get('RestartCount', 0))" 2>/dev/null || echo "0")"
 fi
 docker rm -f "$K6_CONTAINER_NAME" >/dev/null 2>&1 || true
+
+# Seal independent mock/access/error/container evidence while the Runner
+# still owns the container and its bind-mounted logs.  The files are bounded
+# so a runaway mock request log cannot become an unreviewable evidence blob.
+mkdir -p "$RUN_DIR/mock"
+mock_inspect="$(docker inspect "$MOCK_CONTAINER_NAME" 2>/dev/null || true)"
+if [[ -n "$mock_inspect" ]]; then
+  python3 - "$RUN_DIR/mock/container-inspect.json" "$mock_inspect" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+output = Path(sys.argv[1])
+try:
+    item = json.loads(sys.argv[2])[0]
+except (json.JSONDecodeError, IndexError, TypeError):
+    item = {}
+state = item.get("State", {}) if isinstance(item, dict) else {}
+config = item.get("Config", {}) if isinstance(item, dict) else {}
+output.write_text(json.dumps({
+    "containerName": item.get("Name", "").lstrip("/") if isinstance(item, dict) else None,
+    "image": config.get("Image") if isinstance(config, dict) else None,
+    "running": state.get("Running"),
+    "status": state.get("Status"),
+    "oomKilled": state.get("OOMKilled"),
+    "restartCount": item.get("RestartCount", 0) if isinstance(item, dict) else 0,
+}, indent=2) + "\n", encoding="utf-8")
+PY
+  curl_status="$(curl --silent --show-error --max-time 3 -o "$RUN_DIR/mock/healthz.json" -w '%{http_code}' http://127.0.0.1:8080/healthz || true)"
+  cp /var/lib/travel-planner/google-api-mock-logs/access.log "$RUN_DIR/mock/access.log" 2>/dev/null || :
+  cp /var/lib/travel-planner/google-api-mock-logs/error.log "$RUN_DIR/mock/error.log" 2>/dev/null || :
+  tail -c 1048576 "$RUN_DIR/mock/access.log" > "$RUN_DIR/mock/access.log.bounded" 2>/dev/null || :
+  tail -c 1048576 "$RUN_DIR/mock/error.log" > "$RUN_DIR/mock/error.log.bounded" 2>/dev/null || :
+  python3 - "$RUN_DIR/mock/evidence.json" "$curl_status" "$RUN_DIR/mock/access.log.bounded" "$RUN_DIR/mock/error.log.bounded" "$RUN_DIR/mock/container-inspect.json" "$RUN_DIR/mock-stats.jsonl" <<'PY'
+import json
+import re
+import sys
+from pathlib import Path
+
+output, status, access_path, error_path, inspect_path, stats_path = map(Path, sys.argv[1:])
+def text(path):
+    try:
+        return path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+access = text(access_path)
+errors = text(error_path)
+inspect = json.loads(text(inspect_path) or "{}")
+stats = [json.loads(line) for line in text(stats_path).splitlines() if line.strip()]
+stats = [item.get("docker", {}) for item in stats if isinstance(item, dict) and isinstance(item.get("docker"), dict)]
+http5xx = sum(1 for line in access.splitlines() if re.search(r'"status":5[0-9][0-9](?:,|})', line))
+cpu = []
+memory = []
+for item in stats:
+    for key, target in (("CPUPerc", cpu), ("MemPerc", memory)):
+        match = re.search(r"([0-9]+(?:\.[0-9]+)?)%", str(item.get(key, "")))
+        if match:
+            target.append(float(match.group(1)))
+output.write_text(json.dumps({
+    "schemaVersion": "google-api-mock-evidence/v1",
+    "health": {"httpStatus": int(status) if status.isdigit() else None, "ok": status == "200"},
+    "requests": {
+        "accessLogLines": len(access.splitlines()),
+        "errorLogLines": len(errors.splitlines()),
+        "http5xxLines": http5xx,
+    },
+    "container": inspect,
+    "headroom": {
+        "maxCpuPercent": max(cpu) if cpu else None,
+        "maxMemoryPercent": max(memory) if memory else None,
+        "samples": len(stats),
+    },
+    "validity": "VALID" if status == "200" and inspect.get("running") is True and inspect.get("oomKilled") is not True and int(inspect.get("restartCount", 0) or 0) == 0 and http5xx == 0 else "INCOMPLETE_MOCK_DEPENDENCY",
+}, indent=2) + "\n", encoding="utf-8")
+PY
+else
+  printf '%s\n' '{"schemaVersion":"google-api-mock-evidence/v1","validity":"not-required","reason":"non-EKS target"}' > "$RUN_DIR/mock/evidence.json"
+fi
 
 if [[ -n "$slo_producer_pid" ]]; then
   if kill -0 "$slo_producer_pid" 2>/dev/null; then

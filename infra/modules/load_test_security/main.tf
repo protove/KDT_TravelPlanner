@@ -74,3 +74,17 @@ resource "aws_vpc_security_group_ingress_rule" "cache_load_runner" {
   to_port                      = 6379
   description                  = "Redis from the Load Runner for seed and cleanup only"
 }
+
+# The only inbound path added for the EKS current-feature campaign is the
+# cluster security group to the private Runner mock.  Keep this conditional so
+# the historical dev-runtime State remains unchanged and has no inbound rule.
+resource "aws_vpc_security_group_ingress_rule" "load_runner_google_mock" {
+  count = var.eks_cluster_security_group_id == "" ? 0 : 1
+
+  security_group_id            = aws_security_group.load_runner.id
+  referenced_security_group_id = var.eks_cluster_security_group_id
+  from_port                    = 8080
+  ip_protocol                  = "tcp"
+  to_port                      = 8080
+  description                  = "EKS cluster to the private Runner-hosted Google API mock"
+}

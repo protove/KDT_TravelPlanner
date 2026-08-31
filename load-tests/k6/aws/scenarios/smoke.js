@@ -1,9 +1,7 @@
-// AWS smoke scenario. Reuses the existing Compose flows unchanged; only the
-// target (via BASE_URL, validated in ../config.js) and the metrics wrapper
-// (../lib/core-metrics.js) differ from the Compose smoke.js.
-import { mapPoints, travelDetail, travelList } from '../../flows/travel-read.js';
-import { orderChange, timelineCreate } from '../../flows/timeline-write.js';
-import { recordCoreOperation } from '../lib/core-metrics.js';
+// AWS smoke scenario. Exercise every current-feature operation once per VU so
+// endpoint and private Google-mock contracts are proven before arrival-rate
+// traffic starts.
+import { registeredOperationIds, runCurrentOperation } from '../flows/current-feature-operations.js';
 import { smokeThresholds } from '../thresholds.js';
 import { makeAwsSummaryHandler } from '../summary.js';
 
@@ -15,11 +13,7 @@ export const options = {
 };
 
 export default function smoke() {
-  recordCoreOperation(travelList);
-  recordCoreOperation(travelDetail);
-  recordCoreOperation(mapPoints);
-  const timelineItemId = recordCoreOperation(timelineCreate);
-  if (timelineItemId) recordCoreOperation(orderChange);
+  registeredOperationIds().forEach((operationId) => runCurrentOperation(operationId));
 }
 
 export const handleSummary = makeAwsSummaryHandler('aws-smoke');

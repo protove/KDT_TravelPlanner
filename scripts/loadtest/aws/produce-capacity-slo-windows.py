@@ -28,7 +28,7 @@ CORE_COUNTERS = {
     "core_unexpected_errors_total",
     "core_contract_failures_total",
 }
-ALL_COUNTERS = CORE_COUNTERS | {"dropped_iterations"}
+ALL_COUNTERS = CORE_COUNTERS | {"dropped_iterations", "iterations"}
 
 
 class SloWindowError(RuntimeError):
@@ -199,6 +199,7 @@ def window_payload(points: Iterable[dict[str, Any]], start: float, contract: dic
     unexpected_rate = unexpected / completed if completed else None
     contract_rate = contract_failures / completed if completed else None
     dropped = counters["dropped_iterations"]
+    achieved_rps = counters["iterations"] / 60.0
     complete = completed > 0 and p95 is not None and success_rate is not None and unexpected_rate is not None and contract_rate is not None
     breach = None
     if complete:
@@ -225,6 +226,7 @@ def window_payload(points: Iterable[dict[str, Any]], start: float, contract: dic
         "unexpectedErrorRate": unexpected_rate,
         "contractFailureRate": contract_rate,
         "droppedIterations": dropped,
+        "achievedRps": achieved_rps,
         "sloBreached": breach,
         "stageIndex": stage["stageIndex"],
         "stageMultiplier": stage["stageMultiplier"],

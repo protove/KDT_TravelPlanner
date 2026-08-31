@@ -6,6 +6,7 @@
 import {
   ENVIRONMENT, REGION, REQUEST_MIX_VERSION, SEED_VERSION, SLO_CONTRACT_VERSION, SLO_VERSION,
 } from './config.js';
+import { operationMixSummary } from './flows/current-feature-operations.js';
 
 export function makeAwsSummaryHandler(scenarioName) {
   return function handleSummary(data) {
@@ -22,6 +23,14 @@ export function makeAwsSummaryHandler(scenarioName) {
       sloContractVersion: SLO_CONTRACT_VERSION,
       seedVersion: SEED_VERSION,
       requestMixVersion: REQUEST_MIX_VERSION,
+      operationMix: operationMixSummary(metrics, (() => {
+        try {
+          const profilePath = __ENV.AWS_PROFILE_FILE || '../../aws/profiles/ec2-b01.json';
+          return JSON.parse(open(profilePath)).requestMix?.baseline || {};
+        } catch (_) {
+          return {};
+        }
+      })()),
       metrics: {
         http_reqs: metricValues('http_reqs'),
         http_req_duration: metricValues('http_req_duration'),

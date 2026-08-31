@@ -1,0 +1,6 @@
+{
+  "id": "loadtest-place-detail",
+  "displayName": {"text": "Load-test Place", "languageCode": "en"},
+  "location": {"latitude": 35.681236, "longitude": 139.767125},
+  "rating": 4.3
+}

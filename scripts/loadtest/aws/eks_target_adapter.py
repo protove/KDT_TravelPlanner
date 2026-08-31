@@ -90,8 +90,14 @@ def validate_alb_target_health(
     target_health: dict[str, Any],
     *,
     target_group_arn: str,
+    allow_no_healthy: bool = False,
 ) -> dict[str, Any]:
-    """Validate an ALB IP target group without treating Pod IPs as EC2 IDs."""
+    """Validate an ALB IP target group without treating Pod IPs as EC2 IDs.
+
+    Target verification remains fail-closed by default. The live capacity
+    observer may explicitly allow an all-unhealthy response so the run can
+    classify it as ``ALB_SATURATION`` rather than losing the final snapshot.
+    """
 
     _require(isinstance(target_group_arn, str) and ARN_RE.fullmatch(target_group_arn), "target group ARN is invalid")
     descriptions = target_health.get("TargetHealthDescriptions") or []
@@ -110,7 +116,8 @@ def validate_alb_target_health(
         _require(isinstance(state, str) and state, "EKS ALB target health state is missing")
         states.append(state)
     healthy = sum(state == "healthy" for state in states)
-    _require(healthy > 0, "EKS ALB target group has no healthy Pod target")
+    if not allow_no_healthy:
+        _require(healthy > 0, "EKS ALB target group has no healthy Pod target")
     return {
         "targetGroupArn": target_group_arn,
         "targetType": "ip",
@@ -330,6 +337,7 @@ def build_evidence(
     """Reduce kubectl/AWS responses to comparison dimensions only."""
 
     hpa_status = hpa.get("status") if isinstance(hpa.get("status"), dict) else {}
+    hpa_spec = hpa.get("spec") if isinstance(hpa.get("spec"), dict) else {}
     deployment_status = deployment.get("status") if isinstance(deployment.get("status"), dict) else {}
     pod_items = _items(pods, "items")
     all_pod_items = _items(all_pods or {}, "items")
@@ -352,6 +360,19 @@ def build_evidence(
             for container in containers
             if isinstance(container, dict) and isinstance(container.get("restartCount", 0), int)
         )
+        oom_killed = any(
+            isinstance(container, dict)
+            and (
+                ((container.get("state") or {}).get("terminated") or {}).get("reason") == "OOMKilled"
+                or ((container.get("lastState") or {}).get("terminated") or {}).get("reason") == "OOMKilled"
+            )
+            for container in containers
+        )
+        crash_loop = any(
+            isinstance(container, dict)
+            and ((container.get("state") or {}).get("waiting") or {}).get("reason") == "CrashLoopBackOff"
+            for container in containers
+        )
         placement.append({
             "podName": metadata.get("name"),
             "nodeName": spec.get("nodeName"),
@@ -359,6 +380,8 @@ def build_evidence(
             "readyContainers": ready_containers,
             "containerCount": len(containers) if isinstance(containers, list) else 0,
             "restartCount": restart_count,
+            "oomKilled": oom_killed,
+            "crashLoopBackOff": crash_loop,
             "imageIds": sorted({
                 str(container.get("imageID"))
                 for container in containers
@@ -412,6 +435,11 @@ def build_evidence(
             row["memoryMi"] += float(request["memoryMi"])
     node_group_max = (node_group.get("scalingConfig") or {}).get("max")
     node_max_pending = bool(pending_reasons) and isinstance(node_group_max, int) and len(ready_nodes) >= node_group_max
+    failed_activity = any(
+        isinstance(item, dict)
+        and str(item.get("StatusCode", "")).lower() in {"failed", "cancelled", "cancelledbyuser", "rollback"}
+        for item in activities
+    )
     return {
         "platform": "eks",
         "clusterName": node_group.get("clusterName"),
@@ -419,6 +447,8 @@ def build_evidence(
         "nodeGroupScalingConfig": node_group.get("scalingConfig"),
         "backingAutoScalingGroupName": node_group.get("autoScalingGroupName"),
         "hpa": {
+            "minReplicas": hpa_spec.get("minReplicas"),
+            "maxReplicas": hpa_spec.get("maxReplicas"),
             "desiredReplicas": hpa_status.get("desiredReplicas"),
             "currentReplicas": hpa_status.get("currentReplicas"),
             "availableReplicas": deployment_status.get("availableReplicas"),
@@ -433,6 +463,7 @@ def build_evidence(
             "updatedReplicas": deployment_status.get("updatedReplicas"),
             "availableReplicas": deployment_status.get("availableReplicas"),
             "readyReplicas": deployment_status.get("readyReplicas"),
+            "unavailableReplicas": deployment_status.get("unavailableReplicas"),
         },
         "backendPods": {
             "count": len(pod_items),
@@ -448,6 +479,8 @@ def build_evidence(
         "readyNodes": ready_nodes,
         "nodePressureNodes": pressure_nodes,
         "nodeSchedulingPressure": bool(pressure_nodes),
+        "nodeComputeSaturated": bool(pressure_nodes),
+        "nodeScaleFailed": failed_activity and len(ready_nodes) < (node_group_max if isinstance(node_group_max, int) else len(ready_nodes)),
         "nodeMaxPending": node_max_pending,
         "maxCapacityReached": bool(node_max_pending),
         "capacityCurve": capacity_curve,
@@ -541,6 +574,60 @@ def parse_kubectl_sections(stdout: str) -> dict[str, dict[str, Any]]:
     return snapshots
 
 
+def _parse_marked_json(stdout: str, begin: str, end: str, label: str) -> dict[str, Any]:
+    """Parse one marker-delimited object without retaining raw SSM output."""
+
+    match = re.search(re.escape(begin) + r"\s*(.*?)\s*" + re.escape(end), stdout, re.DOTALL)
+    if not match:
+        raise EKSAdapterError(f"SSM {label} section is missing")
+    try:
+        payload = json.loads(match.group(1))
+    except json.JSONDecodeError as error:
+        raise EKSAdapterError(f"SSM {label} section is not JSON") from error
+    _require(isinstance(payload, dict), f"SSM {label} section must be an object")
+    return payload
+
+
+def sanitize_hpa_apply_invocation(
+    invocation: dict[str, Any],
+    *,
+    expected_max_replicas: int,
+    override_sha256: str,
+) -> dict[str, Any]:
+    """Validate a run-scoped HPA apply receipt and return only safe fields."""
+
+    _require(isinstance(expected_max_replicas, int) and expected_max_replicas >= 5, "HPA max must be at least N4+1")
+    _require(bool(re.fullmatch(r"[0-9a-f]{64}", str(override_sha256))), "HPA override SHA-256 is invalid")
+    stdout = str(invocation.get("StandardOutputContent", ""))
+    hpa = _parse_marked_json(
+        stdout,
+        "__SCRUM80_HPA_APPLY_BEGIN__",
+        "__SCRUM80_HPA_APPLY_END__",
+        "HPA apply",
+    )
+    metadata = hpa.get("metadata") if isinstance(hpa.get("metadata"), dict) else {}
+    spec = hpa.get("spec") if isinstance(hpa.get("spec"), dict) else {}
+    _require(metadata.get("name") == "backend", "HPA apply receipt targets an unexpected object")
+    _require(metadata.get("namespace") == "travel-planner", "HPA apply receipt targets an unexpected namespace")
+    _require(spec.get("minReplicas") == 2, "run-scoped HPA must preserve minReplicas=2")
+    _require(spec.get("maxReplicas") == expected_max_replicas, "run-scoped HPA max does not match the rendered override")
+    annotations = metadata.get("annotations") if isinstance(metadata.get("annotations"), dict) else {}
+    _require(annotations.get("load-test.kdt.travelplanner/scope") == "run-scoped-n4-plus-one", "HPA scope annotation is missing")
+    return {
+        "schemaVersion": "scrum80-hpa-receipt/v1",
+        "status": invocation.get("Status"),
+        "responseCode": invocation.get("ResponseCode"),
+        "overrideSha256": override_sha256,
+        "minReplicas": spec.get("minReplicas"),
+        "maxReplicas": spec.get("maxReplicas"),
+        "n4": annotations.get("load-test.kdt.travelplanner/n4"),
+        "object": {"name": metadata.get("name"), "namespace": metadata.get("namespace")},
+        "stdoutSha256": hashlib.sha256(stdout.encode()).hexdigest(),
+        "stderrSha256": hashlib.sha256(str(invocation.get("StandardErrorContent", "")).encode()).hexdigest(),
+        "rawOutputStored": False,
+    }
+
+
 def _command(args: argparse.Namespace) -> int:
     if args.action == "validate":
         node_group = resolve_node_group(
@@ -561,6 +648,13 @@ def _command(args: argparse.Namespace) -> int:
         return 0
     if args.action == "sanitize-invocation":
         print(json.dumps(sanitize_invocation(_load_json(args.invocation_json)), indent=2, sort_keys=True))
+        return 0
+    if args.action == "sanitize-hpa-apply":
+        print(json.dumps(sanitize_hpa_apply_invocation(
+            _load_json(args.invocation_json),
+            expected_max_replicas=args.expected_max_replicas,
+            override_sha256=args.override_sha256,
+        ), indent=2, sort_keys=True))
         return 0
     if args.action == "build-evidence":
         invocation = _load_json(args.invocation_json)
@@ -595,7 +689,7 @@ def _command(args: argparse.Namespace) -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=("validate", "commands", "sanitize-invocation", "build-evidence", "capacity-curve", "render-hpa-override"))
+    parser.add_argument("action", choices=("validate", "commands", "sanitize-invocation", "sanitize-hpa-apply", "build-evidence", "capacity-curve", "render-hpa-override"))
     parser.add_argument("--cluster-name", required=True)
     parser.add_argument("--node-group-name")
     parser.add_argument("--target-group-arn")
@@ -612,6 +706,8 @@ def main() -> int:
     parser.add_argument("--deployment-json")
     parser.add_argument("--capacity-curve-json")
     parser.add_argument("--output")
+    parser.add_argument("--expected-max-replicas", type=int)
+    parser.add_argument("--override-sha256")
     args = parser.parse_args()
     if args.action == "validate" and not all((args.node_group_name, args.target_group_arn, args.node_group_json, args.target_health_json)):
         parser.error("validate requires --node-group-name, --target-group-arn, --node-group-json and --target-health-json")
@@ -619,6 +715,8 @@ def main() -> int:
         parser.error("commands requires --region, --namespace and --deployment")
     if args.action == "sanitize-invocation" and not args.invocation_json:
         parser.error("sanitize-invocation requires --invocation-json")
+    if args.action == "sanitize-hpa-apply" and not all((args.invocation_json, args.expected_max_replicas, args.override_sha256)):
+        parser.error("sanitize-hpa-apply requires --invocation-json, --expected-max-replicas and --override-sha256")
     if args.action == "build-evidence" and not all((args.invocation_json, args.node_group_summary_json, args.alb_summary_json, args.asg_activities_json)):
         parser.error("build-evidence requires invocation, node-group, ALB and ASG JSON inputs")
     if args.action == "capacity-curve" and not all((args.nodes_json, args.deployment_json)):

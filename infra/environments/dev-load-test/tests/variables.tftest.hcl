@@ -17,6 +17,9 @@ override_data {
     outputs = {
       cache_security_group_id     = "sg-cache"
       database_security_group_id  = "sg-database"
+      cluster_security_group_id   = "sg-eks-cluster"
+      private_zone_id             = "ZPRIVATE"
+      private_zone_name           = "dev-eks.kdt-travelplanner.internal"
       redis_load_test_user_arn    = "arn:aws:elasticache:ap-northeast-2:123456789012:user:test-user"
       redis_replication_group_arn = "arn:aws:elasticache:ap-northeast-2:123456789012:replicationgroup:test-cache"
     }

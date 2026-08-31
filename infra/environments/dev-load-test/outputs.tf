@@ -32,3 +32,8 @@ output "target_runtime_state_key" {
   description = "Disposable runtime State key consumed by this Load Runner deployment (dev-runtime or dev-eks)."
   value       = var.runtime_state_key
 }
+
+output "google_api_mock_fqdn" {
+  description = "Private Runner-hosted Google API mock FQDN for the dev-eks disposable render (null for dev-runtime)."
+  value       = one(aws_route53_record.google_api_mock[*].fqdn)
+}

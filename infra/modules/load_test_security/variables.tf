@@ -8,6 +8,12 @@ variable "database_security_group_id" {
   description = "PostgreSQL security group that accepts seed and cleanup traffic from the Load Runner."
 }
 
+variable "eks_cluster_security_group_id" {
+  type        = string
+  description = "Optional EKS cluster security group allowed to reach the Runner-hosted Google mock on TCP/8080. Empty disables the rule for non-EKS load-test States."
+  default     = ""
+}
+
 variable "environment" {
   type        = string
   description = "Deployment environment name."

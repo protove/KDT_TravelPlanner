@@ -12,6 +12,7 @@ from pathlib import Path
 ROOT = Path(__file__).parents[2]
 SCRIPT = ROOT / "scripts/loadtest/aws/evaluate-aws-capacity-stress.py"
 CONTRACT = ROOT / "load-tests/aws/contracts/slo-v1.1-frozen.json"
+V2_CONTRACT = ROOT / "load-tests/aws/contracts/eks-monolith-breakpoint-slo-v2.0.json"
 SPEC = importlib.util.spec_from_file_location("capacity_stress_evaluator", SCRIPT)
 MODULE = importlib.util.module_from_spec(SPEC)
 assert SPEC and SPEC.loader
@@ -65,6 +66,12 @@ class CapacityStressEvaluatorTest(unittest.TestCase):
             json.dumps({"docker": {"CPUPerc": "15.0%", "MemPerc": "20.0%"}}) + "\n",
             encoding="utf-8",
         )
+        write_json(root / "mock" / "evidence.json", {
+            "validity": "not-required",
+            "health": {"ok": True},
+            "requests": {"http5xxLines": 0},
+            "headroom": {"maxCpuPercent": 1, "maxMemoryPercent": 1},
+        })
         (root / "snapshots.jsonl").write_text(
             "\n".join([
                 json.dumps({"ts": utc(0), "stageIndex": 0, "stageMultiplier": 1, "logicalCapacity": 2}),
@@ -183,6 +190,86 @@ class CapacityStressEvaluatorTest(unittest.TestCase):
             result = MODULE.evaluate(self.args(root))
             self.assertEqual(result["validity"], "INVALID_METRIC_WINDOW")
             self.assertEqual(result["campaignStage"], "node-scale-out-breakpoint")
+
+    def adaptive_fixture(self, root: Path, terminal: str = "NODE_MAX_PENDING") -> None:
+        write_json(root / "metadata.json", {
+            "runId": "aws-eks-adaptive-fixture",
+            "platform": "eks",
+            "profileVersion": "aws-eks-monolith-breakpoint-v2.0",
+            "profileSha256": "b" * 64,
+            "sloVersion": "v2.0-breakpoint",
+            "effectiveInputs": {
+                "campaignStage": "capacity-stress",
+                "requiresCompleteSloWindows": True,
+                "stageMultipliers": [1],
+                "stageRates": [256],
+                "stageDurations": ["5m"],
+            },
+        })
+        write_json(root / "summary.json", {"metrics": {
+            "http_req_duration": {"p(95)": 210, "p(99)": 310},
+            "iterations": {"rate": 256},
+            "dropped_iterations": {"count": 0},
+            "core_completed_operations_total": {"count": 1000},
+            "core_successful_operations_total": {"count": 1000},
+            "core_unexpected_errors_total": {"count": 0},
+            "core_contract_failures_total": {"count": 0},
+        }})
+        write_json(root / "run-status.json", {"k6ContainerOomKilled": False, "k6ContainerRestartCount": 0})
+        write_json(root / "controller-result.json", {"terminalReason": terminal})
+        (root / "runner-stats.jsonl").write_text(json.dumps({"docker": {"CPUPerc": "15.0%", "MemPerc": "20.0%"}}) + "\n", encoding="utf-8")
+        (root / "mock-stats.jsonl").write_text(json.dumps({"docker": {"CPUPerc": "12.0%", "MemPerc": "15.0%"}}) + "\n", encoding="utf-8")
+        write_json(root / "mock" / "evidence.json", {
+            "validity": "VALID",
+            "health": {"httpStatus": 200, "ok": True},
+            "requests": {"accessLogLines": 100, "errorLogLines": 0, "http5xxLines": 0},
+            "container": {"running": True, "oomKilled": False, "restartCount": 0},
+            "headroom": {"maxCpuPercent": 12, "maxMemoryPercent": 15, "samples": 1},
+        })
+        (root / "snapshots.jsonl").write_text("\n".join(json.dumps({
+            "ts": utc(offset), "stageIndex": 0, "stageMultiplier": 1,
+            "logicalCapacity": 4, "requiredObservationsValid": True,
+            "nodeMaxPending": True,
+            "sloWindow": True, "sloWindowComplete": True, "sloWindowSeconds": 60,
+            "p95Ms": 210, "successRate": 1.0, "unexpectedErrorRate": 0.0,
+            "contractFailureRate": 0.0, "droppedIterations": 0, "sloBreached": False,
+        }) for offset in (0, 60)) + "\n", encoding="utf-8")
+
+    def test_adaptive_actual_terminal_is_valid(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.adaptive_fixture(root)
+            result = MODULE.evaluate(argparse.Namespace(run_dir=root, slo_contract=V2_CONTRACT, capacity_stability_seconds=120))
+            self.assertEqual(result["validity"], "VALID")
+            self.assertTrue(result["adaptiveBreakpoint"])
+            self.assertEqual(result["bottleneckClass"], "node-max-pending")
+
+    def test_adaptive_stage_boundary_is_not_a_breakpoint_result(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.adaptive_fixture(root, terminal="STAGE_COMPLETE")
+            result = MODULE.evaluate(argparse.Namespace(run_dir=root, slo_contract=V2_CONTRACT, capacity_stability_seconds=120))
+            self.assertEqual(result["validity"], "INVALID_TERMINAL_REASON")
+
+    def test_adaptive_missing_mock_evidence_is_incomplete(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.adaptive_fixture(root)
+            (root / "mock" / "evidence.json").unlink()
+            result = MODULE.evaluate(argparse.Namespace(run_dir=root, slo_contract=V2_CONTRACT, capacity_stability_seconds=120))
+            self.assertEqual(result["validity"], "INCOMPLETE_MOCK_DEPENDENCY")
+            self.assertFalse(result["comparisonSafe"])
+
+    def test_adaptive_mock_5xx_is_incomplete_before_sut_terminal(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.adaptive_fixture(root)
+            evidence = json.loads((root / "mock" / "evidence.json").read_text(encoding="utf-8"))
+            evidence["requests"]["http5xxLines"] = 1
+            write_json(root / "mock" / "evidence.json", evidence)
+            result = MODULE.evaluate(argparse.Namespace(run_dir=root, slo_contract=V2_CONTRACT, capacity_stability_seconds=120))
+            self.assertEqual(result["validity"], "INCOMPLETE_MOCK_DEPENDENCY")
+            self.assertEqual(result["mock"]["requests"]["http5xxLines"], 1)
 
 
 if __name__ == "__main__":

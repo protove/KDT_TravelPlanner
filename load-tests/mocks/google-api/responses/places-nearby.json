@@ -1,0 +1,10 @@
+{
+  "places": [
+    {
+      "id": "loadtest-place-default-002",
+      "displayName": {"text": "Tokyo Station", "languageCode": "en"},
+      "location": {"latitude": 35.681236, "longitude": 139.767125},
+      "rating": 4.4
+    }
+  ]
+}

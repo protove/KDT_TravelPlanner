@@ -59,6 +59,10 @@ run "load_runner_is_private_and_encrypted" {
       aws_instance.load_runner.user_data_replace_on_change &&
       startswith(aws_instance.load_runner.user_data, "#!/usr/bin/env bash") &&
       strcontains(aws_instance.load_runner.user_data, var.k6_image_reference) &&
+      strcontains(aws_instance.load_runner.user_data, var.google_mock_image_reference) &&
+      strcontains(aws_instance.load_runner.user_data, "--read-only") &&
+      strcontains(aws_instance.load_runner.user_data, "--cap-drop ALL") &&
+      strcontains(aws_instance.load_runner.user_data, "--platform linux/amd64") &&
       strcontains(aws_instance.load_runner.user_data, var.source_commit_sha) &&
       strcontains(aws_instance.load_runner.user_data, "git clone") &&
       strcontains(aws_instance.load_runner.user_data, "botocore==1.43.68") &&
@@ -145,11 +149,34 @@ run "source_commit_sha_must_be_exact" {
   expect_failures = [var.source_commit_sha]
 }
 
-run "runner_instance_type_must_be_t3_family" {
+run "runner_instance_type_allows_only_registered_shapes" {
   command = plan
 
   variables {
     instance_type = "m6i.large"
+  }
+
+  expect_failures = [var.instance_type]
+}
+
+run "runner_instance_type_accepts_scrum80_shapes" {
+  command = plan
+
+  variables {
+    instance_type = "c6i.2xlarge"
+  }
+
+  assert {
+    condition     = var.instance_type == "c6i.2xlarge"
+    error_message = "SCRUM-80 primary Runner shape must be accepted."
+  }
+}
+
+run "runner_instance_type_rejects_unregistered_c6i_shape" {
+  command = plan
+
+  variables {
+    instance_type = "c6i.8xlarge"
   }
 
   expect_failures = [var.instance_type]

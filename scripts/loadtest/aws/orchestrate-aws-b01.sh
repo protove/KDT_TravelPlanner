@@ -48,6 +48,7 @@ ALB_ARN=""
 TARGET_GROUP_ARN=""
 RUNNER_ID=""
 RUNNER_INSTANCE_TYPE="t3.small"
+RUNNER_INSTANCE_TYPE_EXPLICIT=0
 BASE_URL=""
 S3_BUCKET=""
 S3_PREFIX="evidence/aws-load-tests"
@@ -78,6 +79,7 @@ EKS_NODE_GROUP_NAME="kdt-travelplanner-dev-eks-nodes"
 EKS_BASTION_ID=""
 BACKEND_NAMESPACE="travel-planner"
 BACKEND_DEPLOYMENT="backend"
+GOOGLE_MOCK_HOST="google-api-mock.dev-eks.kdt-travelplanner.internal"
 PROFILE_SHA256=""
 SOURCE_COMMIT_SHA=""
 START_RATE="${START_RATE:-}"
@@ -97,6 +99,9 @@ SCALE_STEP_PREALLOCATED_VUS="${SCALE_STEP_PREALLOCATED_VUS:-}"
 SCALE_STEP_MAX_VUS="${SCALE_STEP_MAX_VUS:-}"
 CAPACITY_STRESS_PREALLOCATED_VUS="${CAPACITY_STRESS_PREALLOCATED_VUS:-}"
 CAPACITY_STRESS_MAX_VUS="${CAPACITY_STRESS_MAX_VUS:-}"
+CAPACITY_TARGET_RATE="${CAPACITY_TARGET_RATE:-}"
+CAPACITY_STAGE_INDEX="${CAPACITY_STAGE_INDEX:-}"
+CAPACITY_STAGE_DURATION="${CAPACITY_STAGE_DURATION:-}"
 
 usage() {
   cat <<'USAGE'
@@ -173,7 +178,7 @@ while [[ "$#" -gt 0 ]]; do
     --alb-arn) ALB_ARN="$2"; shift 2 ;;
     --base-url) BASE_URL="$2"; shift 2 ;;
     --runner-id) RUNNER_ID="$2"; shift 2 ;;
-    --runner-instance-type) RUNNER_INSTANCE_TYPE="$2"; shift 2 ;;
+    --runner-instance-type) RUNNER_INSTANCE_TYPE="$2"; RUNNER_INSTANCE_TYPE_EXPLICIT=1; shift 2 ;;
     --s3-bucket) S3_BUCKET="$2"; shift 2 ;;
     --s3-prefix) S3_PREFIX="$2"; shift 2 ;;
     --dry-run) DRY_RUN=1; shift ;;
@@ -215,7 +220,12 @@ esac
 
 COMPARISON_PROFILE=0
 BREAKPOINT_PROFILE=0
+ADAPTIVE_BREAKPOINT_PROFILE=0
 if [[ "$PROFILE" == *eks-monolith-breakpoint-v1.0.json* ]]; then
+  BREAKPOINT_PROFILE=1
+fi
+if [[ "$PROFILE" == *eks-monolith-breakpoint-v2.0.json* ]]; then
+  ADAPTIVE_BREAKPOINT_PROFILE=1
   BREAKPOINT_PROFILE=1
 fi
 if [[ "$PROFILE" == *ec2-eks-comparison-v1.1.json* || "$SLO_CONTRACT" == *slo-v1.1-* ]]; then
@@ -227,8 +237,33 @@ fi
 if [[ "$BREAKPOINT_PROFILE" == "1" && "$SLO_CONTRACT_EXPLICIT" == "0" ]]; then
   SLO_CONTRACT="$REPOSITORY_ROOT/load-tests/aws/contracts/eks-monolith-breakpoint-slo-v1.0.json"
 fi
+if [[ "$ADAPTIVE_BREAKPOINT_PROFILE" == "1" && "$SLO_CONTRACT_EXPLICIT" == "0" ]]; then
+  SLO_CONTRACT="$REPOSITORY_ROOT/load-tests/aws/contracts/eks-monolith-breakpoint-slo-v2.0.json"
+fi
 if [[ "$BREAKPOINT_PROFILE" == "1" && "$SLO_CONTRACT" != *eks-monolith-breakpoint-slo-v1.0.json ]]; then
-  echo "EKS breakpoint profile must use eks-monolith-breakpoint-slo-v1.0.json; historical t3.medium contract is not valid here" >&2
+  if [[ "$ADAPTIVE_BREAKPOINT_PROFILE" != "1" || "$SLO_CONTRACT" != *eks-monolith-breakpoint-slo-v2.0.json ]]; then
+    echo "EKS breakpoint profile must use its matching breakpoint SLO contract" >&2
+    exit 2
+  fi
+fi
+if [[ "$ADAPTIVE_BREAKPOINT_PROFILE" == "1" && "$RUNNER_INSTANCE_TYPE_EXPLICIT" == "0" ]]; then
+  RUNNER_INSTANCE_TYPE="c6i.2xlarge"
+  # The historical t3.medium contract is not valid here: v2 deliberately
+  # binds the EKS monolith breakpoint to the t3.small 2/2/4 node envelope.
+fi
+# The adaptive profile's first stress stage needs at least 512 unique users;
+# later stages top up the same ledger rather than resetting it. Apply this
+# default independently of whether the operator explicitly repeats the
+# profile's c6i Runner type, so the unique-credential contract cannot be
+# accidentally weakened by an otherwise equivalent invocation.
+if [[ "$ADAPTIVE_BREAKPOINT_PROFILE" == "1" && "$USERS" == "80" ]]; then
+  USERS=512
+fi
+if [[ "$ADAPTIVE_BREAKPOINT_PROFILE" == "1" && -z "$CONFIRMED_RATE" ]]; then
+  CONFIRMED_RATE="16"
+fi
+if [[ "$ADAPTIVE_BREAKPOINT_PROFILE" == "1" && "$TARGET_PLATFORM" != "eks" ]]; then
+  echo "adaptive EKS breakpoint profile requires --target-platform eks" >&2
   exit 2
 fi
 if [[ "$COMPARISON_PROFILE" == "1" && "$MODE" == "all" ]]; then
@@ -236,7 +271,11 @@ if [[ "$COMPARISON_PROFILE" == "1" && "$MODE" == "all" ]]; then
   exit 2
 fi
 
-for required in REGION ENVIRONMENT EXPECTED_ACCOUNT_ID ALB_ARN BASE_URL RUNNER_ID MAX_RATE MAX_VUS; do
+required_inputs=(REGION ENVIRONMENT EXPECTED_ACCOUNT_ID ALB_ARN BASE_URL RUNNER_ID MAX_VUS)
+if [[ "$ADAPTIVE_BREAKPOINT_PROFILE" != "1" ]]; then
+  required_inputs+=(MAX_RATE)
+fi
+for required in "${required_inputs[@]}"; do
   if [[ -z "${!required}" ]]; then
     echo "--${required,,} is required" >&2
     exit 2
@@ -250,8 +289,8 @@ if [[ ! "$BASE_URL" =~ ^https://[^/]+$ || "$BASE_URL" == *amazonaws.com* ]]; the
   echo "--base-url must be an approved custom HTTPS hostname, not an AWS ALB DNS name" >&2
   exit 2
 fi
-if [[ ! "$RUNNER_INSTANCE_TYPE" =~ ^t3\.[a-z0-9]+$ ]]; then
-  echo "--runner-instance-type must be a t3 family instance type" >&2
+if [[ ! "$RUNNER_INSTANCE_TYPE" =~ ^(t3\.[a-z0-9]+|c6i\.(2xlarge|4xlarge))$ ]]; then
+  echo "--runner-instance-type must be a t3 family type or c6i.2xlarge/c6i.4xlarge" >&2
   exit 2
 fi
 if [[ "$TARGET_PLATFORM" == "eks" ]]; then
@@ -311,10 +350,49 @@ run_aws_json() {
   aws "$@"
 }
 
+run_eks_bastion_command() {
+  local command="$1" comment="$2" invocation_file="$3"
+  [[ "$TARGET_PLATFORM" == "eks" ]] || { echo "EKS Bastion command requires --target-platform eks" >&2; return 2; }
+  [[ -n "$EKS_BASTION_ID" ]] || { echo "EKS Bastion ID is required" >&2; return 2; }
+  if [[ "$DRY_RUN" == "1" ]]; then
+    printf '{"Status":"DryRun","ResponseCode":0,"StandardOutputContent":"","StandardErrorContent":""}\n' >"$invocation_file"
+    echo "[dry-run] SSM Bastion command: $comment" >&2
+    return 0
+  fi
+  local parameters command_json command_id invocation_json invocation_status
+  parameters="$(jq -cn --arg command "$command" '{commands:[$command]}')"
+  command_json="$(run_aws_json ssm send-command --instance-ids "$EKS_BASTION_ID" \
+    --document-name AWS-RunShellScript --comment "$comment" \
+    --parameters "$parameters" --region "$REGION")"
+  command_id="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["Command"]["CommandId"])' <<<"$command_json")"
+  [[ "$command_id" =~ ^[A-Za-z0-9-]{36}$ ]] || { echo "SSM command id is invalid" >&2; return 2; }
+  invocation_json=''
+  invocation_status=''
+  for _ in $(seq 1 90); do
+    invocation_json="$(run_aws_json ssm get-command-invocation --command-id "$command_id" --instance-id "$EKS_BASTION_ID" --region "$REGION")"
+    invocation_status="$(python3 -c 'import json,sys; print(json.load(sys.stdin).get("Status", ""))' <<<"$invocation_json")"
+    case "$invocation_status" in
+      Success) printf '%s\n' "$invocation_json" >"$invocation_file"; return 0 ;;
+      Failed|Cancelled|TimedOut|Cancelling) printf '%s\n' "$invocation_json" >"$invocation_file"; echo "SSM Bastion command failed: $invocation_status" >&2; return 1 ;;
+    esac
+    sleep 2
+  done
+  printf '%s\n' "$invocation_json" >"$invocation_file"
+  echo "Timed out waiting for SSM Bastion command: $comment" >&2
+  return 1
+}
+
 STAGE_DIR="$EVIDENCE_ROOT/stages"
 stage_confirmed_rate() {
   local stage="$1"
   case "$stage" in
+    capacity-stress)
+      if [[ "$ADAPTIVE_BREAKPOINT_PROFILE" == "1" && -n "$CAPACITY_TARGET_RATE" ]]; then
+        printf '%s' "$CAPACITY_TARGET_RATE"
+      else
+        printf '%s' "${CONFIRMED_RATE:-}"
+      fi
+      ;;
     baseline|baseline-*|d005|spike|soak|scale-step|capacity-stress|pod-scale-out|node-scale-out-breakpoint|recovery) printf '%s' "${CONFIRMED_RATE:-}" ;;
     *) printf '' ;;
   esac
@@ -743,8 +821,8 @@ EOF
       --asg-activities-json "$EVIDENCE_ROOT/aws/asg-activities.json" \
       > "$EVIDENCE_ROOT/aws/eks-evidence.json"
     # Render the disposable N4+1 HPA patch from the observed allocatable /
-    # request curve. It is evidence and a future SCRUM-80 input only; this
-    # orchestrator never applies it to the canonical dev-eks workload.
+    # request curve. N40 applies this exact patch through the Bastion after
+    # Smoke; it is never part of the canonical dev-eks source overlay.
     python3 - "$EVIDENCE_ROOT/aws/eks-evidence.json" "$validation_dir/capacity-curve.json" <<'PY'
 import json
 import sys
@@ -962,17 +1040,342 @@ PY
   echo "[b01] target verified: BASE_URL=$BASE_URL evidenceRoot=$EVIDENCE_ROOT"
 }
 
+apply_eks_google_mock_binding() {
+  [[ "$TARGET_PLATFORM" == "eks" && "$ADAPTIVE_BREAKPOINT_PROFILE" == "1" ]] || return 0
+  local patch_file="$REPOSITORY_ROOT/k8s/overlays/dev-eks/load-test/backend-google-api-mock.patch.yaml"
+  local patch_sha invocation_file receipt_file command
+  [[ -s "$patch_file" ]] || { echo "Google API mock patch is missing" >&2; return 2; }
+  patch_sha="$(sha256sum "$patch_file" | awk '{print $1}')"
+  receipt_file="$EVIDENCE_ROOT/aws/google-api-mock-binding.json"
+  invocation_file="$(mktemp "${TMPDIR:-/tmp}/scrum80-mock-binding.XXXXXX")"
+  command="$(python3 - "$EKS_CLUSTER_NAME" "$REGION" "$BACKEND_NAMESPACE" "$BACKEND_DEPLOYMENT" "$GOOGLE_MOCK_HOST" <<'PY'
+import json
+import shlex
+import sys
+
+cluster, region, namespace, deployment, host = sys.argv[1:]
+context = "scrum80-eks"
+config_patch = json.dumps({"data": {
+    "GOOGLE_PLACES_BASE_URL": f"http://{host}:8080",
+    "GOOGLE_ROUTES_BASE_URL": f"http://{host}:8080",
+}}, separators=(",", ":"))
+deployment_patch = json.dumps({"spec": {"template": {
+    "metadata": {"annotations": {"load-test.kdt.travelplanner/google-mock": f"{host}:8080"}},
+    "spec": {"containers": [{"name": "backend", "env": [{
+        "name": "GOOGLE_MAPS_API_KEY", "value": "loadtest-google-mock-key", "valueFrom": None,
+    }]}]},
+}}}, separators=(",", ":"))
+q = shlex.quote
+print(
+    "set -euo pipefail; "
+    "export HOME=/root KUBECONFIG=/root/.kube/config; "
+    f"aws eks update-kubeconfig --name {q(cluster)} --region {q(region)} --alias {q(context)} >/dev/null; "
+    f"kubectl --context {q(context)} --namespace {q(namespace)} patch configmap backend-config --type merge --patch {q(config_patch)} >/dev/null; "
+    f"kubectl --context {q(context)} --namespace {q(namespace)} patch deployment {q(deployment)} --type strategic --patch {q(deployment_patch)} >/dev/null; "
+    f"kubectl --context {q(context)} --namespace {q(namespace)} rollout status deployment/{q(deployment)} --timeout=300s >/dev/null; "
+    "printf '%s\\n' __SCRUM80_MOCK_BINDING_BEGIN__; "
+    f"kubectl --context {q(context)} --namespace {q(namespace)} get configmap backend-config -o json; "
+    "printf '%s\\n' __SCRUM80_MOCK_BINDING_CONFIG_END__; "
+    f"kubectl --context {q(context)} --namespace {q(namespace)} get deployment {q(deployment)} -o json; "
+    "printf '%s\\n' __SCRUM80_MOCK_BINDING_END__"
+)
+PY
+)"
+  run_eks_bastion_command "$command" "SCRUM-80 bind Backend to private Google API mock" "$invocation_file"
+  if [[ "$DRY_RUN" == "1" ]]; then
+    cat >"$receipt_file" <<EOF
+{"schemaVersion":"scrum80-google-mock-binding/v1","status":"DryRun","patchSha256":"$patch_sha","mockHost":"$GOOGLE_MOCK_HOST","privatePort":8080,"rawOutputStored":false}
+EOF
+    rm -f -- "$invocation_file"
+    return 0
+  fi
+  python3 - "$invocation_file" "$receipt_file" "$GOOGLE_MOCK_HOST" "$patch_sha" <<'PY'
+import hashlib
+import json
+import re
+import sys
+from pathlib import Path
+
+invocation_path, output_path, host, patch_sha = sys.argv[1:]
+invocation = json.loads(Path(invocation_path).read_text(encoding="utf-8"))
+stdout = str(invocation.get("StandardOutputContent", ""))
+config_match = re.search(r"__SCRUM80_MOCK_BINDING_BEGIN__\s*(.*?)\s*__SCRUM80_MOCK_BINDING_CONFIG_END__", stdout, re.DOTALL)
+deployment_match = re.search(r"__SCRUM80_MOCK_BINDING_CONFIG_END__\s*(.*?)\s*__SCRUM80_MOCK_BINDING_END__", stdout, re.DOTALL)
+if not config_match or not deployment_match:
+    raise SystemExit("mock binding receipt markers are missing")
+config = json.loads(config_match.group(1))
+deployment = json.loads(deployment_match.group(1))
+urls = config.get("data") or {}
+expected_url = f"http://{host}:8080"
+if urls.get("GOOGLE_PLACES_BASE_URL") != expected_url or urls.get("GOOGLE_ROUTES_BASE_URL") != expected_url:
+    raise SystemExit("Backend ConfigMap does not point to the approved private mock")
+env = []
+for container in deployment.get("spec", {}).get("template", {}).get("spec", {}).get("containers") or []:
+    if isinstance(container, dict) and container.get("name") == "backend":
+        env = container.get("env") or []
+        break
+key = next((item for item in env if isinstance(item, dict) and item.get("name") == "GOOGLE_MAPS_API_KEY"), None)
+if not isinstance(key, dict) or key.get("value") != "loadtest-google-mock-key" or key.get("valueFrom") is not None:
+    raise SystemExit("Backend does not expose the synthetic Google mock key")
+Path(output_path).write_text(json.dumps({
+    "schemaVersion": "scrum80-google-mock-binding/v1",
+    "status": invocation.get("Status"),
+    "responseCode": invocation.get("ResponseCode"),
+    "patchSha256": patch_sha,
+    "mockHost": host,
+    "privatePort": 8080,
+    "configMapUrls": {"places": urls.get("GOOGLE_PLACES_BASE_URL"), "routes": urls.get("GOOGLE_ROUTES_BASE_URL")},
+    "syntheticKeyEffective": True,
+    "rolloutObserved": True,
+    "stdoutSha256": hashlib.sha256(stdout.encode()).hexdigest(),
+    "stderrSha256": hashlib.sha256(str(invocation.get("StandardErrorContent", "")).encode()).hexdigest(),
+    "rawOutputStored": False,
+}, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+PY
+  rm -f -- "$invocation_file"
+}
+
+apply_eks_run_scoped_hpa() {
+  [[ "$TARGET_PLATFORM" == "eks" && "$ADAPTIVE_BREAKPOINT_PROFILE" == "1" ]] || return 0
+  local override="$EVIDENCE_ROOT/aws/eks-hpa-node-scale-override.yaml"
+  local invocation_file override_sha expected_max expected_n4 command
+  if [[ "$DRY_RUN" == "1" ]]; then
+    cat >"$EVIDENCE_ROOT/aws/eks-hpa-apply.json" <<EOF
+{"schemaVersion":"scrum80-hpa-receipt/v1","status":"DryRun","rawOutputStored":false}
+EOF
+    echo "[dry-run] apply run-scoped HPA max from $override" >&2
+    return 0
+  fi
+  [[ -s "$override" ]] || { echo "run-scoped HPA override is missing" >&2; return 2; }
+  override_sha="$(sha256sum "$override" | awk '{print $1}')"
+  expected_max="$(python3 - "$override" <<'PY'
+import re
+import sys
+from pathlib import Path
+match = re.search(r"^\s*maxReplicas:\s*([0-9]+)\s*$", Path(sys.argv[1]).read_text(encoding="utf-8"), re.MULTILINE)
+if not match or int(match.group(1)) < 5:
+    raise SystemExit("HPA override must contain maxReplicas >= 5")
+print(match.group(1))
+PY
+)"
+  expected_n4="$(python3 - "$override" <<'PY'
+import re
+import sys
+from pathlib import Path
+match = re.search(r"^\s*load-test\.kdt\.travelplanner/n4:\s*['\"]?([0-9]+)['\"]?\s*$", Path(sys.argv[1]).read_text(encoding="utf-8"), re.MULTILINE)
+if not match:
+    raise SystemExit("HPA override N4 annotation is missing")
+print(match.group(1))
+PY
+)"
+  invocation_file="$(mktemp "${TMPDIR:-/tmp}/scrum80-hpa-apply.XXXXXX")"
+  command="$(python3 - "$EKS_CLUSTER_NAME" "$REGION" "$BACKEND_NAMESPACE" "$BACKEND_DEPLOYMENT" "$expected_max" "$expected_n4" <<'PY'
+import json
+import shlex
+import sys
+
+cluster, region, namespace, deployment, expected_max, expected_n4 = sys.argv[1:]
+q = shlex.quote
+context = "scrum80-eks"
+patch = json.dumps({"metadata": {"annotations": {
+    "load-test.kdt.travelplanner/scope": "run-scoped-n4-plus-one",
+    "load-test.kdt.travelplanner/n4": str(expected_n4),
+}}, "spec": {"maxReplicas": int(expected_max)}}, separators=(",", ":"))
+print(
+    "set -euo pipefail; "
+    "export HOME=/root KUBECONFIG=/root/.kube/config; "
+    f"aws eks update-kubeconfig --name {q(cluster)} --region {q(region)} --alias {q(context)} >/dev/null; "
+    f"kubectl --context {q(context)} --namespace {q(namespace)} patch hpa {q(deployment)} --type strategic --patch {q(patch)} >/dev/null; "
+    "printf '%s\\n' __SCRUM80_HPA_APPLY_BEGIN__; "
+    f"kubectl --context {q(context)} --namespace {q(namespace)} get hpa {q(deployment)} -o json; "
+    "printf '%s\\n' __SCRUM80_HPA_APPLY_END__"
+)
+PY
+)"
+  run_eks_bastion_command "$command" "SCRUM-80 apply run-scoped N4+1 HPA" "$invocation_file"
+  python3 "$REPOSITORY_ROOT/scripts/loadtest/aws/eks_target_adapter.py" sanitize-hpa-apply \
+    --cluster-name "$EKS_CLUSTER_NAME" --invocation-json "$invocation_file" \
+    --expected-max-replicas "$expected_max" --override-sha256 "$override_sha" \
+    >"$EVIDENCE_ROOT/aws/eks-hpa-apply.json"
+  rm -f -- "$invocation_file"
+}
+
+restore_eks_canonical_hpa() {
+  [[ "$TARGET_PLATFORM" == "eks" && "$ADAPTIVE_BREAKPOINT_PROFILE" == "1" ]] || return 0
+  local invocation_file command
+  invocation_file="$(mktemp "${TMPDIR:-/tmp}/scrum80-hpa-restore.XXXXXX")"
+  command="$(python3 - "$EKS_CLUSTER_NAME" "$REGION" "$BACKEND_NAMESPACE" "$BACKEND_DEPLOYMENT" <<'PY'
+import json
+import shlex
+import sys
+
+cluster, region, namespace, deployment = sys.argv[1:]
+q = shlex.quote
+context = "scrum80-eks"
+patch = json.dumps({"metadata": {"annotations": {
+    "load-test.kdt.travelplanner/scope": None,
+    "load-test.kdt.travelplanner/n4": None,
+}}, "spec": {"minReplicas": 2, "maxReplicas": 4}}, separators=(",", ":"))
+print(
+    "set -euo pipefail; "
+    "export HOME=/root KUBECONFIG=/root/.kube/config; "
+    f"aws eks update-kubeconfig --name {q(cluster)} --region {q(region)} --alias {q(context)} >/dev/null; "
+    f"kubectl --context {q(context)} --namespace {q(namespace)} patch hpa {q(deployment)} --type strategic --patch {q(patch)} >/dev/null; "
+    "printf '%s\\n' __SCRUM80_HPA_RESTORE_BEGIN__; "
+    f"kubectl --context {q(context)} --namespace {q(namespace)} get hpa {q(deployment)} -o json; "
+    "printf '%s\\n' __SCRUM80_HPA_RESTORE_END__"
+)
+PY
+)"
+  run_eks_bastion_command "$command" "SCRUM-80 restore canonical HPA 2/4" "$invocation_file"
+  if [[ "$DRY_RUN" == "1" ]]; then
+    cat >"$EVIDENCE_ROOT/aws/eks-hpa-restore.json" <<EOF
+{"schemaVersion":"scrum80-hpa-restore/v1","status":"DryRun","minReplicas":2,"maxReplicas":4,"rawOutputStored":false}
+EOF
+    rm -f -- "$invocation_file"
+    return 0
+  fi
+  python3 - "$invocation_file" "$EVIDENCE_ROOT/aws/eks-hpa-restore.json" <<'PY'
+import hashlib
+import json
+import re
+import sys
+from pathlib import Path
+
+invocation_path, output_path = sys.argv[1:]
+invocation = json.loads(Path(invocation_path).read_text(encoding="utf-8"))
+stdout = str(invocation.get("StandardOutputContent", ""))
+match = re.search(r"__SCRUM80_HPA_RESTORE_BEGIN__\s*(.*?)\s*__SCRUM80_HPA_RESTORE_END__", stdout, re.DOTALL)
+if not match:
+    raise SystemExit("HPA restore receipt markers are missing")
+hpa = json.loads(match.group(1))
+spec = hpa.get("spec") or {}
+if spec.get("minReplicas") != 2 or spec.get("maxReplicas") != 4:
+    raise SystemExit("canonical HPA did not return to 2/4")
+annotations = hpa.get("metadata", {}).get("annotations") or {}
+if annotations.get("load-test.kdt.travelplanner/scope") is not None or annotations.get("load-test.kdt.travelplanner/n4") is not None:
+    raise SystemExit("run-scoped HPA annotations remain after restore")
+Path(output_path).write_text(json.dumps({
+    "schemaVersion": "scrum80-hpa-restore/v1",
+    "status": invocation.get("Status"),
+    "responseCode": invocation.get("ResponseCode"),
+    "minReplicas": spec.get("minReplicas"),
+    "maxReplicas": spec.get("maxReplicas"),
+    "scopeAnnotationsRemoved": True,
+    "stdoutSha256": hashlib.sha256(stdout.encode()).hexdigest(),
+    "stderrSha256": hashlib.sha256(str(invocation.get("StandardErrorContent", "")).encode()).hexdigest(),
+    "rawOutputStored": False,
+}, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+PY
+  rm -f -- "$invocation_file"
+}
+
+restore_eks_google_api_binding() {
+  [[ "$TARGET_PLATFORM" == "eks" && "$ADAPTIVE_BREAKPOINT_PROFILE" == "1" ]] || return 0
+  local invocation_file command
+  invocation_file="$(mktemp "${TMPDIR:-/tmp}/scrum80-mock-restore.XXXXXX")"
+  command="$(python3 - "$EKS_CLUSTER_NAME" "$REGION" "$BACKEND_NAMESPACE" "$BACKEND_DEPLOYMENT" <<'PY'
+import json
+import shlex
+import sys
+
+cluster, region, namespace, deployment = sys.argv[1:]
+q = shlex.quote
+context = "scrum80-eks"
+config_patch = json.dumps({"data": {
+    "GOOGLE_PLACES_BASE_URL": "https://places.googleapis.com",
+    "GOOGLE_ROUTES_BASE_URL": "https://routes.googleapis.com",
+}}, separators=(",", ":"))
+deployment_patch = json.dumps({"spec": {"template": {
+    "metadata": {"annotations": {"load-test.kdt.travelplanner/google-mock": None}},
+    "spec": {"containers": [{"name": "backend", "env": [{
+        "name": "GOOGLE_MAPS_API_KEY", "value": None,
+        "valueFrom": {"secretKeyRef": {"name": "backend-secret", "key": "GOOGLE_MAPS_API_KEY"}},
+    }]}]},
+}}}, separators=(",", ":"))
+print(
+    "set -euo pipefail; "
+    "export HOME=/root KUBECONFIG=/root/.kube/config; "
+    f"aws eks update-kubeconfig --name {q(cluster)} --region {q(region)} --alias {q(context)} >/dev/null; "
+    f"kubectl --context {q(context)} --namespace {q(namespace)} patch configmap backend-config --type merge --patch {q(config_patch)} >/dev/null; "
+    f"kubectl --context {q(context)} --namespace {q(namespace)} patch deployment {q(deployment)} --type strategic --patch {q(deployment_patch)} >/dev/null; "
+    f"kubectl --context {q(context)} --namespace {q(namespace)} rollout status deployment/{q(deployment)} --timeout=300s >/dev/null; "
+    "printf '%s\\n' __SCRUM80_MOCK_RESTORE_BEGIN__; "
+    f"kubectl --context {q(context)} --namespace {q(namespace)} get configmap backend-config -o json; "
+    "printf '%s\\n' __SCRUM80_MOCK_RESTORE_CONFIG_END__; "
+    f"kubectl --context {q(context)} --namespace {q(namespace)} get deployment {q(deployment)} -o json; "
+    "printf '%s\\n' __SCRUM80_MOCK_RESTORE_END__"
+)
+PY
+)"
+  run_eks_bastion_command "$command" "SCRUM-80 restore Backend Google provider binding" "$invocation_file"
+  if [[ "$DRY_RUN" == "1" ]]; then
+    cat >"$EVIDENCE_ROOT/aws/google-api-mock-restore.json" <<'EOF'
+{"schemaVersion":"scrum80-google-mock-restore/v1","status":"DryRun","providerUrlsRestored":true,"secretReferenceRestored":true,"rawOutputStored":false}
+EOF
+    rm -f -- "$invocation_file"
+    return 0
+  fi
+  python3 - "$invocation_file" "$EVIDENCE_ROOT/aws/google-api-mock-restore.json" <<'PY'
+import hashlib
+import json
+import re
+import sys
+from pathlib import Path
+
+invocation_path, output_path = sys.argv[1:]
+invocation = json.loads(Path(invocation_path).read_text(encoding="utf-8"))
+stdout = str(invocation.get("StandardOutputContent", ""))
+config_match = re.search(r"__SCRUM80_MOCK_RESTORE_BEGIN__\s*(.*?)\s*__SCRUM80_MOCK_RESTORE_CONFIG_END__", stdout, re.DOTALL)
+deployment_match = re.search(r"__SCRUM80_MOCK_RESTORE_CONFIG_END__\s*(.*?)\s*__SCRUM80_MOCK_RESTORE_END__", stdout, re.DOTALL)
+if not config_match or not deployment_match:
+    raise SystemExit("mock restore receipt markers are missing")
+config = json.loads(config_match.group(1))
+deployment = json.loads(deployment_match.group(1))
+urls = config.get("data") or {}
+if urls.get("GOOGLE_PLACES_BASE_URL") != "https://places.googleapis.com" or urls.get("GOOGLE_ROUTES_BASE_URL") != "https://routes.googleapis.com":
+    raise SystemExit("Backend ConfigMap did not return to provider URLs")
+env = []
+for container in deployment.get("spec", {}).get("template", {}).get("spec", {}).get("containers") or []:
+    if isinstance(container, dict) and container.get("name") == "backend":
+        env = container.get("env") or []
+        break
+key = next((item for item in env if isinstance(item, dict) and item.get("name") == "GOOGLE_MAPS_API_KEY"), None)
+if not isinstance(key, dict) or key.get("value") is not None or key.get("valueFrom") != {"secretKeyRef": {"name": "backend-secret", "key": "GOOGLE_MAPS_API_KEY"}}:
+    raise SystemExit("Backend Google provider secret reference was not restored")
+Path(output_path).write_text(json.dumps({
+    "schemaVersion": "scrum80-google-mock-restore/v1",
+    "status": invocation.get("Status"),
+    "responseCode": invocation.get("ResponseCode"),
+    "providerUrlsRestored": True,
+    "secretReferenceRestored": True,
+    "stdoutSha256": hashlib.sha256(stdout.encode()).hexdigest(),
+    "stderrSha256": hashlib.sha256(str(invocation.get("StandardErrorContent", "")).encode()).hexdigest(),
+    "rawOutputStored": False,
+}, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+PY
+  rm -f -- "$invocation_file"
+}
+
 seed_credentials() {
   local fixture_id="${1:-seed}"
+  local incremental="${2:-0}"
   if [[ "$DRY_RUN" == "1" ]]; then
-    echo "[dry-run] seed-aws-load-data.py --run-id $RUN_ID --users $USERS --reset-fixture --fixture-id $fixture_id" >&2
+    local dry_index_width=3
+    [[ "$ADAPTIVE_BREAKPOINT_PROFILE" == "1" ]] && dry_index_width=6
+    local dry_mode="--reset-fixture"
+    [[ "$incremental" == "1" ]] && dry_mode="--incremental"
+    echo "[dry-run] seed-aws-load-data.py --run-id $RUN_ID --users $USERS --index-width $dry_index_width $dry_mode --fixture-id $fixture_id" >&2
     return 0
   fi
   for required in DATABASE_HOST DATABASE_NAME DATABASE_SECRET_ARN S3_BUCKET REDIS_HOST REDIS_IAM_USER REDIS_REPLICATION_GROUP_ID; do
     if [[ -z "${!required}" ]]; then echo "--${required,,} is required for seed" >&2; exit 2; fi
   done
+  local index_width=3
+  [[ "$ADAPTIVE_BREAKPOINT_PROFILE" == "1" ]] && index_width=6
   local -a seed_args=(
     --run-id "$RUN_ID" --users "$USERS"
+    --index-width "$index_width"
     --expected-account-id "$EXPECTED_ACCOUNT_ID" --region "$REGION"
     --database-host "$DATABASE_HOST" --database-port "$DATABASE_PORT"
     --database-name "$DATABASE_NAME"
@@ -980,9 +1383,16 @@ seed_credentials() {
     --redis-host "$REDIS_HOST" --redis-port "$REDIS_PORT"
     --redis-iam-user "$REDIS_IAM_USER" --redis-replication-group-id "$REDIS_REPLICATION_GROUP_ID"
     --base-url "$BASE_URL" --data-file "$DATA_FILE"
-    --reset-fixture --fixture-id "$fixture_id"
+    --fixture-id "$fixture_id"
     --fixture-result-file "$FIXTURES_DIR/$fixture_id.json"
   )
+  # The non-adaptive call remains equivalent to --reset-fixture --fixture-id "$fixture_id";
+  # arrays keep the adaptive --incremental switch free of quoting ambiguity.
+  if [[ "$incremental" == "1" ]]; then
+    seed_args+=(--incremental)
+  else
+    seed_args+=(--reset-fixture)
+  fi
   mkdir -p "$FIXTURES_DIR"
   python3 "$REPOSITORY_ROOT/scripts/loadtest/aws/seed-aws-load-data.py" "${seed_args[@]}"
 }
@@ -1075,8 +1485,276 @@ print(total)
 PY
 }
 
+seal_adaptive_stage() {
+  local stage_dir="$1"
+  local minimum_headroom="${MIN_DISK_HEADROOM_BYTES:-5368709120}"
+  python3 - "$stage_dir" "$minimum_headroom" <<'PY'
+import gzip
+import hashlib
+import json
+import os
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+stage_dir = Path(sys.argv[1]).resolve()
+minimum_headroom = int(sys.argv[2])
+raw = stage_dir / "raw.json"
+if not raw.is_file():
+    raise SystemExit("INCOMPLETE_OBSERVABILITY: stage raw.json is missing")
+stat = os.statvfs(stage_dir)
+free = stat.f_frsize * stat.f_bavail
+if free < minimum_headroom:
+    raise SystemExit("INCOMPLETE_EVIDENCE_CAPACITY: Runner disk headroom is below the accepted guard")
+compressed = stage_dir / "raw.json.gz"
+with raw.open("rb") as source, gzip.open(compressed, "wb", compresslevel=6) as target:
+    while True:
+        chunk = source.read(1024 * 1024)
+        if not chunk:
+            break
+        target.write(chunk)
+def digest(path: Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
+(stage_dir / "stage-seal.json").write_text(json.dumps({
+    "schemaVersion": "scrum80-stage-seal/v1",
+    "rawPath": raw.name,
+    "rawGzipPath": compressed.name,
+    "rawBytes": raw.stat().st_size,
+    "rawGzipBytes": compressed.stat().st_size,
+    "rawSha256": digest(raw),
+    "rawGzipSha256": digest(compressed),
+    "freeBytesAfterSeal": free,
+    "sealedAtUtc": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
+}, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+PY
+}
+
+append_adaptive_stage_manifest() {
+  local target="$1" reason="$2" stage_dir="$3" evaluator_status="$4"
+  python3 - "$EVIDENCE_ROOT/campaign-manifest.json" "$RUN_ID" "$target" "$reason" "$stage_dir" "$evaluator_status" <<'PY'
+import json
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+output, run_id, target, reason, stage_dir, evaluator_status = sys.argv[1:]
+path = Path(output)
+payload = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {
+    "schemaVersion": "scrum80-adaptive-campaign/v1", "runId": run_id,
+    "startRate": 256, "nextRateExpression": "R[n+1] = R[n] * 2",
+    "fixedRpsCeiling": None, "stages": [], "actualTerminal": None,
+}
+payload["stages"].append({
+    "targetRate": int(target), "controllerReason": reason,
+    "evaluatorExitCode": int(evaluator_status), "runDir": stage_dir,
+    "recordedAtUtc": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
+})
+if reason in {
+    "NODE_MAX_PENDING", "NODE_SCALE_NOT_TRIGGERED", "NODE_SCALE_FAILED",
+    "NODE_COMPUTE_SATURATION", "SLO_COLLAPSE", "THROUGHPUT_PLATEAU",
+    "HPA_CAPACITY_EXHAUSTED", "BACKEND_OOM", "BACKEND_UNHEALTHY",
+    "ALB_SATURATION", "DATA_TIER_SATURATION",
+}:
+    payload["actualTerminal"] = {"reason": reason, "targetRate": int(target)}
+path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+PY
+}
+
+adaptive_capacity_stress_stage() {
+  local nominal_hold extension_seconds max_stage_seconds stability_seconds
+  nominal_hold="$(python3 - "$PROFILE" <<'PY'
+import json, sys
+value = (json.load(open(sys.argv[1]))["capacityStress"])["nominalHoldSeconds"]
+if not isinstance(value, int) or value <= 0: raise SystemExit("nominalHoldSeconds must be positive")
+print(value)
+PY
+)"
+  extension_seconds="$(python3 - "$PROFILE" <<'PY'
+import json, sys
+value = (json.load(open(sys.argv[1]))["capacityStress"])["conditionalExtensionSeconds"]
+if not isinstance(value, int) or value <= 0: raise SystemExit("conditionalExtensionSeconds must be positive")
+print(value)
+PY
+)"
+  max_stage_seconds="$(python3 - "$PROFILE" <<'PY'
+import json, sys
+value = (json.load(open(sys.argv[1]))["capacityStress"])["maxSingleStageSeconds"]
+if not isinstance(value, int) or value <= 0: raise SystemExit("maxSingleStageSeconds must be positive")
+print(value)
+PY
+)"
+  stability_seconds="$(python3 - "$PROFILE" <<'PY'
+import json, sys
+value = (json.load(open(sys.argv[1]))["capacityStress"])["stabilitySeconds"]
+if not isinstance(value, int) or value <= 0: raise SystemExit("stabilitySeconds must be positive")
+print(value)
+PY
+)"
+  if [[ "$DRY_RUN" == "1" ]]; then
+    echo "[dry-run] adaptive EKS stages: 256 -> 2R, hold=${nominal_hold}s (+${extension_seconds}s only during active transition), no RPS ceiling" >&2
+    return 0
+  fi
+  local target_rate=256
+  local stage_index=0
+  local final_reason=""
+  local operator_max_vus="$MAX_VUS"
+  mkdir -p "$EVIDENCE_ROOT"
+  export REPOSITORY_ROOT EVIDENCE_ROOT BASE_URL REGION ENVIRONMENT TARGET_PLATFORM
+  export RUN_ID AWS_PROFILE_FILE DATA_FILE K6_IMAGE_DIGEST="$K6_IMAGE" AWS_SLO_CONTRACT_FILE="$SLO_CONTRACT"
+  export EKS_CLUSTER_NAME EKS_NODE_GROUP_NAME EKS_BASTION_ID BACKEND_NAMESPACE BACKEND_DEPLOYMENT TARGET_GROUP_ARN
+  export MAX_RATE MAX_VUS
+  local alb_dimension target_group_dimension
+  alb_dimension="$(python3 - "$EVIDENCE_ROOT/aws/resource-dimensions.json" <<'PY'
+import json, sys
+from pathlib import Path
+path = Path(sys.argv[1])
+print(json.loads(path.read_text(encoding="utf-8")).get("albDimension", "") if path.is_file() else "")
+PY
+)"
+  target_group_dimension="$(python3 - "$EVIDENCE_ROOT/aws/resource-dimensions.json" <<'PY'
+import json, sys
+from pathlib import Path
+path = Path(sys.argv[1])
+print(json.loads(path.read_text(encoding="utf-8")).get("targetGroupDimension", "") if path.is_file() else "")
+PY
+)"
+  while :; do
+    local stage_max_vus stage_preallocated_vus stage_dir snapshot_file observer_pid coordinator_status observer_status evaluator_status controller_reason
+    stage_max_vus="$(python3 - "$target_rate" "$operator_max_vus" "$PROFILE" <<'PY'
+import json, math, sys
+target, operator, profile_path = sys.argv[1:]
+target = int(target); operator = int(operator)
+max_vus = max(512, target * 2)
+profile_max = int(json.load(open(profile_path))["limits"]["maxVUs"])
+if max_vus > profile_max or max_vus > operator:
+    raise SystemExit(3)
+print(max_vus)
+PY
+)" || {
+      final_reason="INCOMPLETE_CREDENTIAL_CAPACITY"
+      python3 - "$EVIDENCE_ROOT/incomplete-stop.json" "$RUN_ID" "$target_rate" "$operator_max_vus" <<'PY'
+import json, sys
+from datetime import datetime, timezone
+from pathlib import Path
+output, run_id, target, operator = sys.argv[1:]
+Path(output).write_text(json.dumps({
+  "runId": run_id, "reason": "INCOMPLETE_CREDENTIAL_CAPACITY", "targetRate": int(target),
+  "operatorMaxVUs": int(operator), "recordedAtUtc": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+}, indent=2) + "\n", encoding="utf-8")
+PY
+      return 2
+    }
+    stage_preallocated_vus="$(python3 - "$target_rate" <<'PY'
+import sys
+print(max(256, int(sys.argv[1])))
+PY
+)"
+    stage_dir="$EVIDENCE_ROOT/k6/rate-$target_rate"
+    snapshot_file="$stage_dir/snapshots.jsonl"
+    mkdir -p "$stage_dir"
+    USERS="$stage_max_vus"
+    CAPACITY_STRESS_MAX_VUS="$stage_max_vus"
+    CAPACITY_STRESS_PREALLOCATED_VUS="$stage_preallocated_vus"
+    CAPACITY_TARGET_RATE="$target_rate"
+    CAPACITY_STAGE_INDEX="$stage_index"
+    CAPACITY_STAGE_DURATION="${max_stage_seconds}s"
+    export USERS CAPACITY_STRESS_MAX_VUS CAPACITY_STRESS_PREALLOCATED_VUS CAPACITY_TARGET_RATE CAPACITY_STAGE_INDEX CAPACITY_STAGE_DURATION
+    seed_credentials "capacity-$target_rate" 1
+    export CAPACITY_STAGE_DIR="$stage_dir"
+    python3 "$REPOSITORY_ROOT/scripts/loadtest/record-rehearsal-event.py" "$stage_dir" STAGE_START "adaptive target ${target_rate} RPS" --actor automation
+    observer_pid=""
+    observer_status=0
+    coordinator_status=0
+    evaluator_status=2
+    python3 "$REPOSITORY_ROOT/scripts/loadtest/aws/observe-aws-capacity-stress.py" \
+      --run-dir "$stage_dir" --metadata-file "$stage_dir/metadata.json" \
+      --platform eks --region "$REGION" --cluster-name "$EKS_CLUSTER_NAME" \
+      --node-group-name "$EKS_NODE_GROUP_NAME" --eks-bastion-id "$EKS_BASTION_ID" \
+      --target-group-arn "$TARGET_GROUP_ARN" --namespace "$BACKEND_NAMESPACE" \
+      --deployment "$BACKEND_DEPLOYMENT" --rds-instance-id "$DB_INSTANCE_IDENTIFIER" \
+      --redis-cluster-id "$CACHE_CLUSTER_ID" --alb-dimension "$alb_dimension" \
+      --target-group-dimension "$target_group_dimension" --eks-evidence-file "$EVIDENCE_ROOT/aws/eks-evidence.json" \
+      --runner-stats-file "$stage_dir/runner-stats.jsonl" --slo-window-file "$stage_dir/slo-windows.jsonl" \
+      --snapshot-file "$snapshot_file" --poll-seconds "${CAPACITY_OBSERVER_POLL_SECONDS:-10}" \
+      > "$stage_dir/observer.log" 2>&1 &
+    observer_pid=$!
+    set +e
+    python3 "$REPOSITORY_ROOT/scripts/loadtest/aws/coordinate-aws-capacity-stress.py" \
+      --run-dir "$stage_dir" --snapshot-file "$snapshot_file" --campaign-stage capacity-stress \
+      --adaptive --nominal-hold-seconds "$nominal_hold" \
+      --conditional-extension-seconds "$extension_seconds" --max-stage-seconds "$max_stage_seconds" \
+      --capacity-stability-seconds "$stability_seconds" --poll-seconds "${CAPACITY_COORDINATOR_POLL_SECONDS:-10}" -- \
+      "$REPOSITORY_ROOT/scripts/loadtest/aws/run-aws-b01.sh" capacity-stress
+    coordinator_status=$?
+    if kill -0 "$observer_pid" 2>/dev/null; then kill "$observer_pid" 2>/dev/null || true; fi
+    wait "$observer_pid" 2>/dev/null
+    observer_status=$?
+    if [[ -f "$stage_dir/summary.json" ]]; then
+      python3 "$REPOSITORY_ROOT/scripts/loadtest/aws/evaluate-aws-capacity-stress.py" \
+        --run-dir "$stage_dir" --slo-contract "$SLO_CONTRACT" \
+        --capacity-stability-seconds "$stability_seconds"
+      evaluator_status=$?
+    fi
+    controller_reason="$(python3 - "$stage_dir/controller-result.json" <<'PY'
+import json, sys
+from pathlib import Path
+path = Path(sys.argv[1])
+print(json.loads(path.read_text(encoding="utf-8")).get("terminalReason", "INCOMPLETE_OBSERVABILITY") if path.is_file() else "INCOMPLETE_OBSERVABILITY")
+PY
+)"
+    set -e
+    if [[ "$controller_reason" == "STAGE_COMPLETE" ]]; then
+      if python3 - "$stage_dir/controller-result.json" <<'PY'
+import json, sys
+from pathlib import Path
+path = Path(sys.argv[1])
+raise SystemExit(0 if path.is_file() and json.loads(path.read_text()).get("extensionStarted") else 1)
+PY
+      then
+        python3 "$REPOSITORY_ROOT/scripts/loadtest/record-rehearsal-event.py" "$stage_dir" STAGE_EXTENSION "adaptive target ${target_rate} RPS extended for active scale transition" --actor automation
+      fi
+      python3 "$REPOSITORY_ROOT/scripts/loadtest/record-rehearsal-event.py" "$stage_dir" STAGE_END "adaptive target ${target_rate} RPS completed" --actor automation
+    elif [[ "$controller_reason" == INCOMPLETE_* ]]; then
+      python3 "$REPOSITORY_ROOT/scripts/loadtest/record-rehearsal-event.py" "$stage_dir" INCOMPLETE "$controller_reason at ${target_rate} RPS" --actor automation
+    else
+      python3 "$REPOSITORY_ROOT/scripts/loadtest/record-rehearsal-event.py" "$stage_dir" TERMINAL "$controller_reason at ${target_rate} RPS" --actor automation
+    fi
+    append_adaptive_stage_manifest "$target_rate" "$controller_reason" "k6/rate-$target_rate" "$evaluator_status"
+    if ! seal_adaptive_stage "$stage_dir"; then
+      final_reason="INCOMPLETE_EVIDENCE_CAPACITY"
+      return 2
+    fi
+    case "$controller_reason" in
+      NODE_MAX_PENDING|NODE_SCALE_NOT_TRIGGERED|NODE_SCALE_FAILED|NODE_COMPUTE_SATURATION|SLO_COLLAPSE|THROUGHPUT_PLATEAU|HPA_CAPACITY_EXHAUSTED|BACKEND_OOM|BACKEND_UNHEALTHY|ALB_SATURATION|DATA_TIER_SATURATION)
+        if [[ "$evaluator_status" -ne 0 ]]; then
+          final_reason="INCOMPLETE_OBSERVABILITY"
+          return 2
+        fi
+        final_reason="$controller_reason"
+        return 0
+        ;;
+      STAGE_COMPLETE)
+        target_rate=$((target_rate * 2))
+        stage_index=$((stage_index + 1))
+        ;;
+      *)
+        final_reason="INCOMPLETE_OBSERVABILITY"
+        return 2
+        ;;
+    esac
+  done
+}
+
 capacity_stress_stage() {
   local campaign_stage="${1:-capacity-stress}"
+  if [[ "$ADAPTIVE_BREAKPOINT_PROFILE" == "1" && "$campaign_stage" == "capacity-stress" ]]; then
+    adaptive_capacity_stress_stage
+    return $?
+  fi
   local capacity_run_dir="$EVIDENCE_ROOT/k6/$campaign_stage"
   local snapshot_file="$capacity_run_dir/snapshots.jsonl"
   local schedule_seconds hard_ceiling_seconds
@@ -1096,7 +1774,12 @@ PY
     return 2
   fi
   schedule_seconds="$(capacity_stress_schedule_seconds "$campaign_stage")"
-  hard_ceiling_seconds="$(python3 - "$PROFILE" <<'PY'
+  if [[ "$ADAPTIVE_BREAKPOINT_PROFILE" == "1" && "$campaign_stage" == "recovery" ]]; then
+    # Recovery is a fixed two-minute low-rate observation, not part of the
+    # unbounded breakpoint progression and therefore has its own small guard.
+    hard_ceiling_seconds=120
+  else
+    hard_ceiling_seconds="$(python3 - "$PROFILE" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -1107,7 +1790,8 @@ if not isinstance(value, int) or value <= 0:
     raise SystemExit("capacityStress.hardTimeCeilingSeconds must be a positive integer")
 print(value)
 PY
-)"
+    )"
+  fi
   if [[ "$DRY_RUN" == "1" ]]; then
     echo "[dry-run] observer + coordinator + evaluator for EKS $campaign_stage (schedule=${schedule_seconds}s ceiling=${hard_ceiling_seconds}s)" >&2
     echo "[dry-run] run-aws-b01.sh $campaign_stage" >&2
@@ -1164,6 +1848,12 @@ k6_phase_stage() {
   local phase="$1"
   local baseline_rep="${2:-}"
   echo "[b01] $phase"
+  if [[ "$phase" == "capacity-stress" && "$TARGET_PLATFORM" == "eks" && "$ADAPTIVE_BREAKPOINT_PROFILE" == "1" ]]; then
+    # The adaptive campaign owns its per-rate credential top-up and invokes
+    # one coordinator/k6 process per stage.  Do not reset or reseed here.
+    capacity_stress_stage "$phase"
+    return $?
+  fi
   validate_phase_credential_capacity "$phase"
   if [[ "$phase" == "spike" ]]; then
     require_d005_record_gate
@@ -1192,7 +1882,7 @@ k6_phase_stage() {
   export BASELINE_PREALLOCATED_VUS BASELINE_MAX_VUS
   export SPIKE_PREALLOCATED_VUS SPIKE_MAX_VUS SPIKE_PEAK_MULTIPLIER SPIKE_HOLD
   export SOAK_PREALLOCATED_VUS SOAK_MAX_VUS SCALE_STEP_PREALLOCATED_VUS SCALE_STEP_MAX_VUS
-  export CAPACITY_STRESS_PREALLOCATED_VUS CAPACITY_STRESS_MAX_VUS
+  export CAPACITY_STRESS_PREALLOCATED_VUS CAPACITY_STRESS_MAX_VUS CAPACITY_TARGET_RATE CAPACITY_STAGE_INDEX CAPACITY_STAGE_DURATION
   export AWS_SLO_CONTRACT_FILE="$SLO_CONTRACT"
   if [[ "$phase" == "baseline" && "$TARGET_PLATFORM" == "eks" ]]; then
     export CAPACITY_STAGE="baseline"
@@ -1219,6 +1909,15 @@ validate_confirmed_rate() {
   if [[ -z "$CONFIRMED_RATE" ]]; then
     echo "--confirmed-rate is required for $MODE" >&2
     exit 2
+  fi
+  if [[ "$ADAPTIVE_BREAKPOINT_PROFILE" == "1" ]]; then
+    python3 - "$CONFIRMED_RATE" <<'PY'
+import math, sys
+try: value = float(sys.argv[1])
+except (TypeError, ValueError): raise SystemExit("--confirmed-rate must be a positive finite number")
+if not math.isfinite(value) or value <= 0: raise SystemExit("--confirmed-rate must be a positive finite number")
+PY
+    return 0
   fi
   python3 - "$CONFIRMED_RATE" "$MAX_RATE" <<'PY'
 import math
@@ -1389,6 +2088,7 @@ paths = [evidence_root / "operations.jsonl"] + sorted((evidence_root / "k6").glo
 for path in paths:
     if not path.exists():
         continue
+    event_times = []
     for line in path.read_text(encoding="utf-8").splitlines():
         event = json.loads(line)
         name = event.get("event")
@@ -1396,6 +2096,7 @@ for path in paths:
             continue
         import datetime
         time_ms = int(datetime.datetime.fromisoformat(event["ts"].replace("Z", "+00:00")).timestamp() * 1000)
+        event_times.append(time_ms)
         payload = {
             "time": time_ms,
             "tags": ["scenario:B-01", f"platform:{target_platform}", f"run:{run_id}", EVENT_TAGS[name]],
@@ -1412,6 +2113,35 @@ for path in paths:
                 results.append({"status": response.status, "time": time_ms, "tags": payload["tags"]})
         except (HTTPError, URLError) as error:
             results.append({"status": "error", "detail": str(error), "time": time_ms, "tags": payload["tags"]})
+    mock_path = path.parent / "mock" / "evidence.json"
+    if mock_path.exists():
+        mock = json.loads(mock_path.read_text(encoding="utf-8"))
+        health = mock.get("health") if isinstance(mock.get("health"), dict) else {}
+        requests = mock.get("requests") if isinstance(mock.get("requests"), dict) else {}
+        headroom = mock.get("headroom") if isinstance(mock.get("headroom"), dict) else {}
+        validity = str(mock.get("validity", "unknown"))[:32]
+        health_state = "ok" if health.get("ok") is True else "failed"
+        five_xx = min(max(int(requests.get("http5xxLines", 0) or 0), 0), 999999)
+        cpu = headroom.get("maxCpuPercent")
+        memory = headroom.get("maxMemoryPercent")
+        headroom_state = "limited" if any(isinstance(value, (int, float)) and value >= 90 for value in (cpu, memory)) else "ok"
+        results.append({
+            "status": 200,
+            "time": max(event_times or [0]),
+            "tags": [
+                "scenario:B-01", f"platform:{target_platform}", f"run:{run_id}",
+                "mock-validity", f"mock-validity:{validity}", f"mock-health:{health_state}",
+                f"mock-5xx:{five_xx}", f"mock-headroom:{headroom_state}",
+                "provenance:runner-mock-evidence",
+            ],
+            "text": (
+                "MOCK_VALIDITY: "
+                f"validity={validity} health={health_state} "
+                f"requests={min(max(int(requests.get('accessLogLines', 0) or 0), 0), 999999)} "
+                f"http5xx={five_xx} maxCpuPercent={cpu} maxMemoryPercent={memory}; "
+                "source=mock/evidence.json (Runner-local sealed evidence)"
+            )[:500],
+        })
 (evidence_root / "grafana" / "annotations.json").write_text(
     json.dumps({"grafanaUrl": url, "annotationCount": len(results), "results": results}, indent=2) + "\n",
     encoding="utf-8",
@@ -1461,14 +2191,18 @@ PY
 cleanup_stage() {
   echo "[b01] cleanup: run-id=$RUN_ID"
   if [[ "$DRY_RUN" == "1" ]]; then
-    echo "[dry-run] cleanup-aws-load-data.py --run-id $RUN_ID --result-file $EVIDENCE_ROOT/cleanup-result.json" >&2
+    local dry_index_width=3
+    [[ "$ADAPTIVE_BREAKPOINT_PROFILE" == "1" ]] && dry_index_width=6
+    echo "[dry-run] cleanup-aws-load-data.py --run-id $RUN_ID --index-width $dry_index_width --result-file $EVIDENCE_ROOT/cleanup-result.json" >&2
     return 0
   fi
   for required in DATABASE_HOST DATABASE_NAME DATABASE_SECRET_ARN; do
     if [[ -z "${!required}" ]]; then echo "--${required,,} is required for cleanup" >&2; exit 2; fi
   done
+  local index_width=3
+  [[ "$ADAPTIVE_BREAKPOINT_PROFILE" == "1" ]] && index_width=6
   local -a cleanup_args=(
-    --run-id "$RUN_ID" --expected-account-id "$EXPECTED_ACCOUNT_ID" --region "$REGION"
+    --run-id "$RUN_ID" --index-width "$index_width" --expected-account-id "$EXPECTED_ACCOUNT_ID" --region "$REGION"
     --database-host "$DATABASE_HOST" --database-port "$DATABASE_PORT"
     --database-name "$DATABASE_NAME"
     --database-secret-arn "$DATABASE_SECRET_ARN"
@@ -1618,8 +2352,12 @@ case "$MODE" in
     ;;
   smoke)
     run_stage_once target target_stage
+    run_stage_once mock-binding apply_eks_google_mock_binding
     run_stage_once seed seed_stage
     run_stage_once smoke k6_phase_stage smoke
+    if [[ "$ADAPTIVE_BREAKPOINT_PROFILE" == "1" ]]; then
+      run_stage_once hpa-override apply_eks_run_scoped_hpa
+    fi
     ;;
   ramp)
     run_stage_once target target_stage
@@ -1631,7 +2369,11 @@ case "$MODE" in
   baseline)
     validate_confirmed_rate
     run_stage_once target target_stage
+    run_stage_once mock-binding apply_eks_google_mock_binding
     run_stage_once seed seed_stage
+    if [[ "$ADAPTIVE_BREAKPOINT_PROFILE" == "1" ]]; then
+      run_stage_once hpa-override apply_eks_run_scoped_hpa
+    fi
     for rep in 1 2 3; do
       run_stage_once "baseline-$rep" k6_phase_stage baseline "$rep"
     done
@@ -1643,7 +2385,11 @@ case "$MODE" in
     fi
     validate_confirmed_rate
     run_stage_once target target_stage
+    run_stage_once mock-binding apply_eks_google_mock_binding
     run_stage_once seed seed_stage
+    if [[ "$ADAPTIVE_BREAKPOINT_PROFILE" == "1" ]]; then
+      run_stage_once hpa-override apply_eks_run_scoped_hpa
+    fi
     run_stage_once baseline k6_phase_stage baseline 1
     ;;
   pod-scale-out|node-scale-out-breakpoint|recovery)
@@ -1653,8 +2399,15 @@ case "$MODE" in
     fi
     validate_confirmed_rate
     run_stage_once target target_stage
+    run_stage_once mock-binding apply_eks_google_mock_binding
     run_stage_once seed seed_stage
+    if [[ "$MODE" == "recovery" && "$ADAPTIVE_BREAKPOINT_PROFILE" == "1" ]]; then
+      run_stage_once hpa-restore restore_eks_canonical_hpa
+    fi
     run_stage_once "$MODE" k6_phase_stage "$MODE"
+    if [[ "$MODE" == "recovery" && "$ADAPTIVE_BREAKPOINT_PROFILE" == "1" ]]; then
+      run_stage_once mock-restore restore_eks_google_api_binding
+    fi
     ;;
   d005-record)
     validate_confirmed_rate
@@ -1684,7 +2437,11 @@ case "$MODE" in
   capacity-stress)
     validate_confirmed_rate
     run_stage_once target target_stage
+    run_stage_once mock-binding apply_eks_google_mock_binding
     run_stage_once seed seed_stage
+    if [[ "$ADAPTIVE_BREAKPOINT_PROFILE" == "1" ]]; then
+      run_stage_once hpa-override apply_eks_run_scoped_hpa
+    fi
     run_stage_once capacity-stress k6_phase_stage capacity-stress
     ;;
   evidence)
@@ -1704,6 +2461,29 @@ case "$MODE" in
     ;;
   all)
     run_stage_once target target_stage
+    if [[ "$ADAPTIVE_BREAKPOINT_PROFILE" == "1" ]]; then
+      run_stage_once mock-binding apply_eks_google_mock_binding
+      run_stage_once seed seed_stage
+      run_stage_once smoke k6_phase_stage smoke
+      run_stage_once hpa-override apply_eks_run_scoped_hpa
+      run_stage_once baseline k6_phase_stage baseline 1
+      run_stage_once capacity-stress k6_phase_stage capacity-stress
+      run_stage_once hpa-restore restore_eks_canonical_hpa
+      run_stage_once recovery k6_phase_stage recovery
+      run_stage_once mock-restore restore_eks_google_api_binding
+      run_stage_once evidence evidence_stage
+      run_stage_once cleanup cleanup_stage
+      run_stage_once provisional-review provisional_review_stage
+      if [[ -z "$SLO_FREEZE_APPROVED_BY" ]]; then
+        echo "[b01] Adaptive EKS campaign evidence is ready; D-006 needs an operator decision before final export."
+        echo "      Review $EVIDENCE_ROOT/provisional-review.json, then re-run with --slo-freeze-approved-by <name>."
+        exit 0
+      fi
+      run_stage_once freeze freeze_stage
+      run_stage_once export export_stage
+      echo "[b01] adaptive EKS campaign complete; dev-eks/dev-load-test teardown remains a separate exact delete-only step"
+      exit 0
+    fi
     run_stage_once seed seed_stage
     run_stage_once smoke k6_phase_stage smoke
     run_stage_once ramp k6_phase_stage ramp

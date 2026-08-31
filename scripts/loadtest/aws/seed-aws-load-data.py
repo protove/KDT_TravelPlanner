@@ -84,7 +84,17 @@ REDIS_TOKEN_HASH_PATTERN = re.compile(r"^[a-f0-9]{64}$")
 POSTGRES_CLIENT_IMAGE = "postgres:17-alpine"
 REDIS_CLIENT_IMAGE = "redis:7-alpine"
 EXPECTED_TIMELINE_ITEMS_PER_PLANNER = 3
-MAX_SYNTHETIC_USERS = 320
+# The current-feature workload needs one deterministic Place fixture per
+# seeded timeline item plus one post/comment pair per credential.  These are
+# created through the authenticated API so the seed role keeps its existing
+# planner-only database permissions; cleanup remains user-scoped and cascades
+# the community rows.
+CURRENT_FEATURE_FIXTURE_VERSION = "aws-current-feature-fixture-v1"
+CURRENT_FEATURE_PLACE_IDS_PER_TRAVEL = EXPECTED_TIMELINE_ITEMS_PER_PLANNER
+# The adaptive EKS breakpoint tops up one deterministic credential per VU.
+# Keep a generous operational bound; the lifecycle capsule still supplies a
+# lower accepted fixture/data guard at action time.
+MAX_SYNTHETIC_USERS = 100000
 
 
 class SeedError(RuntimeError):
@@ -109,35 +119,41 @@ def new_opaque_token() -> str:
     return token
 
 
-def provider_user_id(run_id: str, index: int) -> str:
+def provider_user_id(run_id: str, index: int, index_width: int = 3) -> str:
     """Deterministic per (run_id, index) — this is what makes seeding
     idempotent and what cleanup-aws-load-data.py filters on."""
-    return f"loadtest-aws-{run_id}-{index:03d}"[:255]
+    if index_width < 3 or index_width > 6:
+        raise SeedError("index_width must be between 3 and 6")
+    if index < 1 or index >= 10 ** index_width:
+        raise SeedError("index does not fit the registered provider ID width")
+    return f"loadtest-aws-{run_id}-{index:0{index_width}d}"[:255]
 
 
-def provider_user_id_regex(run_id: str) -> str:
+def provider_user_id_regex(run_id: str, index_width: int = 3) -> str:
     """Match only this run's complete synthetic provider-user ID.
 
     A prefix-only LIKE predicate would make ``run-a`` overlap ``run-a-x``.
-    The provider ID contract always terminates in a three-digit index, so an
+    The provider ID contract terminates in the registered index width, so an
     anchored PostgreSQL regular expression gives reset and count one exact
     ownership boundary without accepting a longer Run ID.
     """
-    return f"^loadtest-aws-{run_id}-[0-9]{{3}}$"
+    if index_width < 3 or index_width > 6:
+        raise SeedError("index_width must be between 3 and 6")
+    return f"^loadtest-aws-{run_id}-[0-9]{{{index_width}}}$"
 
 
-def synthetic_email(run_id: str, index: int) -> str:
+def synthetic_email(run_id: str, index: int, index_width: int = 3) -> str:
     # @loadtest.local matches the synthetic_email pattern already scanned by
     # scripts/loadtest/verify-evidence-safety.py, so existing evidence
     # scanning covers AWS runs without changes.
-    return f"{provider_user_id(run_id, index)}@loadtest.local"
+    return f"{provider_user_id(run_id, index, index_width)}@loadtest.local"
 
 
-def synthetic_nickname(run_id: str, index: int) -> str:
+def synthetic_nickname(run_id: str, index: int, index_width: int = 3) -> str:
     # nickname has its own UNIQUE constraint and a 30-char limit; derive it
     # from run_id so re-seeding the same run_id/index is deterministic.
     digest = hashlib.sha256(run_id.encode("utf-8")).hexdigest()[:10]
-    return f"lt{digest}{index:03d}"[:30]
+    return f"lt{digest}{index:0{index_width}d}"[:30]
 
 
 def parse_args() -> argparse.Namespace:
@@ -160,6 +176,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--fixture-id", default="seed", help="Sanitized phase fixture identifier recorded in evidence")
     parser.add_argument("--fixture-result-file", type=Path, help="Optional sanitized phase fixture evidence JSON path")
     parser.add_argument("--refresh-ttl-ms", type=int, default=DEFAULT_REFRESH_TTL_MS)
+    parser.add_argument("--index-width", type=int, default=3, help="Zero-padded provider ID width (3-6; default 3)")
+    parser.add_argument("--incremental", action="store_true", help="Top up an existing verified run fixture without reset/revocation")
     return parser.parse_args()
 
 
@@ -270,6 +288,21 @@ class AwsSeed:
         self.database_username = database_username
         self.database_password = database_password
         self.base_url = args.base_url.rstrip("/")
+        self.index_width = getattr(args, "index_width", 3)
+
+    @staticmethod
+    def current_feature_marker(run_id: str, index: int, index_width: int = 3) -> str:
+        """Stable, searchable owner marker for one run/user community fixture."""
+        return f"loadtest-aws-{run_id}-{index:0{index_width}d}"
+
+    @staticmethod
+    def current_feature_place_ids(run_id: str, index: int, index_width: int = 3) -> list[str]:
+        """Return the exact Google Place IDs used by the mock-backed flows."""
+        marker = AwsSeed.current_feature_marker(run_id, index, index_width)
+        return [
+            f"{marker}-place-{place_index:03d}"
+            for place_index in range(1, CURRENT_FEATURE_PLACE_IDS_PER_TRAVEL + 1)
+        ]
 
     def psql(self, sql: str) -> str:
         env = {**os.environ, "PGPASSWORD": self.database_password, "PGSSLMODE": "require"}
@@ -325,14 +358,16 @@ class AwsSeed:
             raise SeedError(f"API request failed: {error.reason}") from error
 
     def find_existing_user_id(self, run_id: str, index: int) -> str | None:
+        index_width = getattr(self, "index_width", 3)
         result = self.psql(
             "SELECT id FROM user_table WHERE provider = 'GOOGLE' AND provider_user_id = "
-            f"{sql_literal(provider_user_id(run_id, index))}"
+            f"{sql_literal(provider_user_id(run_id, index, index_width))}"
         ).strip()
         return result or None
 
     def insert_user(self, run_id: str, index: int) -> tuple[str, bool]:
         """Returns (user_id, already_existed)."""
+        index_width = getattr(self, "index_width", 3)
         existing = self.find_existing_user_id(run_id, index)
         if existing:
             return existing, True
@@ -340,9 +375,9 @@ class AwsSeed:
         insert_output = self.psql(
             "INSERT INTO user_table "
             "(id, provider, provider_user_id, email, name, nickname, profile_completed, created_at, updated_at) VALUES "
-            f"({sql_literal(user_id)}, 'GOOGLE', {sql_literal(provider_user_id(run_id, index))}, "
-            f"{sql_literal(synthetic_email(run_id, index))}, {sql_literal('LoadTest AWS ' + str(index))}, "
-            f"{sql_literal(synthetic_nickname(run_id, index))}, TRUE, now(), now()) "
+            f"({sql_literal(user_id)}, 'GOOGLE', {sql_literal(provider_user_id(run_id, index, index_width))}, "
+            f"{sql_literal(synthetic_email(run_id, index, index_width))}, {sql_literal('LoadTest AWS ' + str(index))}, "
+            f"{sql_literal(synthetic_nickname(run_id, index, index_width))}, TRUE, now(), now()) "
             "ON CONFLICT (provider, provider_user_id) DO NOTHING "
             "RETURNING id"
         )
@@ -377,7 +412,7 @@ class AwsSeed:
 
     def reset_synthetic_planners(self, run_id: str) -> int:
         """Delete only this run's planners; FK cascades remove its fixture rows."""
-        pattern = sql_literal(provider_user_id_regex(run_id))
+        pattern = sql_literal(provider_user_id_regex(run_id, getattr(self, "index_width", 3)))
         result = self.psql(
             "WITH deleted AS ("
             "DELETE FROM planners_table WHERE owner_id IN ("
@@ -392,7 +427,7 @@ class AwsSeed:
 
     def fixture_counts(self, run_id: str) -> dict[str, int]:
         """Return sanitized counts for this run's users, planners and timeline rows."""
-        pattern = sql_literal(provider_user_id_regex(run_id))
+        pattern = sql_literal(provider_user_id_regex(run_id, getattr(self, "index_width", 3)))
         result = self.psql(
             "WITH synthetic_users AS ("
             "SELECT id FROM user_table WHERE provider = 'GOOGLE' AND provider_user_id ~ "
@@ -483,11 +518,13 @@ class AwsSeed:
     def create_timeline_items(self, access_token: str, travel_id: str) -> list[str]:
         item_ids: list[str] = []
         for visit_order in (1, 2, 3):
+            place_ids = getattr(self, "_active_place_ids", [])
             status, body, _ = self.api(
                 "POST", f"/travels/{travel_id}/timeline-items", token=access_token,
                 body={
                     "dayNumber": 1, "visitDate": "2026-08-01", "category": "관광지",
                     "name": f"seed-item-{visit_order}", "visitOrder": visit_order,
+                    "googlePlaceId": place_ids[visit_order - 1] if len(place_ids) >= visit_order else None,
                 },
             )
             item_id = body.get("data", {}).get("timelineItemId") if isinstance(body, dict) else None
@@ -495,6 +532,146 @@ class AwsSeed:
                 raise SeedError(f"timeline creation contract failed with status {status}")
             item_ids.append(item_id)
         return item_ids
+
+    def _travel_detail(self, access_token: str, travel_id: str) -> dict:
+        status, body, _ = self.api("GET", f"/travels/{travel_id}", token=access_token)
+        data = body.get("data") if isinstance(body, dict) else None
+        if status != 200 or not isinstance(data, dict):
+            raise SeedError(f"current-feature travel fixture lookup failed with status {status}")
+        return data
+
+    def _ensure_place_ids(
+        self,
+        access_token: str,
+        travel_id: str,
+        timeline_ids: list[str],
+        desired_place_ids: list[str],
+        travel_detail: dict,
+    ) -> None:
+        if len(timeline_ids) < CURRENT_FEATURE_PLACE_IDS_PER_TRAVEL:
+            raise SeedError("current-feature fixture requires three timeline items")
+        timeline_by_id = {
+            str(item.get("timelineItemId")): item
+            for item in travel_detail.get("timelineItems", [])
+            if isinstance(item, dict) and item.get("timelineItemId")
+        }
+        for item_id, place_id in zip(timeline_ids, desired_place_ids):
+            current = timeline_by_id.get(str(item_id), {}).get("googlePlaceId")
+            if current == place_id:
+                continue
+            status, _, _ = self.api(
+                "PATCH",
+                f"/travels/{travel_id}/timeline-items/{item_id}",
+                token=access_token,
+                body={"googlePlaceId": place_id},
+            )
+            if status != 200:
+                raise SeedError(f"current-feature Place fixture update failed with status {status}")
+
+    def _find_or_create_post(
+        self,
+        access_token: str,
+        travel_id: str,
+        marker: str,
+    ) -> tuple[str, int]:
+        status, body, _ = self.api(
+            "GET",
+            f"/community/me/posts?{urlencode({'keyword': marker, 'page': 0, 'size': 50})}",
+            token=access_token,
+        )
+        data = body.get("data") if isinstance(body, dict) else None
+        content = data.get("content", []) if isinstance(data, dict) else []
+        post_id = None
+        for item in content if isinstance(content, list) else []:
+            if isinstance(item, dict) and marker in str(item.get("title", "")):
+                post_id = item.get("postId")
+                break
+        if status != 200:
+            raise SeedError(f"current-feature community fixture lookup failed with status {status}")
+        if not isinstance(post_id, str) or not post_id:
+            body_json = {
+                "type": "doc",
+                "content": [{"type": "paragraph", "content": [{"type": "text", "text": marker}]}],
+            }
+            status, body, _ = self.api(
+                "POST",
+                "/community/posts",
+                token=access_token,
+                body={
+                    "categoryCode": "TRAVEL_REVIEW",
+                    "title": f"{marker} travel review",
+                    "bodyJson": body_json,
+                    "tags": ["loadtest", marker[-12:]],
+                    "sourceTravelId": travel_id,
+                },
+            )
+            data = body.get("data") if isinstance(body, dict) else None
+            post_id = data.get("postId") if isinstance(data, dict) else None
+            if status not in (200, 201) or not isinstance(post_id, str) or not post_id:
+                raise SeedError(f"current-feature community post creation failed with status {status}")
+
+        status, body, _ = self.api("GET", f"/community/posts/{post_id}", token=access_token)
+        data = body.get("data") if isinstance(body, dict) else None
+        version = data.get("version") if isinstance(data, dict) else None
+        if status != 200 or not isinstance(version, int):
+            raise SeedError(f"current-feature community post detail failed with status {status}")
+        return post_id, version
+
+    def _find_or_create_comment(self, access_token: str, post_id: str, marker: str) -> str:
+        status, body, _ = self.api("GET", f"/community/posts/{post_id}/comments", token=access_token)
+        data = body.get("data") if isinstance(body, dict) else None
+        comment_id = None
+        for item in data if isinstance(data, list) else []:
+            if isinstance(item, dict) and marker in str(item.get("content", "")):
+                comment_id = item.get("commentId")
+                break
+        if status != 200:
+            raise SeedError(f"current-feature community comment lookup failed with status {status}")
+        if not isinstance(comment_id, str) or not comment_id:
+            status, body, _ = self.api(
+                "POST",
+                f"/community/posts/{post_id}/comments",
+                token=access_token,
+                body={"content": f"{marker} comment"},
+            )
+            data = body.get("data") if isinstance(body, dict) else None
+            comment_id = data.get("commentId") if isinstance(data, dict) else None
+            if status not in (200, 201) or not isinstance(comment_id, str) or not comment_id:
+                raise SeedError(f"current-feature community comment creation failed with status {status}")
+        return comment_id
+
+    def ensure_current_feature_fixture(
+        self,
+        access_token: str,
+        run_id: str,
+        index: int,
+        travel_id: str,
+        timeline_ids: list[str],
+    ) -> dict:
+        """Ensure all stateful current-feature requests have reusable IDs.
+
+        The method is deliberately API-only for timeline/community data.  The
+        existing direct DB role remains limited to synthetic user/planner
+        ownership and cannot read or write community tables.
+        """
+        place_id_values = self.current_feature_place_ids(run_id, index, getattr(self, "index_width", 3))
+        detail = self._travel_detail(access_token, travel_id)
+        self._ensure_place_ids(access_token, travel_id, timeline_ids, place_id_values, detail)
+        marker = self.current_feature_marker(run_id, index, getattr(self, "index_width", 3))
+        post_id, post_version = self._find_or_create_post(access_token, travel_id, marker)
+        comment_id = self._find_or_create_comment(access_token, post_id, marker)
+        travel_version = detail.get("version")
+        if not isinstance(travel_version, int):
+            raise SeedError("current-feature travel detail has no integer version")
+        return {
+            "fixtureMarker": marker,
+            "placeIds": place_id_values,
+            "postId": post_id,
+            "commentId": comment_id,
+            "travelVersion": travel_version,
+            "postVersion": post_version,
+            "commentSequence": 0,
+        }
 
     def write_credentials(self, payload: dict, path: Path) -> None:
         path = path.resolve()
@@ -536,6 +713,7 @@ def seed_all(
     *,
     reset_deleted_planners: int | None = None,
     verify_fixture: bool = False,
+    existing_credentials: list[dict] | None = None,
 ) -> None:
     # Every user always gets a credentials[] entry, whether freshly created
     # or already-seeded from a prior run. This fixes two related bugs: (1)
@@ -553,10 +731,17 @@ def seed_all(
     # when already fully seeded.
     run_id = args.run_id
     fixture_id = getattr(args, "fixture_id", "seed")
-    credentials = []
+    index_width = getattr(runtime, "index_width", 3)
+    current_feature_enabled = bool(getattr(runtime, "_enable_current_feature_fixture", False))
+    credentials = list(existing_credentials or [])
     skipped = 0
-    for index in range(1, args.users + 1):
+    start_index = len(credentials) + 1
+    if start_index > args.users + 1:
+        raise SeedError("existing credential file contains more users than requested target")
+    for index in range(start_index, args.users + 1):
         user_id, already_existed = runtime.insert_user(run_id, index)
+        if current_feature_enabled:
+            runtime._active_place_ids = runtime.current_feature_place_ids(run_id, index)
         refresh_token = new_opaque_token()
         family_id = new_opaque_token()
         pending_credential = {
@@ -585,6 +770,16 @@ def seed_all(
             "visitDate": "2026-08-01",
             "timelineItemIds": timeline_ids,
         })
+        if current_feature_enabled:
+            pending_credential.update(
+                runtime.ensure_current_feature_fixture(
+                    access_token,
+                    run_id,
+                    index,
+                    travel_id,
+                    timeline_ids,
+                )
+            )
         credentials.append(pending_credential)
         write_seed_checkpoint(runtime, args, credentials, skipped)
     fixture_counts = None
@@ -599,6 +794,7 @@ def seed_all(
                 {
                     "runId": run_id,
                     "seedVersion": "aws-s2",
+                    "indexWidth": index_width,
                     "seedState": "in-progress",
                     "seededAt": datetime.now(timezone.utc).isoformat(),
                     "fixtureId": fixture_id,
@@ -614,6 +810,7 @@ def seed_all(
     payload = {
         "runId": run_id,
         "seedVersion": "aws-s2",
+        "indexWidth": index_width,
         "seedState": "complete",
         "seededAt": datetime.now(timezone.utc).isoformat(),
         "fixtureId": fixture_id,
@@ -625,6 +822,14 @@ def seed_all(
     }
     if fixture_counts is not None:
         payload["fixture"] = fixture_counts
+    if current_feature_enabled:
+        payload["currentFeatureFixture"] = {
+            "version": CURRENT_FEATURE_FIXTURE_VERSION,
+            "users": len(credentials),
+            "usersWithPlaceIds": sum(bool(entry.get("placeIds")) for entry in credentials),
+            "usersWithCommunityPost": sum(bool(entry.get("postId")) for entry in credentials),
+            "usersWithCommunityComment": sum(bool(entry.get("commentId")) for entry in credentials),
+        }
     runtime.write_credentials(payload, args.data_file)
     fixture_result_file = getattr(args, "fixture_result_file", None)
     if fixture_counts is not None and fixture_result_file is not None:
@@ -633,6 +838,7 @@ def seed_all(
                 "runId": run_id,
                 "fixtureId": fixture_id,
                 "seedVersion": "aws-s2",
+                "indexWidth": index_width,
                 "resetApplied": reset_deleted_planners is not None,
                 "plannersDeletedBeforeSeed": reset_deleted_planners or 0,
                 "expected": {
@@ -642,6 +848,16 @@ def seed_all(
                     "timelineItemsPerPlanner": EXPECTED_TIMELINE_ITEMS_PER_PLANNER,
                 },
                 "actual": fixture_counts,
+                "currentFeatureFixture": (
+                    {
+                        "version": CURRENT_FEATURE_FIXTURE_VERSION,
+                        "users": len(credentials),
+                        "usersWithPlaceIds": sum(bool(entry.get("placeIds")) for entry in credentials),
+                        "usersWithCommunityPost": sum(bool(entry.get("postId")) for entry in credentials),
+                        "usersWithCommunityComment": sum(bool(entry.get("commentId")) for entry in credentials),
+                    }
+                    if current_feature_enabled else None
+                ),
                 "completedAtUtc": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
             },
             fixture_result_file,
@@ -655,10 +871,12 @@ def write_seed_checkpoint(
     credentials: list[dict],
     skipped: int,
 ) -> None:
+    index_width = getattr(runtime, "index_width", 3)
     runtime.write_credentials(
         {
             "runId": args.run_id,
             "seedVersion": "aws-s2",
+            "indexWidth": index_width,
             "seedState": "in-progress",
             "seededAt": datetime.now(timezone.utc).isoformat(),
             "fixtureId": getattr(args, "fixture_id", "seed"),
@@ -688,12 +906,42 @@ def revoke_previous_credentials(runtime: AwsSeed, args: argparse.Namespace) -> N
     )
 
 
+def load_incremental_credentials(args: argparse.Namespace) -> list[dict]:
+    """Load the prior verified ledger before appending any new users."""
+    if not args.data_file.is_file():
+        raise SeedError("--incremental requires an existing verified credential file")
+    try:
+        payload = json.loads(args.data_file.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise SeedError("incremental credential file is not valid JSON") from error
+    if not isinstance(payload, dict) or payload.get("runId") != args.run_id:
+        raise SeedError("incremental credential file runId does not match")
+    if payload.get("seedState") != "complete" or payload.get("fixtureState") != "verified":
+        raise SeedError("incremental credential file must be complete and fixture-verified")
+    if payload.get("indexWidth", 3) != args.index_width:
+        raise SeedError("incremental index width does not match the existing credential ledger")
+    credentials = payload.get("credentials")
+    if not isinstance(credentials, list) or not credentials:
+        raise SeedError("incremental credential file has no credential ledger")
+    for index, credential in enumerate(credentials, start=1):
+        if not isinstance(credential, dict) or not all(
+            isinstance(credential.get(key), str) and credential.get(key)
+            for key in ("userId", "travelId", "refreshToken", "refreshFamilyId")
+        ):
+            raise SeedError(f"incremental credential entry {index} is incomplete")
+    return credentials
+
+
 def main() -> int:
     args = parse_args()
     if not RUN_ID_PATTERN.fullmatch(args.run_id):
         raise SeedError("--run-id must be 1-40 chars of [A-Za-z0-9-]")
     if args.users < 1 or args.users > MAX_SYNTHETIC_USERS:
         raise SeedError(f"--users must be between 1 and {MAX_SYNTHETIC_USERS}")
+    if args.index_width < 3 or args.index_width > 6:
+        raise SeedError("--index-width must be between 3 and 6")
+    if args.index_width == 3 and args.users > 999:
+        raise SeedError("--index-width 3 supports at most 999 users; use --index-width 6 for adaptive stages")
     if not FIXTURE_ID_PATTERN.fullmatch(args.fixture_id):
         raise SeedError("--fixture-id must be 1-64 chars of [A-Za-z0-9._-]")
     args.data_file = args.data_file.resolve()
@@ -702,12 +950,25 @@ def main() -> int:
     verify_account(args.expected_account_id, args.region)
     database_username, database_password = read_secret_credential(args.database_secret_arn, args.region)
     runtime = AwsSeed(args, database_username, database_password)
-    revoke_previous_credentials(runtime, args)
+    # Opt in only the real AWS seed entrypoint.  Keeping this explicit lets
+    # the legacy unit-test fakes and historical seed contract stay unchanged.
+    runtime._enable_current_feature_fixture = True
+    existing_credentials = load_incremental_credentials(args) if args.incremental else None
+    if not args.incremental:
+        revoke_previous_credentials(runtime, args)
+    elif args.reset_fixture:
+        raise SeedError("--incremental cannot be combined with --reset-fixture")
     reset_deleted_planners = None
     if args.reset_fixture:
         reset_deleted_planners = runtime.reset_synthetic_planners(args.run_id)
         print(f"[seed] reset fixture: deleted {reset_deleted_planners} planner(s) with cascaded timeline rows")
-    seed_all(runtime, args, reset_deleted_planners=reset_deleted_planners, verify_fixture=True)
+    seed_all(
+        runtime,
+        args,
+        reset_deleted_planners=reset_deleted_planners,
+        verify_fixture=True,
+        existing_credentials=existing_credentials,
+    )
     return 0
 
 

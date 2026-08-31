@@ -182,6 +182,23 @@ class AwsOrchestrationContractTests(unittest.TestCase):
         self.assertIn("observe-aws-capacity-stress.py", phase_source)
         self.assertIn('CAPACITY_STAGE="$PHASE"', phase_source)
 
+    def test_adaptive_eks_lifecycle_binds_mock_hpa_and_restores_both(self) -> None:
+        source = SCRIPT.read_text(encoding="utf-8")
+        for helper in (
+            "run_eks_bastion_command",
+            "apply_eks_google_mock_binding",
+            "apply_eks_run_scoped_hpa",
+            "restore_eks_canonical_hpa",
+            "restore_eks_google_api_binding",
+            "__SCRUM80_HPA_APPLY_BEGIN__",
+            "__SCRUM80_HPA_RESTORE_BEGIN__",
+        ):
+            self.assertIn(helper, source)
+        self.assertIn("run_stage_once hpa-override apply_eks_run_scoped_hpa", source)
+        self.assertIn("run_stage_once hpa-restore restore_eks_canonical_hpa", source)
+        self.assertIn("run_stage_once mock-restore restore_eks_google_api_binding", source)
+        self.assertIn("run_stage_once capacity-stress k6_phase_stage capacity-stress", source)
+
     def test_eks_breakpoint_profile_is_referenced_by_the_runner_contract(self) -> None:
         profile = REPOSITORY_ROOT / "load-tests/aws/profiles/eks-monolith-breakpoint-v1.0.json"
         self.assertTrue(profile.is_file())

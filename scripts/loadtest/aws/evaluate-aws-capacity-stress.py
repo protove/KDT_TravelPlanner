@@ -20,6 +20,12 @@ from pathlib import Path
 
 RUNNER_CPU_LIMIT = 90.0
 RUNNER_MEMORY_LIMIT = 90.0
+ACTUAL_TERMINALS = {
+    "NODE_MAX_PENDING", "NODE_SCALE_NOT_TRIGGERED", "NODE_SCALE_FAILED",
+    "NODE_COMPUTE_SATURATION", "SLO_COLLAPSE", "THROUGHPUT_PLATEAU",
+    "HPA_CAPACITY_EXHAUSTED", "BACKEND_OOM", "BACKEND_UNHEALTHY",
+    "ALB_SATURATION", "DATA_TIER_SATURATION",
+}
 
 
 def read_json(path: Path, default: dict | None = None) -> dict:
@@ -125,6 +131,69 @@ def max_runner_values(path: Path) -> tuple[float | None, float | None, int]:
         if mem_match:
             memory.append(float(mem_match.group(1)))
     return (max(cpu) if cpu else None, max(memory) if memory else None, samples)
+
+
+def max_mock_values(path: Path) -> tuple[float | None, float | None, int]:
+    """Read the separately sealed mock-container stats, never k6 host stats."""
+    cpu: list[float] = []
+    memory: list[float] = []
+    samples = 0
+    pattern = re.compile(r"([0-9]+(?:\.[0-9]+)?)%")
+    for entry in read_json_lines(path):
+        docker = entry.get("docker")
+        if not isinstance(docker, dict):
+            continue
+        samples += 1
+        cpu_match = pattern.search(str(docker.get("CPUPerc", "")))
+        mem_match = pattern.search(str(docker.get("MemPerc", "")))
+        if cpu_match:
+            cpu.append(float(cpu_match.group(1)))
+        if mem_match:
+            memory.append(float(mem_match.group(1)))
+    return (max(cpu) if cpu else None, max(memory) if memory else None, samples)
+
+
+def mock_evidence_summary(run_dir: Path, required: bool) -> tuple[dict, bool, str | None]:
+    """Validate independent Runner mock evidence before accepting an EKS result."""
+    evidence = read_json(run_dir / "mock" / "evidence.json")
+    mock_cpu, mock_memory, mock_samples = max_mock_values(run_dir / "mock-stats.jsonl")
+    evidence_headroom = evidence.get("headroom") if isinstance(evidence.get("headroom"), dict) else {}
+    cpu = number(evidence_headroom.get("maxCpuPercent"))
+    memory = number(evidence_headroom.get("maxMemoryPercent"))
+    cpu = max(value for value in (cpu, mock_cpu) if value is not None) if any(value is not None for value in (cpu, mock_cpu)) else None
+    memory = max(value for value in (memory, mock_memory) if value is not None) if any(value is not None for value in (memory, mock_memory)) else None
+    requests = evidence.get("requests") if isinstance(evidence.get("requests"), dict) else {}
+    summary = {
+        "required": required,
+        "validity": evidence.get("validity"),
+        "health": evidence.get("health"),
+        "requests": requests,
+        "headroom": {
+            "maxCpuPercent": cpu,
+            "maxMemoryPercent": memory,
+            "statsSamples": mock_samples,
+        },
+        "container": evidence.get("container"),
+    }
+    if not required:
+        return summary, False, None
+    if evidence.get("validity") != "VALID":
+        return summary, True, "mock evidence is not VALID"
+    health = evidence.get("health") if isinstance(evidence.get("health"), dict) else {}
+    if health.get("ok") is not True:
+        return summary, True, "mock health probe did not return 200"
+    if number(requests.get("http5xxLines")) not in {None, 0}:
+        return summary, True, "mock access log contains HTTP 5xx responses"
+    if mock_samples < 1:
+        return summary, True, "mock docker stats are missing"
+    container = evidence.get("container") if isinstance(evidence.get("container"), dict) else {}
+    if container.get("oomKilled") is True or number(container.get("restartCount")) not in {None, 0}:
+        return summary, True, "mock container OOM/restart observed"
+    if cpu is not None and cpu >= RUNNER_CPU_LIMIT:
+        return summary, True, "mock CPU reached Runner invalidity threshold"
+    if memory is not None and memory >= RUNNER_MEMORY_LIMIT:
+        return summary, True, "mock memory reached Runner invalidity threshold"
+    return summary, False, None
 
 
 def summary_metrics(summary: dict) -> dict:
@@ -240,6 +309,7 @@ def evaluate(args: argparse.Namespace) -> dict:
     slo_contract = read_json(Path(args.slo_contract))
     slo = slo_contract.get("baseline", {}) if slo_contract else {}
     metrics = summary_metrics(summary)
+    adaptive = metadata.get("profileVersion") == "aws-eks-monolith-breakpoint-v2.0" or metadata.get("sloVersion") == "v2.0-breakpoint"
     runner_cpu, runner_memory, runner_samples = max_runner_values(run_dir / "runner-stats.jsonl")
     try:
         restart_count = int(status.get("k6ContainerRestartCount", 0) or 0)
@@ -249,6 +319,8 @@ def evaluate(args: argparse.Namespace) -> dict:
     runner_invalid = runner_invalid or (runner_cpu is not None and runner_cpu >= RUNNER_CPU_LIMIT)
     runner_invalid = runner_invalid or (runner_memory is not None and runner_memory >= RUNNER_MEMORY_LIMIT)
     runner_invalid = runner_invalid or any(bool(item.get("runnerVusExhausted")) for item in snapshots)
+    mock_required = metadata.get("platform") == "eks" or adaptive
+    mock, mock_invalid, mock_invalid_reason = mock_evidence_summary(run_dir, mock_required)
 
     stage_rates = metadata.get("effectiveInputs", {}).get("stageRates", [])
     stage_multipliers = metadata.get("effectiveInputs", {}).get("stageMultipliers", [])
@@ -300,18 +372,37 @@ def evaluate(args: argparse.Namespace) -> dict:
     if runner_invalid:
         validity = "INVALID_RUNNER_BOTTLENECK"
         invalid_reason = "Runner threshold/OOM/restart/VU exhaustion observed"
+    elif mock_invalid:
+        validity = "INCOMPLETE_MOCK_DEPENDENCY"
+        invalid_reason = mock_invalid_reason
     elif not valid_metric_window:
         validity = "INVALID_METRIC_WINDOW"
         invalid_reason = "No complete sanitized observer snapshot window"
-    elif terminal not in {"MAX_CAPACITY_REACHED", "NODE_MAX_PENDING", "SLO_COLLAPSE", "DATA_TIER_SATURATION", "PROFILE_COMPLETE", "HARD_CEILING"}:
+    elif terminal not in (ACTUAL_TERMINALS if adaptive else {"MAX_CAPACITY_REACHED", "NODE_MAX_PENDING", "SLO_COLLAPSE", "DATA_TIER_SATURATION", "PROFILE_COMPLETE", "HARD_CEILING"}):
         validity = "INVALID_TERMINAL_REASON"
-        invalid_reason = "Controller did not record a preregistered terminal reason"
+        invalid_reason = "Controller did not record a preregistered actual terminal reason" if adaptive else "Controller did not record a preregistered terminal reason"
 
     if validity == "VALID":
-        if terminal == "MAX_CAPACITY_REACHED" or any(item.get("maxCapacityReached") is True for item in snapshots):
-            bottleneck = "max-capacity"
-        elif terminal == "NODE_MAX_PENDING" or any(item.get("nodeMaxPending") is True for item in snapshots):
+        if terminal == "NODE_MAX_PENDING" or any(item.get("nodeMaxPending") is True for item in snapshots):
             bottleneck = "node-max-pending"
+        elif terminal == "NODE_SCALE_NOT_TRIGGERED":
+            bottleneck = "cluster-autoscaler"
+        elif terminal == "NODE_SCALE_FAILED":
+            bottleneck = "node-provisioning"
+        elif terminal == "NODE_COMPUTE_SATURATION":
+            bottleneck = "node-compute"
+        elif terminal == "THROUGHPUT_PLATEAU":
+            bottleneck = "throughput"
+        elif terminal == "HPA_CAPACITY_EXHAUSTED":
+            bottleneck = "hpa-replica-ceiling"
+        elif terminal == "BACKEND_OOM":
+            bottleneck = "backend-memory"
+        elif terminal == "BACKEND_UNHEALTHY":
+            bottleneck = "backend-runtime"
+        elif terminal == "ALB_SATURATION":
+            bottleneck = "alb-target-health"
+        elif terminal == "MAX_CAPACITY_REACHED" or any(item.get("maxCapacityReached") is True for item in snapshots):
+            bottleneck = "max-capacity"
         elif terminal == "DATA_TIER_SATURATION" or data_saturated:
             bottleneck = "data-tier"
         elif terminal == "SLO_COLLAPSE" or slo_window_count >= 2:
@@ -320,6 +411,8 @@ def evaluate(args: argparse.Namespace) -> dict:
             bottleneck = "runner-invalid"
         elif metrics.get("droppedIterations", 0):
             bottleneck = "credit-limited"
+        elif adaptive:
+            bottleneck = "unclassified-actual-terminal"
         else:
             bottleneck = "ceiling-without-saturation"
     else:
@@ -336,6 +429,7 @@ def evaluate(args: argparse.Namespace) -> dict:
         "sloVersion": metadata.get("sloVersion"),
         "effectiveInputs": metadata.get("effectiveInputs", {}),
         "campaignStage": campaign_stage,
+        "adaptiveBreakpoint": adaptive,
         "validity": validity,
         "invalidReason": invalid_reason,
         "terminalReason": terminal,
@@ -347,6 +441,7 @@ def evaluate(args: argparse.Namespace) -> dict:
             "maxMemoryPercent": runner_memory,
             "invalid": runner_invalid,
         },
+        "mock": mock,
         "stageCurve": stage_rows,
         "scaleOut": {
             "podScaleOut": pod_scale_out,
@@ -376,7 +471,7 @@ def evaluate(args: argparse.Namespace) -> dict:
             "dataSaturatedSeconds": round(window_duration(snapshots, lambda item: bool(item.get("dataTierSaturated"))), 3),
             "scaleInCensored": not any(bool(item.get("scaleInStable")) for item in snapshots),
         },
-        "comparisonSafe": validity == "VALID" and not runner_invalid,
+        "comparisonSafe": validity == "VALID" and not runner_invalid and not mock_invalid,
     }
     (run_dir / "capacity-stress-result.json").write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return result

@@ -293,11 +293,12 @@ resource "aws_instance" "load_runner" {
   user_data_replace_on_change = true
 
   user_data = templatefile("${path.module}/templates/runner-user-data.sh.tftpl", {
-    aws_region            = var.aws_region
-    botocore_version      = var.botocore_version
-    k6_image_reference    = var.k6_image_reference
-    source_commit_sha     = var.source_commit_sha
-    source_repository_url = var.source_repository_url
+    aws_region                  = var.aws_region
+    botocore_version            = var.botocore_version
+    google_mock_image_reference = var.google_mock_image_reference
+    k6_image_reference          = var.k6_image_reference
+    source_commit_sha           = var.source_commit_sha
+    source_repository_url       = var.source_repository_url
   })
 
   tags = merge(var.tags, {

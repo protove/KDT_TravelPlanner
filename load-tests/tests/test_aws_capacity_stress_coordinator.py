@@ -71,6 +71,27 @@ class CapacityStressCoordinatorTest(unittest.TestCase):
         snapshots[1]["nodeMaxPending"] = True
         self.assertEqual(MODULE.terminal_reason(snapshots, 120), "NODE_MAX_PENDING")
 
+    def test_adaptive_stage_extension_requires_active_scale_transition(self) -> None:
+        self.assertFalse(MODULE.extension_allowed([{"hpa": {"desiredReplicas": 2}, "deployment": {"readyReplicas": 2}}]))
+        self.assertTrue(MODULE.extension_allowed([{"hpa": {"desiredReplicas": 4}, "deployment": {"readyReplicas": 2}}]))
+        self.assertTrue(MODULE.extension_allowed([{"backendPods": {"pendingCount": 1}}]))
+
+    def test_adaptive_terminal_names_are_actual_sut_outcomes(self) -> None:
+        snapshots = [
+            {"ts": utc(0), "nodeScaleFailed": True},
+            {"ts": utc(120), "nodeScaleFailed": True},
+        ]
+        self.assertEqual(MODULE.terminal_reason(snapshots, 120), "NODE_SCALE_FAILED")
+
+    def test_adaptive_parse_rejects_more_than_one_extension(self) -> None:
+        with self.assertRaises(SystemExit):
+            MODULE.parse_args([
+                "--run-dir", "/tmp/scrum80-adaptive",
+                "--adaptive", "--nominal-hold-seconds", "300",
+                "--conditional-extension-seconds", "180", "--max-stage-seconds", "700",
+                "--", "echo", "ok",
+            ])
+
     def test_coordinator_stops_workload_without_operator_or_aws_actions(self) -> None:
         source = SCRIPT.read_text(encoding="utf-8")
         for forbidden in (

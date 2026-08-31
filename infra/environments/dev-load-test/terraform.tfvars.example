@@ -13,5 +13,7 @@ test_db_secret_arn = "arn:aws:secretsmanager:ap-northeast-2:123456789012:secret:
 
 # Exact commit containing the reviewed AWS load-test scripts.
 load_runner_source_commit_sha = "0123456789abcdef0123456789abcdef01234567"
-load_runner_instance_type     = "t3.small"
+load_runner_instance_type       = "c6i.2xlarge" # SCRUM-80 primary Runner; one c6i.4xlarge repair is operator-gated
+load_runner_root_volume_size_gib = 100
 load_runner_botocore_version  = "1.43.68"
+google_mock_image_reference   = "nginxinc/nginx-unprivileged:1.27.1-alpine3.20-perl@sha256:86b08eb3082f1f796f0ce1ef75a1c356a116fafc5f88754924fba2286fbd0221"

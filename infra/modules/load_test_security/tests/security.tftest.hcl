@@ -58,3 +58,21 @@ run "data_access_uses_security_group_references" {
     error_message = "Load Runner must reach PostgreSQL and Redis through security-group references, not CIDR blocks."
   }
 }
+
+run "eks_mock_ingress_is_exact_cluster_sg_only" {
+  command = plan
+
+  variables {
+    eks_cluster_security_group_id = "sg-eks-cluster"
+  }
+
+  assert {
+    condition = (
+      aws_vpc_security_group_ingress_rule.load_runner_google_mock.referenced_security_group_id == "sg-eks-cluster" &&
+      aws_vpc_security_group_ingress_rule.load_runner_google_mock.from_port == 8080 &&
+      aws_vpc_security_group_ingress_rule.load_runner_google_mock.to_port == 8080 &&
+      aws_vpc_security_group_ingress_rule.load_runner_google_mock.cidr_ipv4 == null
+    )
+    error_message = "EKS mock ingress must allow TCP/8080 only from the exact cluster security group."
+  }
+}

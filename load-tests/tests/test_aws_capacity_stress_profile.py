@@ -11,6 +11,7 @@ ROOT = Path(__file__).parents[2]
 PROFILE = ROOT / "load-tests/aws/profiles/ec2-eks-capacity-stress-v1.0.json"
 PROFILE_V11 = ROOT / "load-tests/aws/profiles/ec2-eks-capacity-stress-v1.1.json"
 EKS_BREAKPOINT_PROFILE = ROOT / "load-tests/aws/profiles/eks-monolith-breakpoint-v1.0.json"
+EKS_ADAPTIVE_PROFILE = ROOT / "load-tests/aws/profiles/eks-monolith-breakpoint-v2.0.json"
 VALIDATOR_PATH = ROOT / "scripts/loadtest/aws/validate-aws-profile.py"
 SPEC = importlib.util.spec_from_file_location("validate_aws_profile_capacity", VALIDATOR_PATH)
 MODULE = importlib.util.module_from_spec(SPEC)
@@ -92,6 +93,15 @@ class CapacityStressProfileTest(unittest.TestCase):
         profile["capacityStress"]["stageMultipliers"] = [1, 2, 4, 8, 8]
         with self.assertRaisesRegex(ValueError, "double monotonically"):
             MODULE.validate(profile)
+
+    def test_eks_adaptive_breakpoint_has_no_fixed_rps_ceiling(self) -> None:
+        profile = json.loads(EKS_ADAPTIVE_PROFILE.read_text(encoding="utf-8"))
+        self.assertTrue(MODULE.validate(profile))
+        self.assertIsNone(profile["limits"]["maxRate"])
+        self.assertEqual(profile["capacityStress"]["bindsTo"]["startRate"], 256)
+        self.assertEqual(profile["capacityStress"]["nominalHoldSeconds"], 300)
+        self.assertEqual(profile["capacityStress"]["conditionalExtensionSeconds"], 180)
+        self.assertNotIn("PROFILE_COMPLETE", profile["capacityStress"]["terminalConditions"])
 
 
 if __name__ == "__main__":

@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Delete only this Run ID's synthetic data, seeded by seed-aws-load-data.py.
 
-Deletion is scoped by provider_user_id LIKE 'loadtest-aws-<run-id>-%' in a
+Deletion is scoped by an anchored provider_user_id regular expression for
+'loadtest-aws-<run-id>-<fixed-width-index>' in a
 single transaction, in FK-safe order:
   1. planners_table (owner_id) — cascades to timeline_table, planner_members,
      and planner_purposes (see backend/src/main/resources/db/migration/
@@ -95,6 +96,13 @@ def like_pattern(run_id: str) -> str:
     return f"{PROVIDER_USER_ID_PREFIX}{run_id}-%"
 
 
+def provider_user_id_regex(run_id: str, index_width: int = 3) -> str:
+    """Match only complete synthetic IDs for this run and registered width."""
+    if index_width < 3 or index_width > 6:
+        raise CleanupError("index_width must be between 3 and 6")
+    return f"^{PROVIDER_USER_ID_PREFIX}{run_id}-[0-9]{{{index_width}}}$"
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--run-id", required=True)
@@ -112,6 +120,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--base-url", default=None, help="Approved backend HTTPS base URL; required with Redis + --data-file so active refresh-token families can be revoked")
     parser.add_argument("--dry-run", action="store_true", help="Report how many synthetic users match, delete nothing")
     parser.add_argument("--result-file", type=Path, default=None, help="Write a structured cleanup-result.json here (orchestrate-aws-b01.sh's cleanup-result record, TEAM_MEMBER_B01_ACTION_REQUEST.md §4.2)")
+    parser.add_argument("--index-width", type=int, default=3, help="Zero-padded provider ID width used by seed (3-6; default 3)")
     return parser.parse_args()
 
 
@@ -250,19 +259,19 @@ def redis(args: argparse.Namespace, *arguments: str) -> str:
 def matching_user_count(args: argparse.Namespace, username: str, password: str, run_id: str) -> int:
     result = psql(
         args, username, password,
-        "SELECT count(*) FROM user_table WHERE provider = 'GOOGLE' AND provider_user_id LIKE "
-        f"{sql_literal(like_pattern(run_id))}",
+        "SELECT count(*) FROM user_table WHERE provider = 'GOOGLE' AND provider_user_id ~ "
+        f"{sql_literal(provider_user_id_regex(run_id, getattr(args, 'index_width', 3)))}",
     ).strip()
     return int(result or "0")
 
 
 def delete_matching_rows(args: argparse.Namespace, username: str, password: str, run_id: str) -> None:
-    pattern = sql_literal(like_pattern(run_id))
+    pattern = sql_literal(provider_user_id_regex(run_id, getattr(args, 'index_width', 3)))
     script = (
         "BEGIN; "
         "DELETE FROM planners_table WHERE owner_id IN "
-        f"(SELECT id FROM user_table WHERE provider = 'GOOGLE' AND provider_user_id LIKE {pattern}); "
-        "DELETE FROM user_table WHERE provider = 'GOOGLE' AND provider_user_id LIKE "
+        f"(SELECT id FROM user_table WHERE provider = 'GOOGLE' AND provider_user_id ~ {pattern}); "
+        "DELETE FROM user_table WHERE provider = 'GOOGLE' AND provider_user_id ~ "
         f"{pattern}; "
         "COMMIT;"
     )
@@ -308,6 +317,8 @@ def main() -> int:
     args = parse_args()
     if not RUN_ID_PATTERN.fullmatch(args.run_id):
         raise CleanupError("--run-id must be 1-40 chars of [A-Za-z0-9-]")
+    if args.index_width < 3 or args.index_width > 6:
+        raise CleanupError("--index-width must be between 3 and 6")
     if bool(args.redis_host) != bool(args.redis_iam_user) or bool(args.redis_host) != bool(args.redis_replication_group_id):
         raise CleanupError("--redis-host, --redis-iam-user, and --redis-replication-group-id must all be given together, or all omitted")
     if args.redis_host and args.data_file and not args.base_url:

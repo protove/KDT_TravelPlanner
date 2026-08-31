@@ -25,6 +25,17 @@ variable "k6_image_reference" {
   }
 }
 
+variable "google_mock_image_reference" {
+  type        = string
+  description = "Digest-pinned linux/amd64 nginx-unprivileged image for the isolated Runner-hosted Google API mock."
+  default     = "nginxinc/nginx-unprivileged:1.27.1-alpine3.20-perl@sha256:86b08eb3082f1f796f0ce1ef75a1c356a116fafc5f88754924fba2286fbd0221"
+
+  validation {
+    condition     = can(regex("^nginxinc/nginx-unprivileged:[A-Za-z0-9._-]+@sha256:[0-9a-f]{64}$", var.google_mock_image_reference))
+    error_message = "google_mock_image_reference must be nginxinc/nginx-unprivileged with an exact digest."
+  }
+}
+
 variable "load_runner_botocore_version" {
   type        = string
   description = "Pinned botocore version for the Redis IAM signer on the Runner."
@@ -38,12 +49,23 @@ variable "load_runner_botocore_version" {
 
 variable "load_runner_instance_type" {
   type        = string
-  description = "Ephemeral B-01 Load Runner EC2 type. Default t3.small; increase only after Runner-bottleneck evidence."
+  description = "Ephemeral B-01 Load Runner EC2 type. Historical t3.* values remain valid; SCRUM-80 uses c6i.2xlarge with one c6i.4xlarge repair."
   default     = "t3.small"
 
   validation {
-    condition     = can(regex("^t3\\.[a-z0-9]+$", var.load_runner_instance_type))
-    error_message = "load_runner_instance_type must be a valid t3 family instance type."
+    condition     = can(regex("^(t3\\.[a-z0-9]+|c6i\\.(2xlarge|4xlarge))$", var.load_runner_instance_type))
+    error_message = "load_runner_instance_type must be a t3 family type or c6i.2xlarge/c6i.4xlarge."
+  }
+}
+
+variable "load_runner_root_volume_size_gib" {
+  type        = number
+  description = "Encrypted gp3 root volume size for the disposable Load Runner."
+  default     = 20
+
+  validation {
+    condition     = var.load_runner_root_volume_size_gib >= 20 && var.load_runner_root_volume_size_gib <= 200
+    error_message = "load_runner_root_volume_size_gib must be between 20 and 200 GiB."
   }
 }
 

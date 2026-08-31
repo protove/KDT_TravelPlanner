@@ -36,6 +36,17 @@ CAPACITY_STRESS_PROFILE_VERSIONS = {
     "aws-ec2-eks-capacity-stress-v1.1",
 }
 EKS_BREAKPOINT_PROFILE_VERSION = "aws-eks-monolith-breakpoint-v1.0"
+EKS_ADAPTIVE_BREAKPOINT_PROFILE_VERSION = "aws-eks-monolith-breakpoint-v2.0"
+CURRENT_FEATURE_REQUEST_MIX_VERSION = "aws-eks-current-feature-coverage-v2"
+CURRENT_FEATURE_OPERATION_IDS = {
+    "refresh", "profileRead", "travelList", "travelDetail", "travelUpdate",
+    "countryList", "cityList", "placeSearch", "nearbySearch", "mapPoints",
+    "routeGet", "routePreview", "timelineCreate", "orderChange", "memberList",
+    "invitationList", "communityCategoryList", "communityPostList",
+    "communityPostDetail", "communityCommentList", "communityMyPosts",
+    "communityMyComments", "communityPostUpdate", "communityCommentUpdate",
+    "communityPostReaction", "communityCommentReaction",
+}
 
 
 def load_profile(path):
@@ -83,7 +94,10 @@ def validate(profile):
     limits = profile["limits"]
     max_rate = limits.get("maxRate")
     max_vus = limits.get("maxVUs")
-    _require(isinstance(max_rate, (int, float)) and max_rate > 0, "limits.maxRate must be a positive number")
+    if profile.get("profileVersion") == EKS_ADAPTIVE_BREAKPOINT_PROFILE_VERSION:
+        _require(max_rate is None or (isinstance(max_rate, (int, float)) and max_rate > 0), "adaptive EKS limits.maxRate must be null or a positive number")
+    else:
+        _require(isinstance(max_rate, (int, float)) and max_rate > 0, "limits.maxRate must be a positive number")
     _require(isinstance(max_vus, (int, float)) and max_vus > 0, "limits.maxVUs must be a positive number")
 
     scenarios = profile["scenarios"]
@@ -113,6 +127,8 @@ def validate(profile):
         _validate_capacity_stress(profile)
     if profile.get("profileVersion") == EKS_BREAKPOINT_PROFILE_VERSION:
         _validate_eks_breakpoint(profile)
+    if profile.get("profileVersion") == EKS_ADAPTIVE_BREAKPOINT_PROFILE_VERSION:
+        _validate_eks_adaptive_breakpoint(profile)
 
     return True
 
@@ -128,7 +144,8 @@ def _validate_ramp(ramp, max_rate, max_vus):
     for stage in stages:
         rate = stage.get("targetRate")
         _require(isinstance(rate, (int, float)) and rate > 0, "each ramp stage needs a positive targetRate")
-        _require(rate <= max_rate, f"ramp stage targetRate {rate} exceeds limits.maxRate {max_rate}")
+        if max_rate is not None:
+            _require(rate <= max_rate, f"ramp stage targetRate {rate} exceeds limits.maxRate {max_rate}")
         _require(stage.get("duration"), "each ramp stage needs a duration")
     _require(
         ramp.get("preAllocatedVUs", 0) <= max_vus,
@@ -290,6 +307,61 @@ def _validate_eks_breakpoint(profile):
     _require(scenario.get("preAllocatedVUs") == stress["preAllocatedVUs"], "EKS breakpoint scenario preAllocatedVUs does not match capacityStress")
     _require("normal" in profile.get("requestMix", {}), "requestMix.normal is missing for EKS breakpoint")
     _validate_mix_sums_to_100(profile["requestMix"]["normal"], "requestMix.normal")
+
+
+def _validate_eks_adaptive_breakpoint(profile):
+    """Validate the v2.0 EKS breakpoint contract.
+
+    Unlike the historical v1 profile, v2 does not contain a finite stage list
+    or a successful RPS ceiling.  One process represents one target stage and
+    the coordinator supplies the next target as exactly 2R.
+    """
+    target = profile.get("target") or {}
+    _require(target.get("platform") == "eks", "adaptive EKS breakpoint target.platform must be eks")
+    eks = profile.get("eks")
+    _require(isinstance(eks, dict), "eks settings are missing")
+    _require(eks.get("instanceType") == "t3.small", "adaptive EKS breakpoint must use t3.small nodes")
+    _require(eks.get("nodeGroup") == {"min": 2, "desired": 2, "max": 4}, "EKS node group must remain 2/2/4")
+    _require(eks.get("baseHpa") == {"minReplicas": 2, "maxReplicas": 4}, "base HPA must remain 2-4")
+    _require(profile.get("limits", {}).get("maxRate") is None, "adaptive EKS breakpoint limits.maxRate must be null")
+    _require(profile.get("sloVersion") == "v2.0-breakpoint", "adaptive EKS breakpoint must consume v2.0-breakpoint")
+    _require(profile.get("requestMixVersion") == CURRENT_FEATURE_REQUEST_MIX_VERSION, "adaptive EKS breakpoint must use the current-feature request mix")
+
+    stress = profile.get("capacityStress")
+    _require(isinstance(stress, dict) and stress.get("adaptive") is True, "adaptive capacityStress is missing")
+    _require(stress.get("fixedRpsCeiling") is None, "adaptive capacityStress.fixedRpsCeiling must be null")
+    binds = stress.get("bindsTo")
+    _require(isinstance(binds, dict) and binds.get("baselineRate") == 16 and binds.get("startRate") == 256, "adaptive breakpoint must bind baseline 16 and stress start 256")
+    _require(binds.get("nextRateExpression") == "R[n+1] = R[n] * 2", "adaptive breakpoint must double the prior rate")
+    _require(stress.get("nominalHoldSeconds") == 300, "adaptive breakpoint nominal hold must be 300 seconds")
+    _require(stress.get("stabilitySeconds") == 120, "adaptive breakpoint stability window must be 120 seconds")
+    _require(stress.get("conditionalExtensionSeconds") == 180, "adaptive breakpoint extension must be 180 seconds")
+    _require(stress.get("maxExtensionsPerStage") == 1, "adaptive breakpoint allows one extension per stage")
+    _require(stress.get("maxSingleStageSeconds") == 480, "adaptive breakpoint max stage must be 480 seconds")
+    _require(stress.get("preAllocatedVUsFormula") == "max(256,targetRps)", "adaptive preAllocatedVUs formula is invalid")
+    _require(stress.get("maxVUsFormula") == "max(512,targetRps*2)", "adaptive maxVUs formula is invalid")
+    _require(stress.get("seededUsersFormula") == "maxVUs", "adaptive seededUsers formula is invalid")
+    _require(stress.get("runnerDefaultInstanceType") == "c6i.2xlarge", "adaptive breakpoint must use the strong primary Runner")
+    _require(stress.get("runnerRepairInstanceType") == "c6i.4xlarge", "adaptive breakpoint repair Runner must be c6i.4xlarge")
+    _require(stress.get("runnerRepairLimit") == 1, "adaptive capacityStress.runnerRepairLimit must be exactly one")
+    _require(stress.get("requiresCompleteSloWindows") is True, "adaptive breakpoint must require complete SLO windows")
+    terminals = stress.get("terminalConditions")
+    _require(isinstance(terminals, list) and terminals, "adaptive terminalConditions are missing")
+    _require("PROFILE_COMPLETE" not in terminals and "HARD_CEILING" not in terminals, "adaptive terminalConditions cannot contain profile or hard ceiling exits")
+
+    baseline = profile.get("scenarios", {}).get("baseline", {})
+    _require(baseline.get("rate") == 16 and baseline.get("repeat") == 1, "adaptive baseline must run once at 16 RPS")
+    scenario = profile.get("scenarios", {}).get("capacity-stress")
+    _require(isinstance(scenario, dict) and scenario.get("adaptive") is True, "scenarios.capacity-stress must be adaptive")
+    _require(scenario.get("executor") == "constant-arrival-rate", "adaptive capacity-stress must use constant-arrival-rate")
+    _require(scenario.get("rate") is None, "adaptive capacity-stress rate must be supplied at action time")
+    _require(scenario.get("duration") == "5m", "adaptive capacity-stress nominal duration must be five minutes")
+    _require(scenario.get("preAllocatedVUs") == 256 and scenario.get("maxVUs") == 512, "adaptive capacity-stress defaults must be 256/512 VUs")
+    _require("normal" in profile.get("requestMix", {}), "requestMix.normal is missing for adaptive EKS breakpoint")
+    _validate_mix_sums_to_100(profile["requestMix"]["normal"], "requestMix.normal")
+    _require(set(profile["requestMix"]["normal"]) == CURRENT_FEATURE_OPERATION_IDS, "adaptive EKS request mix must contain the exact current-feature operation set")
+    for name in ("baseline", "spike", "soak"):
+        _require(profile.get("requestMix", {}).get(name) == profile["requestMix"]["normal"], f"requestMix.{name} must use the frozen current-feature mix")
 
 
 if __name__ == "__main__":

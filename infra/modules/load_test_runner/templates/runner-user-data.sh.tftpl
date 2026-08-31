@@ -30,6 +30,37 @@ pip3 install --no-cache-dir 'botocore==${botocore_version}'
 # bootstrap pattern.
 docker pull '${k6_image_reference}'
 
+# The Google Places/Routes adapters stay on their normal HTTP client path, but
+# this disposable Runner also hosts the deterministic private mock used by the
+# EKS overlay.  It is deliberately a separate, unprivileged container: no
+# EKS workload, Docker socket, public listener, or Google credential is added.
+docker pull '${google_mock_image_reference}'
+install -d -m 0755 /opt/travel-planner/load-tests/mocks/google-api/responses
+install -d -m 0755 /var/lib/travel-planner/google-api-mock-logs
+chown 101:101 /var/lib/travel-planner/google-api-mock-logs
+docker rm -f travel-planner-google-api-mock >/dev/null 2>&1 || true
+docker run -d --name travel-planner-google-api-mock --restart unless-stopped \
+  --platform linux/amd64 \
+  --read-only --cap-drop ALL --security-opt no-new-privileges \
+  --cpus 1 --memory 256m --pids-limit 64 \
+  --tmpfs /tmp:rw,noexec,nosuid,size=16m \
+  -p 8080:8080 \
+  -v /opt/travel-planner/load-tests/mocks/google-api/nginx.conf:/etc/nginx/nginx.conf:ro \
+  -v /opt/travel-planner/load-tests/mocks/google-api/responses:/usr/share/nginx/html/responses:ro \
+  -v /var/lib/travel-planner/google-api-mock-logs:/var/log/nginx \
+  '${google_mock_image_reference}' nginx -g 'daemon off;'
+for attempt in $(seq 1 30); do
+  if curl --fail --silent --show-error --max-time 2 http://127.0.0.1:8080/healthz >/dev/null; then
+    break
+  fi
+  if [[ "$attempt" == "30" ]]; then
+    echo "google API mock health check failed" >&2
+    docker logs travel-planner-google-api-mock >&2 || true
+    exit 1
+  fi
+  sleep 2
+done
+
 # ── Evidence 작업 디렉터리 ───────────────────────────────────────
 # scripts/loadtest/aws/(Plan 03에서 추가될 오케스트레이션)가 이 경로 아래에
 # raw k6 결과, metadata, operations.jsonl을 쓰고 S3로 업로드한다. 이 모듈은

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Read-only observer for the v1.1 Capacity/Scale Stress campaign.
+"""Read-only observer for the AWS Capacity/Scale Stress campaigns.
 
 The observer samples capacity, platform readiness, Runner statistics and
 CloudWatch data-tier/T3 signals into the coordinator's sanitized JSONL file.
@@ -25,6 +25,7 @@ from typing import Any, Mapping, Sequence
 
 READ_OPERATIONS = {
     "describe-auto-scaling-groups",
+    "describe-scaling-activities",
     "describe-nodegroup",
     "describe-instances",
     "describe-target-health",
@@ -304,7 +305,11 @@ def refresh_eks_evidence(args: argparse.Namespace, aws: AwsReadOnly) -> dict[str
             expected_node_group=args.node_group_name,
         )
         target_payload = aws.call("elbv2", "describe-target-health", ["--target-group-arn", args.target_group_arn])
-        target_health = validate_alb_target_health(target_payload, target_group_arn=args.target_group_arn)
+        target_health = validate_alb_target_health(
+            target_payload,
+            target_group_arn=args.target_group_arn,
+            allow_no_healthy=True,
+        )
     except EKSAdapterError as error:
         raise ObserverError("EKS target evidence failed adapter validation") from error
     activities = aws.call(
@@ -428,6 +433,25 @@ def collect_snapshot(args: argparse.Namespace, aws: AwsReadOnly) -> dict[str, An
             cloudwatch[key] = best_effort_cloudwatch_metric(
                 aws, "AWS/ElastiCache", metric_name, "Average", redis_dimensions, now, observation_errors,
             )
+    alb_dimension = getattr(args, "alb_dimension", "")
+    target_group_dimension = getattr(args, "target_group_dimension", "")
+    if alb_dimension:
+        alb_dimensions = {"LoadBalancer": alb_dimension}
+        for metric_name, key in (
+            ("RequestCount", "albRequestCount"),
+            ("TargetResponseTime", "albTargetResponseTimeSeconds"),
+            ("HealthyHostCount", "albHealthyHostCount"),
+            ("HTTPCode_ELB_5XX_Count", "albElb5xx"),
+            ("HTTPCode_Target_5XX_Count", "albTarget5xx"),
+        ):
+            cloudwatch[key] = best_effort_cloudwatch_metric(
+                aws, "AWS/ApplicationELB", metric_name, "Sum" if metric_name in {"RequestCount", "HTTPCode_ELB_5XX_Count", "HTTPCode_Target_5XX_Count"} else "Average", alb_dimensions, now, observation_errors,
+            )
+    if target_group_dimension:
+        target_dimensions = {"TargetGroup": target_group_dimension}
+        cloudwatch["albTargetHealthyHostCount"] = best_effort_cloudwatch_metric(
+            aws, "AWS/ApplicationELB", "HealthyHostCount", "Average", target_dimensions, now, observation_errors,
+        )
     for instance_id in getattr(args, "t3_instance_ids", []) or []:
         dimensions = {"InstanceId": instance_id}
         cloudwatch.setdefault("t3CreditBalance", {})[instance_id] = best_effort_cloudwatch_metric(
@@ -475,13 +499,67 @@ def collect_snapshot(args: argparse.Namespace, aws: AwsReadOnly) -> dict[str, An
         required_observations = {"status": "not-applicable"}
     slo_window_present = "sloWindow" in slo
     slo_window_complete = slo.get("sloWindowComplete") if isinstance(slo.get("sloWindowComplete"), bool) else None
-    data_tier_saturated = _optional_bool(slo, "dataTierSaturated")
+    explicit_data_tier_saturated = _optional_bool(slo, "dataTierSaturated")
     logical_capacity_stable = _optional_bool(slo, "logicalCapacityStable")
     scale_in_stable = _optional_bool(slo, "scaleInStable")
     node_max_pending = platform_evidence.get("nodeMaxPending") if isinstance(platform_evidence.get("nodeMaxPending"), bool) else None
     max_capacity_reached = platform_evidence.get("maxCapacityReached") if isinstance(platform_evidence.get("maxCapacityReached"), bool) else None
     if max_capacity_reached is None and isinstance(node_max_pending, bool):
         max_capacity_reached = node_max_pending and isinstance(capacity.get("max"), int) and logical_capacity >= capacity["max"]
+    activities = platform_evidence.get("nodeGroupScalingActivities") if isinstance(platform_evidence.get("nodeGroupScalingActivities"), list) else []
+    ca_activity_active = any(
+        isinstance(activity, Mapping) and str(activity.get("statusCode", "")).lower() in {"inprogress", "pending"}
+        for activity in activities
+    )
+    hpa_max = hpa_evidence.get("maxReplicas") if isinstance(hpa_evidence, Mapping) else None
+    hpa_desired = hpa_evidence.get("desiredReplicas") if isinstance(hpa_evidence, Mapping) else None
+    pending_count = backend_pods.get("pendingCount") if isinstance(backend_pods, Mapping) else None
+    ready_pods = deployment_evidence.get("readyReplicas") if isinstance(deployment_evidence, Mapping) else None
+    deployment_unavailable = deployment_evidence.get("unavailableReplicas") if isinstance(deployment_evidence, Mapping) else None
+    restart_count = backend_pods.get("restartCount") if isinstance(backend_pods, Mapping) else None
+    alb_healthy = platform_evidence.get("alb", {}).get("healthyTargetCount") if isinstance(platform_evidence.get("alb"), Mapping) else None
+    alb_target_count = platform_evidence.get("alb", {}).get("targetCount") if isinstance(platform_evidence.get("alb"), Mapping) else None
+    node_scale_in_progress = isinstance(capacity.get("desired"), int) and isinstance(evidence_ready_nodes, int) and capacity["desired"] > evidence_ready_nodes
+    new_pod_not_ready = isinstance(hpa_desired, int) and isinstance(ready_pods, int) and hpa_desired > ready_pods
+    backend_oom = any(item.get("oomKilled") is True for item in backend_pods.get("placement", []) if isinstance(item, Mapping)) if isinstance(backend_pods, Mapping) else False
+    backend_unhealthy = (isinstance(deployment_unavailable, int) and deployment_unavailable > 0) or (isinstance(restart_count, int) and restart_count > 0)
+    alb_saturated = isinstance(alb_healthy, int) and isinstance(alb_target_count, int) and alb_target_count > 0 and alb_healthy == 0
+    data_tier_signals = {
+        "rdsCpu": isinstance(cloudwatch.get("rdsCpuPercent"), (int, float)) and cloudwatch["rdsCpuPercent"] >= 100,
+        "rdsNoFreeableMemory": isinstance(cloudwatch.get("rdsFreeableMemoryBytes"), (int, float)) and cloudwatch["rdsFreeableMemoryBytes"] <= 0,
+        "redisCpu": isinstance(cloudwatch.get("redisCpuPercent"), (int, float)) and cloudwatch["redisCpuPercent"] >= 100,
+        "redisMemory": isinstance(cloudwatch.get("redisMemoryPercent"), (int, float)) and cloudwatch["redisMemoryPercent"] >= 100,
+        "redisEvictions": isinstance(cloudwatch.get("redisEvictions"), (int, float)) and cloudwatch["redisEvictions"] > 0,
+        "redisCreditsDepleted": isinstance(cloudwatch.get("redisT3CreditBalance"), (int, float)) and cloudwatch["redisT3CreditBalance"] <= 0,
+    }
+    data_tier_saturated = explicit_data_tier_saturated is True or any(data_tier_signals.values())
+    resource_pending = (
+        isinstance(pending_count, (int, float)) and pending_count > 0
+    ) or (
+        isinstance(backend_pods, Mapping)
+        and isinstance(backend_pods.get("pendingReasons"), list)
+        and any(any(word in str(reason).lower() for word in ("schedul", "insufficient", "resource")) for reason in backend_pods.get("pendingReasons", []))
+    )
+    node_compute_saturated = bool(platform_evidence.get("nodeComputeSaturated")) or bool(platform_evidence.get("nodeSchedulingPressure"))
+    node_scale_failed = bool(platform_evidence.get("nodeScaleFailed")) and (node_scale_in_progress or bool(resource_pending))
+    node_maximum = capacity.get("max") if isinstance(capacity, Mapping) else None
+    node_scale_not_triggered = bool(
+        resource_pending
+        and isinstance(node_maximum, int)
+        and isinstance(evidence_ready_nodes, int)
+        and evidence_ready_nodes < node_maximum
+        and not ca_activity_active
+        and not node_scale_in_progress
+    )
+    achieved_rps = slo.get("achievedRps")
+    stage_info = stage_fields(metadata, now)
+    target_rps = stage_info.get("targetRate") if isinstance(stage_info, Mapping) else None
+    throughput_plateau = (
+        isinstance(achieved_rps, (int, float))
+        and isinstance(target_rps, (int, float))
+        and achieved_rps < target_rps * 0.9
+        and slo_window_complete is True
+    )
     snapshot = {
         "ts": iso(now),
         "platform": args.platform,
@@ -491,6 +569,22 @@ def collect_snapshot(args: argparse.Namespace, aws: AwsReadOnly) -> dict[str, An
         "logicalCapacityStable": logical_capacity_stable,
         "capacityAtMax": logical_capacity == capacity.get("max") if isinstance(capacity.get("max"), int) else None,
         "maxCapacityReached": max_capacity_reached,
+        "caActivityActive": ca_activity_active,
+        "nodeScaleInProgress": node_scale_in_progress,
+        "newNodeNotReady": node_scale_in_progress,
+        "newPodNotReady": new_pod_not_ready,
+        "albHealthy": alb_healthy is None or alb_healthy > 0,
+        "backendRestartCount": restart_count,
+        "backendOom": backend_oom,
+        "backendUnhealthy": backend_unhealthy,
+        "albSaturated": alb_saturated,
+        "nodeComputeSaturated": node_compute_saturated,
+        "nodeScaleFailed": node_scale_failed,
+        "albMetrics": {key: value for key, value in cloudwatch.items() if key.startswith("alb")},
+        "nodeScaleNotTriggered": node_scale_not_triggered,
+        "throughputPlateau": throughput_plateau,
+        "runnerValid": not bool(slo.get("runnerVusExhausted")),
+        "hpaCapacityExhausted": isinstance(hpa_max, int) and isinstance(hpa_desired, int) and hpa_desired >= hpa_max and (bool(pending_count) or bool(slo.get("sloBreached")) or bool(max_capacity_reached)),
         "scaleInStable": scale_in_stable,
         "capacity": capacity,
         "backendCpuPercent": slo.get("backendCpuPercent", cloudwatch.get("backendCpuPercent")),
@@ -506,6 +600,8 @@ def collect_snapshot(args: argparse.Namespace, aws: AwsReadOnly) -> dict[str, An
         "redisMemoryPercent": cloudwatch.get("redisMemoryPercent"),
         "redisEvictions": cloudwatch.get("redisEvictions"),
         "redisReclaimed": cloudwatch.get("redisReclaimed"),
+        "achievedRps": achieved_rps,
+        "targetRps": target_rps,
         "t3CreditBalance": cloudwatch.get("t3CreditBalance", cloudwatch.get("redisT3CreditBalance")),
         "t3CreditUsage": cloudwatch.get("t3CreditUsage", cloudwatch.get("redisT3CreditUsage")),
         "dataTierMetrics": {
@@ -513,6 +609,7 @@ def collect_snapshot(args: argparse.Namespace, aws: AwsReadOnly) -> dict[str, An
             if key.startswith("rds") or key.startswith("redis")
         },
         "dataTierSaturated": data_tier_saturated,
+        "dataTierSaturationSignals": data_tier_signals,
         "sloWindow": slo.get("sloWindow") if slo_window_present else None,
         "sloWindowComplete": slo_window_complete,
         "sloWindowSeconds": slo.get("sloWindowSeconds"),
@@ -540,7 +637,7 @@ def collect_snapshot(args: argparse.Namespace, aws: AwsReadOnly) -> dict[str, An
             "cloudwatch" if cloudwatch and not observation_errors else "cloudwatch-unavailable" if observation_errors else "none",
         ],
     }
-    snapshot.update(stage_fields(metadata, now))
+    snapshot.update(stage_info)
     return snapshot
 
 
@@ -556,6 +653,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--node-group-name", default="")
     parser.add_argument("--eks-bastion-id", default="")
     parser.add_argument("--target-group-arn", default="")
+    parser.add_argument("--alb-dimension", default="")
+    parser.add_argument("--target-group-dimension", default="")
     parser.add_argument("--namespace", default="travel-planner")
     parser.add_argument("--deployment", default="backend")
     parser.add_argument("--rds-instance-id", default="")

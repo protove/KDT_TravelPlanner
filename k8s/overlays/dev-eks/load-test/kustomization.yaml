@@ -7,3 +7,4 @@ resources:
   - ../workload
 patches:
   - path: backend-hpa-node-scale.patch.yaml
+  - path: backend-google-api-mock.patch.yaml

@@ -38,17 +38,16 @@ variable "instance_type" {
   description = <<-EOT
     Load Runner EC2 instance type. D-001 was reversed by D-001-R1
     (aws-load-test-handoff/decisions/DECISION_LOG.md, 2026-08-11): no size is
-    a permanent/required fixed value. t3.small is the default candidate;
-    re-test with t3.medium only after Runner-side CPU/memory/network/OOM or
-    dropped_iterations evidence (see scripts/loadtest/aws/run-k6-aws-scenario.sh's
-    runner-stats.jsonl and validate-aws-run.py's runnerBottleneckSuspected)
-    shows a bottleneck. t3.micro is a Smoke-only choice, not for Ramp/Baseline.
+    a permanent/required fixed value. Existing t3.* choices remain valid for
+    historical runs. SCRUM-80's adaptive EKS breakpoint uses c6i.2xlarge and
+    permits one c6i.4xlarge replacement only after Runner-first evidence;
+    arbitrary families remain rejected.
   EOT
   default     = "t3.small"
 
   validation {
-    condition     = can(regex("^t3\\.[a-z0-9]+$", var.instance_type))
-    error_message = "instance_type must be a t3 family instance type."
+    condition     = can(regex("^(t3\\.[a-z0-9]+|c6i\\.(2xlarge|4xlarge))$", var.instance_type))
+    error_message = "instance_type must be a t3 family type or the SCRUM-80 c6i.2xlarge/c6i.4xlarge Runner shape."
   }
 }
 
@@ -59,6 +58,17 @@ variable "k6_image_reference" {
   validation {
     condition     = can(regex("^grafana/k6:[0-9]+\\.[0-9]+\\.[0-9]+@sha256:[0-9a-f]{64}$", var.k6_image_reference))
     error_message = "k6_image_reference must be grafana/k6 with an exact X.Y.Z tag pinned by @sha256 digest."
+  }
+}
+
+variable "google_mock_image_reference" {
+  type        = string
+  description = "Digest-pinned linux/amd64 nginx-unprivileged image used only by the isolated Google API mock container."
+  default     = "nginxinc/nginx-unprivileged:1.27.1-alpine3.20-perl@sha256:86b08eb3082f1f796f0ce1ef75a1c356a116fafc5f88754924fba2286fbd0221"
+
+  validation {
+    condition     = can(regex("^nginxinc/nginx-unprivileged:[A-Za-z0-9._-]+@sha256:[0-9a-f]{64}$", var.google_mock_image_reference))
+    error_message = "google_mock_image_reference must be nginxinc/nginx-unprivileged with an exact digest."
   }
 }
 

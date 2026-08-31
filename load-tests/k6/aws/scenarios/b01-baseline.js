@@ -4,10 +4,7 @@
 // of this scenario before an arrival-rate can be frozen; running it 3 times
 // with distinct Run IDs is an orchestration concern (Plan 03), not something
 // this script loops internally.
-import { mapPoints, travelDetail, travelList } from '../../flows/travel-read.js';
-import { orderChange, timelineCreate } from '../../flows/timeline-write.js';
-import { accessToken } from '../../lib/auth.js';
-import { recordCoreOperation } from '../lib/core-metrics.js';
+import { runMixedCurrentOperation } from '../flows/current-feature-operations.js';
 import { b01BaselineThresholds } from '../thresholds.js';
 import { makeAwsSummaryHandler } from '../summary.js';
 import { SCENARIOS, enforceVuLimit, requestMixFor, requireScenarioRate } from '../config.js';
@@ -21,23 +18,6 @@ const DURATION = __ENV.DURATION || BASELINE.duration || '10m';
 const PRE_ALLOCATED_VUS = enforceVuLimit(Number(__ENV.PREALLOCATED_VUS || BASELINE.preAllocatedVUs));
 const MAX_VUS = enforceVuLimit(Number(__ENV.MAX_VUS || BASELINE.maxVUs));
 const MIX = requestMixFor('baseline');
-const FLOWS = {
-  refresh: () => accessToken({ forceRefresh: true }),
-  travelList: () => recordCoreOperation(travelList),
-  travelDetail: () => recordCoreOperation(travelDetail),
-  mapPoints: () => recordCoreOperation(mapPoints),
-  timelineCreate: () => recordCoreOperation(timelineCreate),
-  orderChange: () => recordCoreOperation(orderChange),
-};
-const ORDER = Object.keys(FLOWS);
-let cursor = 0;
-const BOUNDARIES = ORDER.map((key) => {
-  const weight = Number(MIX[key]);
-  if (!Number.isFinite(weight)) throw new Error(`[aws/b01-baseline] requestMix.baseline.${key} is missing`);
-  cursor += weight;
-  return { key, upperBound: cursor };
-});
-if (Math.round(cursor) !== 100) throw new Error(`[aws/b01-baseline] requestMix.baseline must sum to 100, got ${cursor}`);
 
 function durationSeconds(value) {
   const pattern = /(\d+(?:\.\d+)?)(ms|s|m|h)/g;
@@ -80,9 +60,7 @@ export const options = {
 };
 
 export function mix() {
-  const choice = Math.random() * 100;
-  const match = BOUNDARIES.find((boundary) => choice < boundary.upperBound);
-  FLOWS[match.key]();
+  runMixedCurrentOperation(MIX);
 }
 
 export const handleSummary = makeAwsSummaryHandler('aws-b01-baseline');

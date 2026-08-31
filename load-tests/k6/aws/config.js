@@ -40,12 +40,14 @@ function loadSloContract() {
   }
   const supported = (contract.contractVersion === 'v1.0' && contract.sloVersion === 'v1.0-frozen')
     || (contract.contractVersion === 'v1.1'
-      && ['v1.1-candidate', 'v1.1-frozen'].includes(contract.sloVersion));
+      && ['v1.1-candidate', 'v1.1-frozen'].includes(contract.sloVersion))
+    || (contract.contractVersion === 'v2.0' && contract.sloVersion === 'v2.0-breakpoint');
   if (!supported) {
-    fail('SLO contract must be v1.0-frozen or v1.1 candidate/frozen');
+    fail('SLO contract must be v1.0-frozen, v1.1 candidate/frozen or v2.0-breakpoint');
   }
-  if (contract.contractVersion === 'v1.1') {
-    const expectedInstanceFamily = contract.sloVersion === 'v1.1-frozen' ? 't3.medium' : 't3.small';
+  if (contract.contractVersion === 'v1.1' || contract.contractVersion === 'v2.0') {
+    const expectedInstanceFamily = contract.contractVersion === 'v2.0' || contract.sloVersion === 'v1.1-candidate'
+      ? 't3.small' : 't3.medium';
     if (!contract.comparison || contract.comparison.sameInstanceFamily !== expectedInstanceFamily) {
       fail(`${contract.sloVersion} comparison contract must bind the ${expectedInstanceFamily} common host envelope`);
     }
@@ -131,6 +133,7 @@ export const K6_IMAGE_DIGEST = resolveImageDigest(PROFILE);
 // an EC2 profile does not silently label an EKS evidence bundle dev-runtime.
 export const REGION = __ENV.TARGET_REGION || PROFILE.region || fail('region is missing from profile');
 export const ENVIRONMENT = __ENV.TARGET_ENVIRONMENT || PROFILE.environment || fail('environment is missing from profile');
+export const PROFILE_VERSION = PROFILE.profileVersion || fail('profileVersion is missing from profile');
 export const SLO_VERSION = PROFILE.sloVersion || fail('sloVersion is missing from profile');
 export const SEED_VERSION = PROFILE.seedVersion || fail('seedVersion is missing from profile');
 export const REQUEST_MIX_VERSION = PROFILE.requestMixVersion
@@ -156,7 +159,13 @@ function validateMix(name, mix) {
 assertGoogleApiDisabled(PROFILE);
 
 export function enforceRateLimit(rate) {
-  if (rate > LIMITS.maxRate) {
+  if (!Number.isFinite(Number(rate)) || Number(rate) <= 0) {
+    fail(`requested rate must be a positive finite number: ${rate}`);
+  }
+  // v2 adaptive EKS stages intentionally leave maxRate null. The action
+  // capsule and per-stage VU/evidence guards bound the Runner, while the
+  // first successful exit remains an observed SUT terminal.
+  if (LIMITS.maxRate !== null && Number.isFinite(Number(LIMITS.maxRate)) && rate > LIMITS.maxRate) {
     fail(`requested rate ${rate} exceeds profile limits.maxRate ${LIMITS.maxRate}`);
   }
   return rate;

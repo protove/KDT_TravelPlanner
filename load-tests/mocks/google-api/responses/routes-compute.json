@@ -1,0 +1,13 @@
+{
+  "routes": [
+    {
+      "distanceMeters": 1200,
+      "duration": "600s",
+      "polyline": {"encodedPolyline": "}_seF_qysX??_ibE??"},
+      "legs": [
+        {"distanceMeters": 600, "duration": "300s"},
+        {"distanceMeters": 600, "duration": "300s"}
+      ]
+    }
+  ]
+}

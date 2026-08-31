@@ -782,6 +782,13 @@ class CleanupResultFileTest(unittest.TestCase):
 
 
 class CleanupAwsLoadDataTest(unittest.TestCase):
+    def test_provider_user_id_regex_is_anchored_to_seed_width(self):
+        pattern = CLEANUP.provider_user_id_regex("run-a", 6)
+        self.assertEqual(pattern, r"^loadtest-aws-run-a-[0-9]{6}$")
+        self.assertRegex("loadtest-aws-run-a-000001", pattern)
+        self.assertNotRegex("loadtest-aws-run-a-00001", pattern)
+        self.assertNotRegex("loadtest-aws-run-a-000001-extra", pattern)
+
     def test_like_pattern_prefix_is_hardcoded(self):
         pattern = CLEANUP.like_pattern("aws-b01-20260809-001")
         self.assertTrue(pattern.startswith("loadtest-aws-"))

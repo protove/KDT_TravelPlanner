@@ -41,6 +41,19 @@ class EksTargetAdapterTests(unittest.TestCase):
         with self.assertRaises(MODULE.EKSAdapterError):
             MODULE.validate_alb_target_health(payload, target_group_arn=self.fixture["targetGroupArn"])
 
+    def test_observer_can_preserve_an_all_unhealthy_alb_snapshot(self) -> None:
+        payload = json.loads(json.dumps(self.fixture["targetHealth"]))
+        for item in payload["TargetHealthDescriptions"]:
+            item["TargetHealth"]["State"] = "unhealthy"
+        summary = MODULE.validate_alb_target_health(
+            payload,
+            target_group_arn=self.fixture["targetGroupArn"],
+            allow_no_healthy=True,
+        )
+        self.assertEqual(summary["healthyTargetCount"], 0)
+        with self.assertRaises(MODULE.EKSAdapterError):
+            MODULE.validate_alb_target_health(payload, target_group_arn=self.fixture["targetGroupArn"])
+
     def test_kubectl_commands_are_read_only_and_cover_required_snapshots(self) -> None:
         commands = MODULE.build_kubectl_commands(
             cluster_name="example-dev-eks",
@@ -89,6 +102,26 @@ class EksTargetAdapterTests(unittest.TestCase):
         self.assertEqual(evidence["alb"]["healthyTargetCount"], 2)
         self.assertTrue(evidence["sanitization"]["rawKubectlOutputStored"] is False)
 
+    def test_evidence_exposes_hpa_ceiling_and_backend_failure_signals(self) -> None:
+        kubectl = json.loads(json.dumps(self.fixture["kubectl"]))
+        kubectl["hpa"]["spec"] = {"minReplicas": 2, "maxReplicas": 4}
+        kubectl["deployment"]["status"]["unavailableReplicas"] = 1
+        kubectl["pods"]["items"][0]["status"]["containerStatuses"][0]["lastState"] = {
+            "terminated": {"reason": "OOMKilled"}
+        }
+        kubectl["pods"]["items"][1]["status"]["containerStatuses"][0]["state"] = {
+            "waiting": {"reason": "CrashLoopBackOff"}
+        }
+        evidence = MODULE.build_evidence(
+            node_group=MODULE.resolve_node_group(self.fixture["nodeGroup"], expected_cluster=self.fixture["clusterName"], expected_node_group=self.fixture["nodeGroupName"]),
+            target_health=MODULE.validate_alb_target_health(self.fixture["targetHealth"], target_group_arn=self.fixture["targetGroupArn"]),
+            hpa=kubectl["hpa"], deployment=kubectl["deployment"], pods=kubectl["pods"], nodes=kubectl["nodes"], events=kubectl["events"], asg_activities=self.fixture["asgActivities"],
+        )
+        self.assertEqual(evidence["hpa"]["maxReplicas"], 4)
+        self.assertEqual(evidence["deployment"]["unavailableReplicas"], 1)
+        self.assertTrue(evidence["backendPods"]["placement"][0]["oomKilled"])
+        self.assertTrue(evidence["backendPods"]["placement"][1]["crashLoopBackOff"])
+
     def test_high_watermark_preserves_observed_capacity_when_a_phase_is_skipped(self) -> None:
         previous = {"nodeCount": 2, "nodeReadyCount": 2, "backendPods": {"count": 2, "readyCount": 2}}
         current = {"nodeCount": 1, "nodeReadyCount": 1, "backendPods": {"count": 1, "readyCount": 0}}
@@ -119,6 +152,49 @@ class EksTargetAdapterTests(unittest.TestCase):
         self.assertEqual(curve["N4"], 16)
         patch = MODULE.build_hpa_override(curve)
         self.assertEqual(patch["spec"]["maxReplicas"], 17)
+
+    def test_hpa_apply_receipt_is_bound_to_run_scoped_n4_plus_one(self) -> None:
+        invocation = {
+            "Status": "Success",
+            "ResponseCode": 0,
+            "StandardOutputContent": (
+                "deployment.apps/backend configured\n"
+                "__SCRUM80_HPA_APPLY_BEGIN__\n"
+                '{"metadata":{"name":"backend","namespace":"travel-planner",'
+                '"annotations":{"load-test.kdt.travelplanner/scope":"run-scoped-n4-plus-one",'
+                '"load-test.kdt.travelplanner/n4":"16"}},'
+                '"spec":{"minReplicas":2,"maxReplicas":17}}\n'
+                "__SCRUM80_HPA_APPLY_END__\n"
+            ),
+            "StandardErrorContent": "",
+        }
+        receipt = MODULE.sanitize_hpa_apply_invocation(
+            invocation,
+            expected_max_replicas=17,
+            override_sha256="a" * 64,
+        )
+        self.assertEqual(receipt["maxReplicas"], 17)
+        self.assertEqual(receipt["n4"], "16")
+        self.assertFalse(receipt["rawOutputStored"])
+
+    def test_hpa_apply_receipt_rejects_canonical_four_pod_ceiling(self) -> None:
+        invocation = {
+            "Status": "Success",
+            "ResponseCode": 0,
+            "StandardOutputContent": (
+                "__SCRUM80_HPA_APPLY_BEGIN__\n"
+                '{"metadata":{"name":"backend","namespace":"travel-planner",'
+                '"annotations":{"load-test.kdt.travelplanner/scope":"run-scoped-n4-plus-one"}},'
+                '"spec":{"minReplicas":2,"maxReplicas":4}}\n'
+                "__SCRUM80_HPA_APPLY_END__\n"
+            ),
+        }
+        with self.assertRaises(MODULE.EKSAdapterError):
+            MODULE.sanitize_hpa_apply_invocation(
+                invocation,
+                expected_max_replicas=4,
+                override_sha256="a" * 64,
+            )
 
     def test_pending_backend_pod_is_separate_from_node_scale_out(self) -> None:
         kubectl = json.loads(json.dumps(self.fixture["kubectl"]))

@@ -30,21 +30,27 @@ EKS_BASTION_ID="${EKS_BASTION_ID:-}"
 BACKEND_NAMESPACE="${BACKEND_NAMESPACE:-travel-planner}"
 BACKEND_DEPLOYMENT="${BACKEND_DEPLOYMENT:-backend}"
 TARGET_GROUP_ARN="${TARGET_GROUP_ARN:-}"
-MAX_RATE="${MAX_RATE:?MAX_RATE is required}"
+MAX_RATE="${MAX_RATE:-}"
 OPERATOR_MAX_VUS="${MAX_VUS:?MAX_VUS is required}"
+PROFILE_VERSION="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("profileVersion", ""))' "$AWS_PROFILE_FILE")"
+ADAPTIVE_BREAKPOINT="$(python3 -c 'import json,sys; print("1" if json.load(open(sys.argv[1])).get("profileVersion") == "aws-eks-monolith-breakpoint-v2.0" else "0")' "$AWS_PROFILE_FILE")"
+if [[ "$ADAPTIVE_BREAKPOINT" != "1" && -z "$MAX_RATE" ]]; then
+  echo "MAX_RATE is required for historical finite AWS profiles" >&2
+  exit 2
+fi
 
 case "$PHASE" in
   smoke|ramp|baseline|spike|soak|scale-step|capacity-stress|pod-scale-out|node-scale-out-breakpoint|recovery) ;;
   *) echo "usage: run-aws-b01.sh <smoke|ramp|baseline|spike|soak|scale-step|capacity-stress|pod-scale-out|node-scale-out-breakpoint|recovery> [rep]" >&2; exit 2 ;;
 esac
 if [[ "$PHASE" == "baseline" && -z "$REP" ]]; then
-  echo "baseline requires a rep number (1-3): run-aws-b01.sh baseline <rep>" >&2
+  echo "baseline requires a rep number: run-aws-b01.sh baseline <rep>" >&2
   exit 2
 fi
 
 suffix="$PHASE"
 [[ -n "$REP" ]] && suffix="$PHASE-$REP"
-run_dir="$EVIDENCE_ROOT/k6/$suffix"
+run_dir="${CAPACITY_STAGE_DIR:-$EVIDENCE_ROOT/k6/$suffix}"
 phase_run_id="$RUN_ID-$suffix"
 
 export REPOSITORY_ROOT BASE_URL K6_IMAGE_DIGEST AWS_PROFILE_FILE REGION ENVIRONMENT TARGET_PLATFORM
@@ -108,7 +114,7 @@ case "$PHASE" in
     ;;
   baseline)
     : "${CONFIRMED_RATE:?CONFIRMED_RATE is required for baseline (D-005 operator-confirmed arrival-rate)}"
-    if ! python3 -c "import sys; sys.exit(0 if float('$CONFIRMED_RATE') <= float('$MAX_RATE') else 1)"; then
+    if [[ -n "$MAX_RATE" ]] && ! python3 -c "import sys; sys.exit(0 if float('$CONFIRMED_RATE') <= float('$MAX_RATE') else 1)"; then
       echo "--confirmed-rate $CONFIRMED_RATE exceeds --max-rate $MAX_RATE" >&2
       exit 2
     fi
@@ -205,6 +211,42 @@ PY
     ALLOW_K6_FAILURE=1 "$REPOSITORY_ROOT/scripts/loadtest/aws/run-k6-aws-scenario.sh" scale-step "$run_dir"
     ;;
   capacity-stress)
+    if [[ "$ADAPTIVE_BREAKPOINT" == "1" ]]; then
+      : "${CAPACITY_TARGET_RATE:?CAPACITY_TARGET_RATE is required for adaptive capacity-stress}"
+      target_values="$(python3 - "$CAPACITY_TARGET_RATE" "$MAX_VUS" "$AWS_PROFILE_FILE" <<'PY'
+import json
+import math
+import sys
+from pathlib import Path
+
+target_raw, operator_raw, profile_path = sys.argv[1:]
+try:
+    target = float(target_raw)
+    operator = int(operator_raw)
+except (TypeError, ValueError):
+    raise SystemExit("adaptive capacity target/maxVUs must be numeric")
+if not math.isfinite(target) or target <= 0:
+    raise SystemExit("adaptive capacity target rate must be positive")
+preallocated = max(256, math.ceil(target))
+max_vus = max(512, math.ceil(target * 2))
+profile = json.loads(Path(profile_path).read_text(encoding="utf-8"))
+profile_limit = int(profile["limits"]["maxVUs"])
+if max_vus > profile_limit or max_vus > operator:
+    raise SystemExit(f"adaptive stage maxVUs {max_vus} exceeds profile/operator limit")
+print(f"{preallocated}|{max_vus}")
+PY
+)"
+      IFS='|' read -r adaptive_preallocated adaptive_max_vus <<< "$target_values"
+      export RATE="$CAPACITY_TARGET_RATE" CONFIRMED_RATE="$CAPACITY_TARGET_RATE"
+      export PREALLOCATED_VUS="${CAPACITY_STRESS_PREALLOCATED_VUS:-$adaptive_preallocated}"
+      export MAX_VUS="$adaptive_max_vus"
+      export EFFECTIVE_MAX_VUS="$adaptive_max_vus"
+      # Five minutes is long enough for HPA/Cluster Autoscaler observations
+      # while keeping each adaptive stage bounded; the driver may extend one
+      # active scale transition once, according to the v6 contract.
+      export CAPACITY_STAGE_DURATION="${CAPACITY_STAGE_DURATION:-5m}"
+      ALLOW_K6_FAILURE=1 "$REPOSITORY_ROOT/scripts/loadtest/aws/run-k6-aws-scenario.sh" capacity-stress "$run_dir"
+    else
     : "${CONFIRMED_RATE:?CONFIRMED_RATE is required for capacity-stress (frozen normal rate)}"
     export RATE="$CONFIRMED_RATE"
     capacity_profile_preallocated_vus="$(python3 - "$AWS_PROFILE_FILE" <<'PY'
@@ -234,6 +276,7 @@ PY
 )"
     configure_phase_max_vus capacity-stress "${CAPACITY_STRESS_MAX_VUS:-$capacity_profile_max_vus}"
     ALLOW_K6_FAILURE=1 "$REPOSITORY_ROOT/scripts/loadtest/aws/run-k6-aws-scenario.sh" capacity-stress "$run_dir"
+    fi
     ;;
   pod-scale-out|node-scale-out-breakpoint|recovery)
     : "${CONFIRMED_RATE:?CONFIRMED_RATE is required for $PHASE}"
