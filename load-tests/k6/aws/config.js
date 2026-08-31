@@ -45,8 +45,9 @@ function loadSloContract() {
     fail('SLO contract must be v1.0-frozen or v1.1 candidate/frozen');
   }
   if (contract.contractVersion === 'v1.1') {
-    if (!contract.comparison || contract.comparison.sameInstanceFamily !== 't3.medium') {
-      fail('v1.1 comparison contract must bind the t3.medium common host envelope');
+    const expectedInstanceFamily = contract.sloVersion === 'v1.1-frozen' ? 't3.medium' : 't3.small';
+    if (!contract.comparison || contract.comparison.sameInstanceFamily !== expectedInstanceFamily) {
+      fail(`${contract.sloVersion} comparison contract must bind the ${expectedInstanceFamily} common host envelope`);
     }
   }
   return contract;

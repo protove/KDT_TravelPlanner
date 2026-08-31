@@ -12,7 +12,7 @@ spec:
   strategy:
     type: RollingUpdate
     rollingUpdate:
-      # The comparison seed uses two t3.medium nodes. Keep both old replicas
+      # The comparison seed uses two t3.small nodes. Keep both old replicas
       # available while one replacement is scheduled, matching the EC2
       # 100/150 availability objective during the action-time rollout.
       maxUnavailable: 0

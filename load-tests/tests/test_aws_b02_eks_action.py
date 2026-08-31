@@ -37,7 +37,7 @@ class FakeAws:
                 "Instances": [{"InstanceId": "i-0123456789abcdef0", "LifecycleState": "InService", "HealthStatus": "Healthy"}],
             }]}
         if service == "ec2":
-            return {"Reservations": [{"Instances": [{"InstanceId": "i-0123456789abcdef0", "State": {"Name": "running"}, "InstanceType": "t3.medium"}]}]}
+            return {"Reservations": [{"Instances": [{"InstanceId": "i-0123456789abcdef0", "State": {"Name": "running"}, "InstanceType": "t3.small"}]}]}
         if service == "elbv2":
             return {"TargetHealthDescriptions": [{"Target": {"Id": "10.20.1.11"}, "TargetHealth": {"State": "healthy"}}]}
         raise AssertionError((service, operation))

@@ -125,7 +125,7 @@ variable "google_oauth_redirect_uri" {
 variable "instance_type" {
   type        = string
   description = "Backend EC2 instance type."
-  default     = "t3.medium"
+  default     = "t3.small"
 }
 
 variable "health_check_grace_period_seconds" {

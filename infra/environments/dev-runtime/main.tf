@@ -124,7 +124,7 @@ module "backend_service" {
   environment                        = local.environment
   frontend_origin                    = local.frontend_origin
   google_oauth_redirect_uri          = "${local.api_origin}/api/v1/auth/oauth2/google/callback"
-  instance_type                      = "t3.medium"
+  instance_type                      = "t3.small"
   instance_warmup_seconds            = 180
   health_check_grace_period_seconds  = var.backend_health_check_grace_period_seconds
   alloy_image_reference              = var.monitoring_image_references.alloy

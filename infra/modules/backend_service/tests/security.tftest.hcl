@@ -98,7 +98,7 @@ run "backend_is_private_and_rolls_without_capacity_loss" {
       aws_autoscaling_group.backend.min_size == 2 &&
       aws_autoscaling_group.backend.desired_capacity == 2 &&
       aws_autoscaling_group.backend.max_size == 4 &&
-      aws_launch_template.backend.instance_type == "t3.medium" &&
+      aws_launch_template.backend.instance_type == "t3.small" &&
       aws_autoscaling_group.backend.health_check_grace_period == 300 &&
       aws_autoscaling_group.backend.enabled_metrics == toset([
         "GroupDesiredCapacity",

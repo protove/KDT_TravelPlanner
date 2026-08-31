@@ -79,7 +79,7 @@ variable "admin_principal_arns" {
 variable "node_instance_types" {
   type        = list(string)
   description = "Managed node group EC2 instance types."
-  default     = ["t3.medium"]
+  default     = ["t3.small"]
 
   validation {
     condition     = length(var.node_instance_types) > 0

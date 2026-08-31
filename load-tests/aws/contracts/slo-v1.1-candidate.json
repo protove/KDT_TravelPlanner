@@ -48,7 +48,7 @@
     "normalRateStatus": "pending-baseline-freeze",
     "platforms": ["ec2-asg", "eks"],
     "sameApplicationWorkload": true,
-    "sameInstanceFamily": "t3.medium",
+    "sameInstanceFamily": "t3.small",
     "sameCapacityShape": { "min": 2, "desired": 2, "max": 4 }
   },
   "metricDefinitions": {

@@ -60,7 +60,7 @@ class SloBoundaryTest(unittest.TestCase):
 
     def test_comparison_candidate_binds_common_capacity_envelope(self):
         contract = SLO.load_contract(COMPARISON_CONTRACT_PATH, expected_version="v1.1-candidate")
-        self.assertEqual(contract["comparison"]["sameInstanceFamily"], "t3.medium")
+        self.assertEqual(contract["comparison"]["sameInstanceFamily"], "t3.small")
         self.assertEqual(contract["comparison"]["sameCapacityShape"], {"min": 2, "desired": 2, "max": 4})
 
 

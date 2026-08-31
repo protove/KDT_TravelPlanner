@@ -129,7 +129,11 @@ def load_contract(path: Path | None = None, *, expected_version: str | None = No
         comparison = payload.get("comparison")
         _require(isinstance(comparison, dict), "v1.1 comparison section is missing")
         _require(comparison.get("platforms") == ["ec2-asg", "eks"], "v1.1 comparison platforms must be EC2 ASG and EKS")
-        _require(comparison.get("sameInstanceFamily") == "t3.medium", "v1.1 comparison instance family must be t3.medium")
+        expected_instance_family = "t3.medium" if slo_version == "v1.1-frozen" else "t3.small"
+        _require(
+            comparison.get("sameInstanceFamily") == expected_instance_family,
+            f"{slo_version} comparison instance family must be {expected_instance_family}",
+        )
         capacity_shape = comparison.get("sameCapacityShape")
         _require(capacity_shape == {"min": 2, "desired": 2, "max": 4}, "v1.1 comparison capacity shape must be 2/2/4")
     return payload
