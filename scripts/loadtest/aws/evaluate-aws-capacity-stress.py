@@ -210,6 +210,22 @@ def first_timestamp(snapshots: list[dict], predicate) -> str | None:
     return None
 
 
+def transition_observed(snapshots: list[dict], key: str) -> bool:
+    """Detect a real decrease in the observed Pod/Node count."""
+    previous: float | None = None
+    for item in snapshots:
+        raw = item.get(key)
+        if key == "backendPods" and isinstance(raw, dict):
+            raw = raw.get("count")
+        value = number(raw)
+        if value is None:
+            continue
+        if previous is not None and value < previous:
+            return True
+        previous = value
+    return False
+
+
 def evaluate(args: argparse.Namespace) -> dict:
     run_dir = args.run_dir.resolve()
     metadata = read_json(run_dir / "metadata.json")
@@ -270,7 +286,14 @@ def evaluate(args: argparse.Namespace) -> dict:
     terminal = controller.get("terminalReason")
     valid_metric_window = bool(snapshots) and all(timestamp(item.get("ts") or item.get("timestamp")) is not None for item in snapshots)
     valid_metric_window = valid_metric_window and all(item.get("requiredObservationsValid", True) is not False for item in snapshots)
-    if requires_complete_slo and not complete_windows:
+    producer_exit = status.get("sloWindowProducerExitCode", 0)
+    try:
+        producer_exit = int(producer_exit or 0)
+    except (TypeError, ValueError):
+        producer_exit = 1
+    if producer_exit != 0:
+        valid_metric_window = False
+    if requires_complete_slo and len(complete_windows) < 2:
         valid_metric_window = False
     validity = "VALID"
     invalid_reason = None
@@ -302,6 +325,9 @@ def evaluate(args: argparse.Namespace) -> dict:
     else:
         bottleneck = "runner-invalid" if runner_invalid else None
 
+    campaign_stage = metadata.get("effectiveInputs", {}).get("campaignStage") or controller.get("campaignStage", "capacity-stress")
+    pod_scale_out = any(item.get("podScaleOut") is True for item in snapshots)
+    node_scale_out = any(item.get("nodeScaleOut") is True for item in snapshots)
     result = {
         "schemaVersion": "capacity-stress-evaluation/v1",
         "runId": metadata.get("runId"),
@@ -309,6 +335,7 @@ def evaluate(args: argparse.Namespace) -> dict:
         "profileSha256": metadata.get("profileSha256"),
         "sloVersion": metadata.get("sloVersion"),
         "effectiveInputs": metadata.get("effectiveInputs", {}),
+        "campaignStage": campaign_stage,
         "validity": validity,
         "invalidReason": invalid_reason,
         "terminalReason": terminal,
@@ -322,11 +349,19 @@ def evaluate(args: argparse.Namespace) -> dict:
         },
         "stageCurve": stage_rows,
         "scaleOut": {
-            "podScaleOut": any(item.get("podScaleOut") is True for item in snapshots),
-            "nodeScaleOut": any(item.get("nodeScaleOut") is True for item in snapshots),
+            "podScaleOut": pod_scale_out,
+            "nodeScaleOut": node_scale_out,
+            "podScaleOutStable": pod_scale_out and window_duration(snapshots, lambda item: item.get("podScaleOut") is True) >= args.capacity_stability_seconds,
+            "nodeScaleOutStable": node_scale_out and window_duration(snapshots, lambda item: item.get("nodeScaleOut") is True) >= args.capacity_stability_seconds,
             "podScaleOutAt": first_timestamp(snapshots, lambda item: item.get("podScaleOut") is True),
             "nodeScaleOutAt": first_timestamp(snapshots, lambda item: item.get("nodeScaleOut") is True),
             "nodeMaxPendingAt": first_timestamp(snapshots, lambda item: item.get("nodeMaxPending") is True),
+        },
+        "recovery": {
+            "userSloRecovered": any(item.get("sloWindowComplete") is True and item.get("sloBreached") is False for item in snapshots),
+            "podScaleInObserved": transition_observed(snapshots, "backendPods"),
+            "nodeScaleInObserved": transition_observed(snapshots, "readyNodeCount"),
+            "nodeScaleInCensored": not transition_observed(snapshots, "readyNodeCount"),
         },
         "stability": {
             "lastStableAt": (stable_snapshots[-1].get("ts") if stable_snapshots else None),
@@ -335,6 +370,7 @@ def evaluate(args: argparse.Namespace) -> dict:
         "snapshotWindow": {
             "samples": len(snapshots),
             "completeSloWindows": len(complete_windows),
+            "sloWindowProducerExitCode": producer_exit,
             "sloBreachedWindows": slo_window_count,
             "capacityStableSeconds": round(window_duration(snapshots, lambda item: item.get("logicalCapacityStable") is True), 3),
             "dataSaturatedSeconds": round(window_duration(snapshots, lambda item: bool(item.get("dataTierSaturated"))), 3),

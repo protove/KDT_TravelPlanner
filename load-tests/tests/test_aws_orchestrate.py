@@ -102,6 +102,15 @@ class AwsOrchestrationContractTests(unittest.TestCase):
         self.assertIn('variable = "aws:RequestedRegion"', source)
         self.assertIn("values   = [var.aws_region]", source)
 
+    def test_runner_eks_observer_permissions_are_optional_and_bastion_tagged(self) -> None:
+        source = LOAD_RUNNER_TERRAFORM.read_text(encoding="utf-8")
+        self.assertIn('var.eks_observation_stack != ""', source)
+        for action in ("eks:DescribeNodegroup", "cloudwatch:GetMetricStatistics", "ssm:SendCommand", "ssm:GetCommandInvocation"):
+            self.assertIn(f'"{action}"', source)
+        self.assertIn('variable = "ssm:resourceTag/Stack"', source)
+        self.assertIn('values   = [var.eks_observation_stack]', source)
+        self.assertNotIn("eks:AccessKubernetesApi", source)
+
     def test_help_exposes_approved_operator_inputs(self) -> None:
         result = subprocess.run(
             ["bash", str(SCRIPT), "--help"],
@@ -164,12 +173,27 @@ class AwsOrchestrationContractTests(unittest.TestCase):
         self.assertIn("--eks-evidence-file", source)
         self.assertIn('phase" == "capacity-stress" && "$TARGET_PLATFORM" == "eks"', source)
 
+    def test_eks_campaign_has_separate_baseline_pod_node_and_recovery_paths(self) -> None:
+        source = SCRIPT.read_text(encoding="utf-8")
+        for stage in ("eks-baseline", "pod-scale-out", "node-scale-out-breakpoint", "recovery"):
+            self.assertIn(stage, source)
+        phase_source = AWS_PHASE_RUNNER.read_text(encoding="utf-8")
+        self.assertIn("TARGET_PLATFORM\" == \"eks\"", phase_source)
+        self.assertIn("observe-aws-capacity-stress.py", phase_source)
+        self.assertIn('CAPACITY_STAGE="$PHASE"', phase_source)
+
     def test_eks_breakpoint_profile_is_referenced_by_the_runner_contract(self) -> None:
         profile = REPOSITORY_ROOT / "load-tests/aws/profiles/eks-monolith-breakpoint-v1.0.json"
         self.assertTrue(profile.is_file())
         runner_source = AWS_K6_RUNNER.read_text(encoding="utf-8")
         self.assertIn("aws-eks-monolith-breakpoint-v1.0", runner_source)
         self.assertIn("eks-scale-capacity.js", runner_source)
+
+    def test_eks_breakpoint_profile_defaults_to_its_t3_small_contract(self) -> None:
+        source = SCRIPT.read_text(encoding="utf-8")
+        self.assertIn("BREAKPOINT_PROFILE=1", source)
+        self.assertIn("eks-monolith-breakpoint-slo-v1.0.json", source)
+        self.assertIn("historical t3.medium contract is not valid here", source)
 
     def test_shared_k6_profile_gets_action_time_platform_environment(self) -> None:
         runner_source = AWS_PHASE_RUNNER.parent.joinpath("run-k6-aws-scenario.sh").read_text(encoding="utf-8")

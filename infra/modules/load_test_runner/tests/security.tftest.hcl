@@ -154,3 +154,26 @@ run "runner_instance_type_must_be_t3_family" {
 
   expect_failures = [var.instance_type]
 }
+
+run "eks_observation_scope_accepts_only_the_disposable_stack" {
+  command = plan
+
+  variables {
+    eks_observation_stack = "dev-eks"
+  }
+
+  assert {
+    condition     = var.eks_observation_stack == "dev-eks"
+    error_message = "EKS observation permissions must be bound to the disposable dev-eks stack."
+  }
+}
+
+run "eks_observation_scope_rejects_other_stacks" {
+  command = plan
+
+  variables {
+    eks_observation_stack = "dev-runtime"
+  }
+
+  expect_failures = [var.eks_observation_stack]
+}

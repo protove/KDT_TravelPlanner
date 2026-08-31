@@ -36,6 +36,14 @@ class CapacityStressCoordinatorTest(unittest.TestCase):
         self.assertEqual(args.complete_schedule_seconds, 100)
         self.assertEqual(args.hard_time_ceiling_seconds, 120)
 
+    def test_campaign_stage_is_recorded_for_separate_breakpoint_runs(self) -> None:
+        args = MODULE.parse_args([
+            "--run-dir", "/tmp/scrum80-node-breakpoint",
+            "--campaign-stage", "node-scale-out-breakpoint",
+            "--", "echo", "ok",
+        ])
+        self.assertEqual(args.campaign_stage, "node-scale-out-breakpoint")
+
     def test_capacity_terminal_requires_the_registered_stability_window(self) -> None:
         snapshots = [
             {"ts": utc(0), "maxCapacityReached": True, "logicalCapacity": 4},

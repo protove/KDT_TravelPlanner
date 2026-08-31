@@ -65,8 +65,9 @@ module "load_test_runner" {
     data.terraform_remote_state.runtime.outputs.redis_load_test_user_arn,
     data.terraform_remote_state.runtime.outputs.redis_replication_group_arn,
   ]
-  source_commit_sha = var.load_runner_source_commit_sha
-  tags              = local.common_tags
+  eks_observation_stack = var.runtime_state_key == "dev-eks/terraform.tfstate" ? "dev-eks" : ""
+  source_commit_sha     = var.load_runner_source_commit_sha
+  tags                  = local.common_tags
 
   # The security-group ID alone depends only on the SG resource. Wait for all
   # HTTPS, DNS, PostgreSQL and Redis rules before user data starts package,

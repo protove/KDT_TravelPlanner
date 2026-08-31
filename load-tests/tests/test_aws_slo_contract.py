@@ -5,6 +5,7 @@ import importlib.util
 import json
 import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 
@@ -23,6 +24,7 @@ def load_module(name: str, path: Path):
 
 SLO = load_module("slo_contract", ROOT / "scripts/loadtest/aws/slo_contract.py")
 FREEZE = load_module("build_freeze_input_manifest", ROOT / "scripts/loadtest/aws/build-freeze-input-manifest.py")
+SLO_WINDOWS = load_module("produce_capacity_slo_windows", ROOT / "scripts/loadtest/aws/produce-capacity-slo-windows.py")
 
 
 def write_json(path: Path, payload: dict) -> None:
@@ -62,6 +64,74 @@ class SloBoundaryTest(unittest.TestCase):
         contract = SLO.load_contract(COMPARISON_CONTRACT_PATH, expected_version="v1.1-candidate")
         self.assertEqual(contract["comparison"]["sameInstanceFamily"], "t3.small")
         self.assertEqual(contract["comparison"]["sameCapacityShape"], {"min": 2, "desired": 2, "max": 4})
+
+    def test_eks_breakpoint_contract_binds_t3_small_without_changing_historical_contract(self):
+        path = ROOT / "load-tests/aws/contracts/eks-monolith-breakpoint-slo-v1.0.json"
+        contract = SLO.load_contract(path, expected_version="v1.1-candidate")
+        self.assertEqual(contract["scope"], "aws-eks-monolith-breakpoint-t3-small")
+        self.assertEqual(contract["comparison"]["normalRate"], 16)
+        self.assertEqual(contract["comparison"]["sameInstanceFamily"], "t3.small")
+        self.assertEqual(json.loads((ROOT / "load-tests/aws/contracts/slo-v1.1-frozen.json").read_text())["comparison"]["sameInstanceFamily"], "t3.medium")
+
+
+class CapacitySloWindowProducerTest(unittest.TestCase):
+    def test_emits_only_complete_non_overlapping_windows_and_stage_labels(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            metadata = root / "metadata.json"
+            contract = root / "contract.json"
+            raw = root / "raw.json"
+            output = root / "slo-windows.jsonl"
+            write_json(metadata, {
+                "runId": "scrum80-window-fixture",
+                "startedAtUtc": "2026-08-31T00:00:00Z",
+                "effectiveInputs": {
+                    "baseRate": 16,
+                    "stageMultipliers": [1, 2],
+                    "stageDurations": ["1m", "1m"],
+                },
+            })
+            write_json(contract, {
+                "baseline": {
+                    "p95Ms": 500,
+                    "successRate": 0.99,
+                    "unexpectedErrorRate": 0.01,
+                    "contractFailureRate": 0.01,
+                    "droppedIterations": 0,
+                },
+                "comparators": {
+                    "p95Ms": {"operator": "<=", "value": 500},
+                    "successRate": {"operator": ">=", "value": 0.99},
+                    "unexpectedErrorRate": {"operator": "<", "value": 0.01},
+                    "baselineContractFailureRate": {"operator": "<", "value": 0.01},
+                    "droppedIterations": {"operator": "==", "value": 0},
+                },
+            })
+
+            def point(metric, second, value):
+                stamp = datetime(2026, 8, 31, tzinfo=timezone.utc) + timedelta(seconds=second)
+                return {"type": "Point", "metric": metric, "data": {"time": stamp.isoformat().replace("+00:00", "Z"), "value": value}}
+
+            lines = []
+            for metric, value in (
+                ("core_completed_operations_total", 10),
+                ("core_successful_operations_total", 10),
+                ("core_unexpected_errors_total", 0),
+                ("core_contract_failures_total", 0),
+                ("dropped_iterations", 0),
+                ("http_req_duration", 100),
+            ):
+                lines.append(point(metric, 10, value))
+            lines.append(point("http_req_duration", 70, 120))
+            raw.write_text("\n".join(json.dumps(item) for item in lines) + "\n", encoding="utf-8")
+            SLO_WINDOWS.produce(raw, output, metadata, contract, finalize=True)
+            windows = [json.loads(line) for line in output.read_text().splitlines()]
+            self.assertEqual(len(windows), 1)
+            self.assertTrue(windows[0]["sloWindowComplete"])
+            self.assertEqual(windows[0]["stageIndex"], 0)
+            self.assertEqual(windows[0]["stageMultiplier"], 1)
+            self.assertEqual(windows[0]["sloWindowStartUtc"], "2026-08-31T00:00:00.000Z")
+            self.assertEqual(windows[0]["sloWindowEndUtc"], "2026-08-31T00:01:00.000Z")
 
 
 class FreezeInputManifestTest(unittest.TestCase):

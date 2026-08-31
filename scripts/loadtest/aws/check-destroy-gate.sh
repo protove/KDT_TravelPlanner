@@ -34,9 +34,17 @@ if [[ ! -d "$EVIDENCE_ROOT" ]]; then
 fi
 
 missing=()
-[[ -f "$EVIDENCE_ROOT/freeze-metadata.json" ]] || missing+=("freeze-metadata.json (D-006 not approved)")
-[[ -f "$EVIDENCE_ROOT/export-complete.json" ]] || missing+=("export-complete.json (final export did not complete)")
-[[ -f "$EVIDENCE_ROOT/local-export-complete.json" ]] || missing+=("local-export-complete.json (local S3 download/PNG/checksum finalization did not complete)")
+gate_kind="historical-b01"
+if [[ -f "$EVIDENCE_ROOT/campaign-manifest.json" || -f "$EVIDENCE_ROOT/cleanup-lease.json" ]]; then
+  gate_kind="scrum80-breakpoint"
+  [[ -f "$EVIDENCE_ROOT/campaign-manifest.json" ]] || missing+=("campaign-manifest.json (SCRUM-80 evidence manifest is missing)")
+  [[ -f "$EVIDENCE_ROOT/cleanup-lease.json" ]] || missing+=("cleanup-lease.json (exact disposable cleanup lease is missing)")
+  [[ -f "$EVIDENCE_ROOT/local-export-complete.json" ]] || missing+=("local-export-complete.json (local query/PNG/checksum finalization did not complete)")
+else
+  [[ -f "$EVIDENCE_ROOT/freeze-metadata.json" ]] || missing+=("freeze-metadata.json (D-006 not approved)")
+  [[ -f "$EVIDENCE_ROOT/export-complete.json" ]] || missing+=("export-complete.json (final export did not complete)")
+  [[ -f "$EVIDENCE_ROOT/local-export-complete.json" ]] || missing+=("local-export-complete.json (local S3 download/PNG/checksum finalization did not complete)")
+fi
 
 if [[ "${#missing[@]}" -gt 0 ]]; then
   echo "[destroy-gate] BLOCKED: $EVIDENCE_ROOT is not safe to destroy against yet." >&2
@@ -46,5 +54,9 @@ if [[ "${#missing[@]}" -gt 0 ]]; then
   exit 1
 fi
 
-echo "[destroy-gate] OK: $EVIDENCE_ROOT has freeze-metadata.json, export-complete.json, and local-export-complete.json."
+if [[ "$gate_kind" == "scrum80-breakpoint" ]]; then
+  echo "[destroy-gate] OK: $EVIDENCE_ROOT has SCRUM-80 campaign-manifest.json, cleanup-lease.json, and local-export-complete.json."
+else
+  echo "[destroy-gate] OK: $EVIDENCE_ROOT has freeze-metadata.json, export-complete.json, and local-export-complete.json."
+fi
 echo "[destroy-gate] This does not verify the S3 upload independently — if in doubt, check the bucket directly before destroying."

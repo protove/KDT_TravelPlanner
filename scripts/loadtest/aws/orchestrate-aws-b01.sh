@@ -45,6 +45,7 @@ REGION=""
 ENVIRONMENT=""
 EXPECTED_ACCOUNT_ID=""
 ALB_ARN=""
+TARGET_GROUP_ARN=""
 RUNNER_ID=""
 RUNNER_INSTANCE_TYPE="t3.small"
 BASE_URL=""
@@ -99,7 +100,7 @@ CAPACITY_STRESS_MAX_VUS="${CAPACITY_STRESS_MAX_VUS:-}"
 
 usage() {
   cat <<'USAGE'
-usage: orchestrate-aws-b01.sh [target|seed|smoke|ramp|baseline|d005-record|spike|soak|scale-step|capacity-stress|evidence|cleanup|provisional-review|freeze|export|all] [options]
+usage: orchestrate-aws-b01.sh [target|seed|smoke|ramp|baseline|eks-baseline|pod-scale-out|node-scale-out-breakpoint|recovery|d005-record|spike|soak|scale-step|capacity-stress|evidence|cleanup|provisional-review|freeze|export|all] [options]
 
 Required:
   --profile PATH                 AWS load-test profile JSON (default: load-tests/aws/profiles/ec2-b01.json)
@@ -119,7 +120,7 @@ Required:
 
 Also required for most modes:
   --s3-bucket NAME                (seed/export/all) evidence S3 bucket
-  --k6-image DIGEST                (smoke/ramp/baseline/spike/soak/scale-step/capacity-stress/all) digest-pinned k6 image
+  --k6-image DIGEST                (smoke/ramp/baseline/eks-baseline/pod-scale-out/node-scale-out-breakpoint/recovery/spike/soak/scale-step/capacity-stress/all) digest-pinned k6 image
   --database-host/--database-name/--database-secret-arn   (seed/cleanup/all)
                                     --database-secret-arn must be a dedicated test-only Secret,
                                     JSON {"username":..,"password":..} (never the RDS master secret)
@@ -147,7 +148,7 @@ EKS target options (required when --target-platform eks):
   --backend-deployment NAME      Backend Deployment (default: backend)
 
 Modes:
-  target|seed|smoke|ramp|baseline|spike|soak|scale-step|capacity-stress   individual phases with target validation
+  target|seed|smoke|ramp|baseline|eks-baseline|pod-scale-out|node-scale-out-breakpoint|recovery|spike|soak|scale-step|capacity-stress   individual phases with target validation
   evidence            Grafana Annotation + Query collection (post-Spike; PNG excluded, see D-003/Plan04)
   cleanup              synthetic data cleanup; writes cleanup-result.json into the evidence bundle
   provisional-review    writes provisional-review.json (an inventory, not a pass/fail verdict) for the
@@ -162,7 +163,7 @@ USAGE
 
 while [[ "$#" -gt 0 ]]; do
   case "$1" in
-    target|seed|smoke|ramp|baseline|d005-record|spike|soak|scale-step|capacity-stress|evidence|cleanup|provisional-review|freeze|export|all) MODE="$1"; shift ;;
+    target|seed|smoke|ramp|baseline|eks-baseline|pod-scale-out|node-scale-out-breakpoint|recovery|d005-record|spike|soak|scale-step|capacity-stress|evidence|cleanup|provisional-review|freeze|export|all) MODE="$1"; shift ;;
     --profile) PROFILE="$2"; shift 2 ;;
     --slo-contract) SLO_CONTRACT="$2"; SLO_CONTRACT_EXPLICIT=1; shift 2 ;;
     --target-platform) TARGET_PLATFORM="$2"; shift 2 ;;
@@ -213,11 +214,22 @@ case "$TARGET_PLATFORM" in
 esac
 
 COMPARISON_PROFILE=0
+BREAKPOINT_PROFILE=0
+if [[ "$PROFILE" == *eks-monolith-breakpoint-v1.0.json* ]]; then
+  BREAKPOINT_PROFILE=1
+fi
 if [[ "$PROFILE" == *ec2-eks-comparison-v1.1.json* || "$SLO_CONTRACT" == *slo-v1.1-* ]]; then
   COMPARISON_PROFILE=1
 fi
 if [[ "$COMPARISON_PROFILE" == "1" && "$SLO_CONTRACT_EXPLICIT" == "0" ]]; then
   SLO_CONTRACT="$REPOSITORY_ROOT/load-tests/aws/contracts/slo-v1.1-candidate.json"
+fi
+if [[ "$BREAKPOINT_PROFILE" == "1" && "$SLO_CONTRACT_EXPLICIT" == "0" ]]; then
+  SLO_CONTRACT="$REPOSITORY_ROOT/load-tests/aws/contracts/eks-monolith-breakpoint-slo-v1.0.json"
+fi
+if [[ "$BREAKPOINT_PROFILE" == "1" && "$SLO_CONTRACT" != *eks-monolith-breakpoint-slo-v1.0.json ]]; then
+  echo "EKS breakpoint profile must use eks-monolith-breakpoint-slo-v1.0.json; historical t3.medium contract is not valid here" >&2
+  exit 2
 fi
 if [[ "$COMPARISON_PROFILE" == "1" && "$MODE" == "all" ]]; then
   echo "comparison profile forbids 'all': evidence capture, human recovery, rollback, freeze/export and cleanup remain operator-directed phases" >&2
@@ -303,7 +315,7 @@ STAGE_DIR="$EVIDENCE_ROOT/stages"
 stage_confirmed_rate() {
   local stage="$1"
   case "$stage" in
-    baseline-*|d005|spike|soak|scale-step|capacity-stress) printf '%s' "${CONFIRMED_RATE:-}" ;;
+    baseline|baseline-*|d005|spike|soak|scale-step|capacity-stress|pod-scale-out|node-scale-out-breakpoint|recovery) printf '%s' "${CONFIRMED_RATE:-}" ;;
     *) printf '' ;;
   esac
 }
@@ -312,7 +324,7 @@ stage_input_digest() {
   local stage="$1"
   python3 - "$stage" "$RUN_ID" "$PROFILE_SHA256" "${SLO_CONTRACT_SHA256:-}" "$SOURCE_COMMIT_SHA" \
     "${TARGET_PLATFORM:-ec2}" "${EKS_CLUSTER_NAME:-}" "${EKS_NODE_GROUP_NAME:-}" "${EKS_BASTION_ID:-}" \
-    "${BACKEND_NAMESPACE:-}" "${BACKEND_DEPLOYMENT:-}" \
+    "${BACKEND_NAMESPACE:-}" "${BACKEND_DEPLOYMENT:-}" "${TARGET_GROUP_ARN:-}" \
     "$REGION" "$ENVIRONMENT" "$EXPECTED_ACCOUNT_ID" "$ALB_ARN" "$BASE_URL" \
     "$RUNNER_ID" "$RUNNER_INSTANCE_TYPE" "$MAX_RATE" "$MAX_VUS" "$K6_IMAGE" "$USERS" \
     "$DATABASE_HOST" "$DATABASE_PORT" "$DATABASE_NAME" "$DATABASE_SECRET_ARN" \
@@ -332,7 +344,7 @@ import sys
 (
     stage, run_id, profile_sha, slo_contract_sha, source_commit_sha,
     target_platform, eks_cluster_name, eks_node_group_name, eks_bastion_id,
-    backend_namespace, backend_deployment,
+    backend_namespace, backend_deployment, target_group_arn,
     region, environment, expected_account_id, alb_arn, base_url,
     runner_id, runner_instance_type, max_rate, max_vus, k6_image, users,
     database_host, database_port, database_name, database_secret_arn,
@@ -366,6 +378,7 @@ if target_platform == "eks":
         "bastionId": eks_bastion_id,
         "backendNamespace": backend_namespace,
         "backendDeployment": backend_deployment,
+        "targetGroupArnHash": hashlib.sha256(target_group_arn.encode()).hexdigest() if target_group_arn else None,
     }
 payload = {
     "stage": stage,
@@ -394,7 +407,7 @@ elif stage == "seed":
         "redisIamUser": redis_iam_user,
         "redisReplicationGroupId": redis_replication_group_id,
     })
-elif stage in {"smoke", "ramp", "spike", "soak", "scale-step", "capacity-stress"} or stage.startswith("baseline-"):
+elif stage in {"smoke", "ramp", "baseline", "spike", "soak", "scale-step", "capacity-stress", "pod-scale-out", "node-scale-out-breakpoint", "recovery"} or stage.startswith("baseline-"):
     payload["k6Image"] = k6_image
     payload["credentialLifecycle"] = {
         "users": users,
@@ -413,7 +426,7 @@ elif stage in {"smoke", "ramp", "spike", "soak", "scale-step", "capacity-stress"
             "preAllocatedVUs": ramp_preallocated_vus,
             "maxVUs": ramp_max_vus,
         }
-    elif stage.startswith("baseline-"):
+    elif stage == "baseline" or stage.startswith("baseline-"):
         payload["effectiveK6Overrides"] = {
             "warmup": warmup,
             "duration": duration,
@@ -439,14 +452,14 @@ elif stage in {"smoke", "ramp", "spike", "soak", "scale-step", "capacity-stress"
             "preAllocatedVUs": scale_step_preallocated_vus,
             "maxVUs": scale_step_max_vus,
         }
-    elif stage == "capacity-stress":
+    elif stage in {"capacity-stress", "pod-scale-out", "node-scale-out-breakpoint", "recovery"}:
         payload["effectiveK6Overrides"] = {
             "rate": confirmed_rate,
             "preAllocatedVUs": capacity_stress_preallocated_vus,
             "maxVUs": capacity_stress_max_vus,
-            "stageMultipliers": [1, 2, 4, 8],
+            "campaignStage": stage,
         }
-    if stage in {"spike", "soak", "scale-step", "capacity-stress"} or stage.startswith("baseline-"):
+    if stage in {"baseline", "spike", "soak", "scale-step", "capacity-stress", "pod-scale-out", "node-scale-out-breakpoint", "recovery"} or stage.startswith("baseline-"):
         payload["confirmedRate"] = confirmed_rate
 elif stage == "d005":
     payload["confirmedRate"] = confirmed_rate
@@ -527,7 +540,7 @@ payload = {
     "inputDigest": input_digest,
     "completedAtUtc": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
 }
-if stage == "seed" or stage in {"smoke", "ramp", "spike", "soak", "scale-step", "capacity-stress"} or stage.startswith("baseline-"):
+if stage == "seed" or stage in {"smoke", "ramp", "baseline", "spike", "soak", "scale-step", "capacity-stress", "pod-scale-out", "node-scale-out-breakpoint", "recovery"} or stage.startswith("baseline-"):
     payload.update({
         "fixtureId": stage,
         "fixtureResultPath": f"fixtures/{stage}.json",
@@ -671,6 +684,7 @@ PY
     cp "$validation_dir/alb-summary.json" "$EVIDENCE_ROOT/aws/eks-alb-target-health.json"
     cp "$validation_dir/alb-summary.json" "$EVIDENCE_ROOT/aws/target-health.json"
   fi
+  TARGET_GROUP_ARN="$target_group_arn"
   echo "$runner_validation_json" > "$EVIDENCE_ROOT/aws/runner-validation.json"
   echo "{\"approvedBaseUrl\":\"$BASE_URL\",\"albDnsName\":\"$dns_name\"}" > "$EVIDENCE_ROOT/aws/base-url-validation.json"
   if [[ "$DRY_RUN" != "1" ]]; then
@@ -857,6 +871,7 @@ target_stage() {
     target_health_json='{"note":"no target group resolved (dry-run or ALB has none registered)"}'
   fi
   echo "$target_health_json" > "$EVIDENCE_ROOT/aws/target-health.json"
+  TARGET_GROUP_ARN="$target_group_arn"
 
   if [[ "$DRY_RUN" == "1" ]]; then
     backend_asg_name=""
@@ -985,7 +1000,7 @@ phase_max_vus_override() {
     spike) printf '%s' "$SPIKE_MAX_VUS" ;;
     soak) printf '%s' "$SOAK_MAX_VUS" ;;
     scale-step) printf '%s' "$SCALE_STEP_MAX_VUS" ;;
-    capacity-stress) printf '%s' "$CAPACITY_STRESS_MAX_VUS" ;;
+    capacity-stress|pod-scale-out|node-scale-out-breakpoint|recovery) printf '%s' "$CAPACITY_STRESS_MAX_VUS" ;;
     *) echo "unsupported phase for VU capacity validation: $1" >&2; return 2 ;;
   esac
 }
@@ -1001,7 +1016,8 @@ from pathlib import Path
 
 profile_path, phase, users_raw, ceiling_raw, override_raw = sys.argv[1:]
 profile = json.loads(Path(profile_path).read_text(encoding="utf-8"))
-scenario = profile.get("scenarios", {}).get(phase)
+profile_phase = "capacity-stress" if phase in {"pod-scale-out", "node-scale-out-breakpoint", "recovery"} else phase
+scenario = profile.get("scenarios", {}).get(profile_phase)
 if not isinstance(scenario, dict):
     raise SystemExit(f"profile.scenarios.{phase} is missing")
 
@@ -1033,14 +1049,20 @@ PY
 }
 
 capacity_stress_schedule_seconds() {
-  python3 - "$PROFILE" <<'PY'
+  local campaign_stage="${1:-capacity-stress}"
+  python3 - "$PROFILE" "$campaign_stage" <<'PY'
 import json
 import re
 import sys
 from pathlib import Path
 
 profile = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+campaign_stage = sys.argv[2]
 durations = (profile.get("capacityStress") or {}).get("stageDurations") or []
+if campaign_stage == "pod-scale-out":
+    durations = durations[:2]
+elif campaign_stage == "recovery":
+    durations = ["2m"]
 total = 0
 for raw in durations:
     match = re.fullmatch(r"([1-9][0-9]*)([smh])", str(raw))
@@ -1054,10 +1076,26 @@ PY
 }
 
 capacity_stress_stage() {
-  local capacity_run_dir="$EVIDENCE_ROOT/k6/capacity-stress"
+  local campaign_stage="${1:-capacity-stress}"
+  local capacity_run_dir="$EVIDENCE_ROOT/k6/$campaign_stage"
   local snapshot_file="$capacity_run_dir/snapshots.jsonl"
   local schedule_seconds hard_ceiling_seconds
-  schedule_seconds="$(capacity_stress_schedule_seconds)"
+  if [[ -z "$TARGET_GROUP_ARN" && -f "$EVIDENCE_ROOT/aws/eks-alb-target-health.json" ]]; then
+    TARGET_GROUP_ARN="$(python3 - "$EVIDENCE_ROOT/aws/eks-alb-target-health.json" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+print(payload.get("targetGroupArn", ""))
+PY
+)"
+  fi
+  if [[ -z "$TARGET_GROUP_ARN" && "$DRY_RUN" != "1" ]]; then
+    echo "EKS target group ARN is missing; target stage must complete before live observation" >&2
+    return 2
+  fi
+  schedule_seconds="$(capacity_stress_schedule_seconds "$campaign_stage")"
   hard_ceiling_seconds="$(python3 - "$PROFILE" <<'PY'
 import json
 import sys
@@ -1071,8 +1109,8 @@ print(value)
 PY
 )"
   if [[ "$DRY_RUN" == "1" ]]; then
-    echo "[dry-run] observer + coordinator + evaluator for EKS capacity-stress (schedule=${schedule_seconds}s ceiling=${hard_ceiling_seconds}s)" >&2
-    echo "[dry-run] run-aws-b01.sh capacity-stress" >&2
+    echo "[dry-run] observer + coordinator + evaluator for EKS $campaign_stage (schedule=${schedule_seconds}s ceiling=${hard_ceiling_seconds}s)" >&2
+    echo "[dry-run] run-aws-b01.sh $campaign_stage" >&2
     return 0
   fi
   mkdir -p "$capacity_run_dir"
@@ -1084,6 +1122,8 @@ PY
     --run-dir "$capacity_run_dir" --metadata-file "$capacity_run_dir/metadata.json" \
     --platform eks --region "$REGION" --cluster-name "$EKS_CLUSTER_NAME" \
     --node-group-name "$EKS_NODE_GROUP_NAME" \
+    --eks-bastion-id "$EKS_BASTION_ID" --target-group-arn "$TARGET_GROUP_ARN" \
+    --namespace "$BACKEND_NAMESPACE" --deployment "$BACKEND_DEPLOYMENT" \
     --eks-evidence-file "$EVIDENCE_ROOT/aws/eks-evidence.json" \
     --runner-stats-file "$capacity_run_dir/runner-stats.jsonl" \
     --slo-window-file "$capacity_run_dir/slo-windows.jsonl" \
@@ -1093,11 +1133,12 @@ PY
   set +e
   python3 "$REPOSITORY_ROOT/scripts/loadtest/aws/coordinate-aws-capacity-stress.py" \
     --run-dir "$capacity_run_dir" --snapshot-file "$snapshot_file" \
+    --campaign-stage "$campaign_stage" \
     --complete-schedule-seconds "$schedule_seconds" \
     --hard-time-ceiling-seconds "$hard_ceiling_seconds" \
     --capacity-stability-seconds "${CAPACITY_STABILITY_SECONDS:-120}" \
     --poll-seconds "${CAPACITY_COORDINATOR_POLL_SECONDS:-10}" -- \
-    "$REPOSITORY_ROOT/scripts/loadtest/aws/run-aws-b01.sh" capacity-stress
+    "$REPOSITORY_ROOT/scripts/loadtest/aws/run-aws-b01.sh" "$campaign_stage"
   coordinator_status=$?
   if kill -0 "$observer_pid" 2>/dev/null; then
     kill "$observer_pid" 2>/dev/null || true
@@ -1129,8 +1170,8 @@ k6_phase_stage() {
   fi
   if [[ "$DRY_RUN" == "1" ]]; then
     echo "[dry-run] refresh credentials before $phase" >&2
-    if [[ "$phase" == "capacity-stress" && "$TARGET_PLATFORM" == "eks" ]]; then
-      capacity_stress_stage
+    if [[ "$phase" == "capacity-stress" && "$TARGET_PLATFORM" == "eks" ]] || [[ "$phase" == "pod-scale-out" && "$TARGET_PLATFORM" == "eks" ]] || [[ "$phase" == "node-scale-out-breakpoint" && "$TARGET_PLATFORM" == "eks" ]] || [[ "$phase" == "recovery" && "$TARGET_PLATFORM" == "eks" ]]; then
+      capacity_stress_stage "$phase"
       return 0
     fi
     echo "[dry-run] run-aws-b01.sh $phase (RUN_ID=$RUN_ID rate=${CONFIRMED_RATE:-<profile>})" >&2
@@ -1143,6 +1184,7 @@ k6_phase_stage() {
   echo "[b01] resetting and refreshing fixture before $fixture_id"
   seed_credentials "$fixture_id"
   export REPOSITORY_ROOT EVIDENCE_ROOT BASE_URL REGION ENVIRONMENT MAX_RATE MAX_VUS
+  export EKS_CLUSTER_NAME EKS_NODE_GROUP_NAME EKS_BASTION_ID BACKEND_NAMESPACE BACKEND_DEPLOYMENT TARGET_GROUP_ARN
   export K6_IMAGE_DIGEST="$K6_IMAGE" AWS_PROFILE_FILE="$PROFILE" RUN_ID="$RUN_ID"
   export DATA_FILE
   export START_RATE DURATION WARMUP
@@ -1152,6 +1194,11 @@ k6_phase_stage() {
   export SOAK_PREALLOCATED_VUS SOAK_MAX_VUS SCALE_STEP_PREALLOCATED_VUS SCALE_STEP_MAX_VUS
   export CAPACITY_STRESS_PREALLOCATED_VUS CAPACITY_STRESS_MAX_VUS
   export AWS_SLO_CONTRACT_FILE="$SLO_CONTRACT"
+  if [[ "$phase" == "baseline" && "$TARGET_PLATFORM" == "eks" ]]; then
+    export CAPACITY_STAGE="baseline"
+  else
+    unset CAPACITY_STAGE
+  fi
   if [[ -n "$CONFIRMED_RATE" ]]; then export CONFIRMED_RATE; fi
   if [[ "$phase" == "baseline" ]]; then
     if [[ -n "$baseline_rep" ]]; then
@@ -1161,8 +1208,8 @@ k6_phase_stage() {
         "$REPOSITORY_ROOT/scripts/loadtest/aws/run-aws-b01.sh" baseline "$rep"
       done
     fi
-  elif [[ "$phase" == "capacity-stress" && "$TARGET_PLATFORM" == "eks" ]]; then
-    capacity_stress_stage
+  elif [[ "$phase" == "capacity-stress" && "$TARGET_PLATFORM" == "eks" ]] || [[ "$phase" == "pod-scale-out" && "$TARGET_PLATFORM" == "eks" ]] || [[ "$phase" == "node-scale-out-breakpoint" && "$TARGET_PLATFORM" == "eks" ]] || [[ "$phase" == "recovery" && "$TARGET_PLATFORM" == "eks" ]]; then
+    capacity_stress_stage "$phase"
   else
     "$REPOSITORY_ROOT/scripts/loadtest/aws/run-aws-b01.sh" "$phase"
   fi
@@ -1588,6 +1635,26 @@ case "$MODE" in
     for rep in 1 2 3; do
       run_stage_once "baseline-$rep" k6_phase_stage baseline "$rep"
     done
+    ;;
+  eks-baseline)
+    if [[ "$TARGET_PLATFORM" != "eks" ]]; then
+      echo "eks-baseline requires --target-platform eks" >&2
+      exit 2
+    fi
+    validate_confirmed_rate
+    run_stage_once target target_stage
+    run_stage_once seed seed_stage
+    run_stage_once baseline k6_phase_stage baseline 1
+    ;;
+  pod-scale-out|node-scale-out-breakpoint|recovery)
+    if [[ "$TARGET_PLATFORM" != "eks" ]]; then
+      echo "$MODE requires --target-platform eks" >&2
+      exit 2
+    fi
+    validate_confirmed_rate
+    run_stage_once target target_stage
+    run_stage_once seed seed_stage
+    run_stage_once "$MODE" k6_phase_stage "$MODE"
     ;;
   d005-record)
     validate_confirmed_rate

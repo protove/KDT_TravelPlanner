@@ -122,6 +122,17 @@ variable "redis_iam_auth_arns" {
   default     = []
 }
 
+variable "eks_observation_stack" {
+  type        = string
+  description = "Optional Stack tag for the single private EKS bastion used by the breakpoint observer. Empty disables EKS observation permissions."
+  default     = ""
+
+  validation {
+    condition     = var.eks_observation_stack == "" || var.eks_observation_stack == "dev-eks"
+    error_message = "eks_observation_stack must be empty or dev-eks."
+  }
+}
+
 variable "tags" {
   type        = map(string)
   description = "Tags applied to Load Runner resources."

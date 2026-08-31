@@ -9,7 +9,7 @@
     "note": "실행 직전 승인된 EKS ALB HTTPS 주소를 입력한다."
   },
   "googleApi": { "enabled": false },
-  "sloVersion": "v1.1-frozen",
+  "sloVersion": "v1.1-candidate",
   "seedVersion": "s2",
   "requestMixVersion": "aws-ec2-eks-comparison-v1.1",
   "k6Image": "REPLACE_WITH_DIGEST_PINNED_K6_IMAGE",
@@ -26,8 +26,8 @@
   },
   "capacityStress": {
     "bindsTo": {
-      "normalRate": "slo-v1.1-frozen.comparison.normalRate",
-      "sloContract": "load-tests/aws/contracts/slo-v1.1-frozen.json",
+      "normalRate": "eks-monolith-breakpoint-slo-v1.0.comparison.normalRate",
+      "sloContract": "load-tests/aws/contracts/eks-monolith-breakpoint-slo-v1.0.json",
       "requestMix": "aws-ec2-eks-comparison-v1.1",
       "lineage": "frozen-normal-image-and-seed-lineage"
     },

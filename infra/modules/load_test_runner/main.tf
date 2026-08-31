@@ -109,6 +109,70 @@ data "aws_iam_policy_document" "load_runner_runtime" {
     }
   }
 
+  # SCRUM-80 EKS observation is intentionally separate from the generic
+  # target-discovery read set.  It permits only the managed node-group
+  # description/CloudWatch reads and the two SSM Run Command operations used
+  # to execute the adapter's fixed read-only kubectl snapshot on a bastion
+  # tagged Stack=dev-eks.  No EKS Access Entry, Kubernetes RBAC or cluster
+  # mutation permission is granted to the Runner.
+  dynamic "statement" {
+    for_each = var.eks_observation_stack != "" ? [1] : []
+    content {
+      sid       = "EKSBreakpointObservation"
+      actions   = ["eks:DescribeNodegroup", "cloudwatch:GetMetricStatistics"]
+      resources = ["*"]
+
+      condition {
+        test     = "StringEquals"
+        variable = "aws:RequestedRegion"
+        values   = [var.aws_region]
+      }
+    }
+  }
+
+  dynamic "statement" {
+    for_each = var.eks_observation_stack != "" ? [1] : []
+    content {
+      sid     = "EKSBreakpointBastionCommand"
+      actions = ["ssm:SendCommand"]
+      resources = [
+        "arn:aws:ssm:${var.aws_region}:*:document/AWS-RunShellScript",
+        "arn:aws:ec2:${var.aws_region}:*:instance/*",
+      ]
+
+      condition {
+        test     = "StringEquals"
+        variable = "aws:RequestedRegion"
+        values   = [var.aws_region]
+      }
+      condition {
+        test     = "StringEquals"
+        variable = "ssm:resourceTag/Stack"
+        values   = [var.eks_observation_stack]
+      }
+      condition {
+        test     = "StringEquals"
+        variable = "ssm:resourceTag/Environment"
+        values   = [var.environment]
+      }
+    }
+  }
+
+  dynamic "statement" {
+    for_each = var.eks_observation_stack != "" ? [1] : []
+    content {
+      sid       = "EKSBreakpointCommandReadback"
+      actions   = ["ssm:GetCommandInvocation"]
+      resources = ["*"]
+
+      condition {
+        test     = "StringEquals"
+        variable = "aws:RequestedRegion"
+        values   = [var.aws_region]
+      }
+    }
+  }
+
   statement {
     sid       = "LoadTestEvidenceObjects"
     actions   = ["s3:GetObject", "s3:PutObject"]

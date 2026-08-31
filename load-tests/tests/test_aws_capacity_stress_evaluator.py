@@ -169,6 +169,21 @@ class CapacityStressEvaluatorTest(unittest.TestCase):
             result = MODULE.evaluate(self.args(root))
             self.assertEqual(result["validity"], "INVALID_METRIC_WINDOW")
 
+    def test_producer_failure_invalidates_a_live_breakpoint_window(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.fixture(root)
+            metadata = json.loads((root / "metadata.json").read_text(encoding="utf-8"))
+            metadata["effectiveInputs"]["requiresCompleteSloWindows"] = True
+            metadata["effectiveInputs"]["campaignStage"] = "node-scale-out-breakpoint"
+            write_json(root / "metadata.json", metadata)
+            status = json.loads((root / "run-status.json").read_text(encoding="utf-8"))
+            status["sloWindowProducerExitCode"] = 2
+            write_json(root / "run-status.json", status)
+            result = MODULE.evaluate(self.args(root))
+            self.assertEqual(result["validity"], "INVALID_METRIC_WINDOW")
+            self.assertEqual(result["campaignStage"], "node-scale-out-breakpoint")
+
 
 if __name__ == "__main__":
     unittest.main()

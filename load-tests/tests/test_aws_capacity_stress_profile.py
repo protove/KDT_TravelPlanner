@@ -74,6 +74,11 @@ class CapacityStressProfileTest(unittest.TestCase):
         profile = json.loads(EKS_BREAKPOINT_PROFILE.read_text(encoding="utf-8"))
         self.assertTrue(MODULE.validate(profile))
         self.assertEqual(profile["target"]["platform"], "eks")
+        self.assertEqual(profile["sloVersion"], "v1.1-candidate")
+        self.assertEqual(
+            profile["capacityStress"]["bindsTo"]["sloContract"],
+            "load-tests/aws/contracts/eks-monolith-breakpoint-slo-v1.0.json",
+        )
         self.assertEqual(profile["eks"]["instanceType"], "t3.small")
         self.assertEqual(profile["eks"]["nodeGroup"], {"min": 2, "desired": 2, "max": 4})
         self.assertEqual(profile["eks"]["baseHpa"], {"minReplicas": 2, "maxReplicas": 4})

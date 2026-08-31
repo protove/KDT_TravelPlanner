@@ -28,6 +28,7 @@ jobs:
               Path('load-tests/aws/contracts/slo-v1.0.json'),
               Path('load-tests/aws/contracts/slo-v1.1-candidate.json'),
               Path('load-tests/aws/contracts/slo-v1.1-frozen.json'),
+              Path('load-tests/aws/contracts/eks-monolith-breakpoint-slo-v1.0.json'),
               Path('load-tests/aws/profiles/ec2-eks-comparison-v1.1.json'),
               Path('load-tests/aws/profiles/ec2-eks-recovery-v1.1.json'),
               Path('load-tests/aws/profiles/eks-monolith-breakpoint-v1.0.json'),
@@ -60,5 +61,6 @@ jobs:
             scripts/loadtest/aws/validate-aws-profile.py \
             scripts/loadtest/aws/coordinate-aws-capacity-stress.py \
             scripts/loadtest/aws/observe-aws-capacity-stress.py \
-            scripts/loadtest/aws/evaluate-aws-capacity-stress.py
+            scripts/loadtest/aws/evaluate-aws-capacity-stress.py \
+            scripts/loadtest/aws/produce-capacity-slo-windows.py
           git diff --check

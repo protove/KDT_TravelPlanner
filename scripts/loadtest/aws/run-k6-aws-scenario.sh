@@ -183,6 +183,8 @@ effective_inputs = {
     "profileSha256": profile_sha256,
     "rate": rate_value,
 }
+if os.environ.get("CAPACITY_STAGE"):
+    effective_inputs["campaignStage"] = os.environ["CAPACITY_STAGE"]
 if scenario == "spike":
     baseline_rate = rate_value
     peak_multiplier = float(os.environ.get("SPIKE_PEAK_MULTIPLIER") or scenario_profile.get("peakRateMultiplier"))
@@ -205,7 +207,13 @@ elif scenario == "capacity-stress":
         raise SystemExit("capacity-stress requires a positive CONFIRMED_RATE")
     multipliers = stress.get("stageMultipliers") or scenario_profile.get("stageMultipliers")
     durations = stress.get("stageDurations") or scenario_profile.get("stageDurations")
+    campaign_stage = os.environ.get("CAPACITY_STAGE", "")
+    if campaign_stage == "pod-scale-out":
+        multipliers, durations = multipliers[:2], durations[:2]
+    elif campaign_stage == "recovery":
+        multipliers, durations = [1], ["2m"]
     effective_inputs.update({
+        "campaignStage": campaign_stage or "capacity-stress",
         "baseRate": base_rate,
         "stageMultipliers": multipliers,
         "stageDurations": durations,
@@ -258,6 +266,21 @@ python3 "$REPOSITORY_ROOT/scripts/loadtest/record-rehearsal-event.py" "$RUN_DIR"
 set +e
 K6_CONTAINER_NAME="loadtest-aws-k6-${RUN_ID//[^A-Za-z0-9_.-]/-}"
 : > "$RUN_DIR/runner-stats.jsonl"
+slo_producer_pid=""
+slo_producer_status=0
+# Capacity/scale runs need a live SLO stream while k6 is still executing. A
+# summary.json written at process exit cannot drive the observer's terminal
+# decision, so the producer tails raw.json and emits complete, non-overlapping
+# 60-second windows. The final once/finalize pass closes any window that became
+# complete just before k6 exited.
+if [[ "$SCENARIO" == "capacity-stress" || "$SCENARIO" == eks-* || ("$SCENARIO" == "baseline" && "$TARGET_PLATFORM" == "eks") ]]; then
+  python3 "$REPOSITORY_ROOT/scripts/loadtest/aws/produce-capacity-slo-windows.py" \
+    --input "$RUN_DIR/raw.json" --output "$RUN_DIR/slo-windows.jsonl" \
+    --metadata "$RUN_DIR/metadata.json" --slo-contract "$AWS_SLO_CONTRACT_FILE" \
+    --poll-seconds "${SLO_WINDOW_POLL_SECONDS:-2}" \
+    >"$RUN_DIR/slo-window-producer.log" 2>&1 &
+  slo_producer_pid=$!
+fi
 # No --rm here (unlike ../run-k6-scenario.sh's Compose equivalent): the
 # container must still exist after it exits so `docker inspect` below can
 # read OOMKilled/RestartCount for the Runner-bottleneck-vs-SUT-bottleneck
@@ -300,6 +323,7 @@ docker run -i --name "$K6_CONTAINER_NAME" \
   -e WARMUP="${WARMUP:-}" \
   -e PREALLOCATED_VUS="${PREALLOCATED_VUS:-20}" \
   -e MAX_VUS="${MAX_VUS:-}" \
+  -e CAPACITY_STAGE="${CAPACITY_STAGE:-}" \
   -e SPIKE_PEAK_MULTIPLIER="${SPIKE_PEAK_MULTIPLIER:-}" \
   -e SPIKE_HOLD="${SPIKE_HOLD:-}" \
   "$K6_IMAGE_DIGEST" run \
@@ -329,15 +353,38 @@ if [[ -n "$inspect_json" ]]; then
 fi
 docker rm -f "$K6_CONTAINER_NAME" >/dev/null 2>&1 || true
 
-python3 - "$RUN_DIR/run-status.json" "$k6_status" "$oom_killed" "$restart_count" <<'PY'
+if [[ -n "$slo_producer_pid" ]]; then
+  if kill -0 "$slo_producer_pid" 2>/dev/null; then
+    kill -INT "$slo_producer_pid" 2>/dev/null || true
+  fi
+  wait "$slo_producer_pid" 2>/dev/null
+  slo_producer_status=$?
+  # SIGINT is the normal producer shutdown path. Any other exit is retained
+  # in run-status.json and causes the capacity evaluator to invalidate the
+  # metric window instead of treating a missing stream as a passing SLO.
+  [[ "$slo_producer_status" -eq 130 ]] && slo_producer_status=0
+  set +e
+  python3 "$REPOSITORY_ROOT/scripts/loadtest/aws/produce-capacity-slo-windows.py" \
+    --input "$RUN_DIR/raw.json" --output "$RUN_DIR/slo-windows.jsonl" \
+    --metadata "$RUN_DIR/metadata.json" --slo-contract "$AWS_SLO_CONTRACT_FILE" \
+    --once --finalize
+  finalize_status=$?
+  if [[ "$finalize_status" -ne 0 && "$slo_producer_status" -eq 0 ]]; then
+    slo_producer_status="$finalize_status"
+  fi
+  set -e
+fi
+
+python3 - "$RUN_DIR/run-status.json" "$k6_status" "$oom_killed" "$restart_count" "$slo_producer_status" <<'PY'
 import json
 import sys
 from pathlib import Path
-output, k6_status, oom_killed, restart_count = sys.argv[1:]
+output, k6_status, oom_killed, restart_count, slo_producer_status = sys.argv[1:]
 Path(output).write_text(json.dumps({
     "k6ExitCode": int(k6_status),
     "k6ContainerOomKilled": oom_killed == "true",
     "k6ContainerRestartCount": int(restart_count),
+    "sloWindowProducerExitCode": int(slo_producer_status),
 }, indent=2) + "\n", encoding="utf-8")
 PY
 python3 "$REPOSITORY_ROOT/scripts/loadtest/record-rehearsal-event.py" "$RUN_DIR" RUN_END "AWS k6 exit code $k6_status" --actor automation

@@ -19,10 +19,28 @@ if (!Number.isFinite(RATE) || RATE <= 0) {
   throw new Error('[aws/eks-scale-capacity] CONFIRMED_RATE must be a positive frozen normal rate');
 }
 
-const MULTIPLIERS = STRESS.stageMultipliers || [];
-const DURATIONS = STRESS.stageDurations || [];
-if (MULTIPLIERS.length < 5 || MULTIPLIERS[0] !== 1) {
-  throw new Error('[aws/eks-scale-capacity] at least five stages starting at 1x are required');
+const CAMPAIGN_STAGE = __ENV.CAPACITY_STAGE || 'capacity-stress';
+const REGISTERED_MULTIPLIERS = STRESS.stageMultipliers || [];
+const REGISTERED_DURATIONS = STRESS.stageDurations || [];
+const MULTIPLIERS = CAMPAIGN_STAGE === 'pod-scale-out'
+  ? REGISTERED_MULTIPLIERS.slice(0, 2)
+  : CAMPAIGN_STAGE === 'recovery'
+    ? [1]
+    : REGISTERED_MULTIPLIERS;
+const DURATIONS = CAMPAIGN_STAGE === 'pod-scale-out'
+  ? REGISTERED_DURATIONS.slice(0, 2)
+  : CAMPAIGN_STAGE === 'recovery'
+    ? ['2m']
+    : REGISTERED_DURATIONS;
+if ((CAMPAIGN_STAGE === 'capacity-stress' || CAMPAIGN_STAGE === 'node-scale-out-breakpoint')
+    && (MULTIPLIERS.length < 5 || MULTIPLIERS[0] !== 1)) {
+  throw new Error('[aws/eks-scale-capacity] breakpoint needs at least five stages starting at 1x');
+}
+if (CAMPAIGN_STAGE === 'pod-scale-out' && (MULTIPLIERS.length !== 2 || MULTIPLIERS[0] !== 1)) {
+  throw new Error('[aws/eks-scale-capacity] pod scale-out needs registered 1x and 2x stages');
+}
+if (CAMPAIGN_STAGE === 'recovery' && MULTIPLIERS.length !== 1) {
+  throw new Error('[aws/eks-scale-capacity] recovery must return to the 1x workload');
 }
 for (let index = 1; index < MULTIPLIERS.length; index += 1) {
   if (MULTIPLIERS[index] !== MULTIPLIERS[index - 1] * 2) {
@@ -64,7 +82,7 @@ export const options = {
       maxVUs: MAX_VUS,
       stages: STAGE_RATES.map((target, index) => ({ target, duration: DURATIONS[index] })),
       exec: 'mix',
-      tags: { phase: 'eks-monolith-breakpoint', platform: 'eks' },
+      tags: { phase: CAMPAIGN_STAGE, platform: 'eks' },
     },
   },
   // Thresholds remain diagnostic. The coordinator/evaluator owns complete

@@ -31,6 +31,11 @@ READ_OPERATIONS = {
     "get-metric-statistics",
 }
 
+# SSM Run Command is used only with the adapter's marker-delimited read-only
+# kubectl command. Keep these operations out of READ_OPERATIONS so the normal
+# AWS observation port still rejects every desired-capacity/scale mutation.
+SSM_OBSERVATION_OPERATIONS = {"send-command", "get-command-invocation"}
+
 
 class ObserverError(RuntimeError):
     """A sanitized observer failure."""
@@ -110,9 +115,7 @@ class AwsReadOnly:
         self.region = region
         self.profile = profile
 
-    def call(self, service: str, operation: str, arguments: Sequence[str]) -> dict[str, Any]:
-        if operation not in READ_OPERATIONS:
-            raise ObserverError(f"observer refused non-read operation: {operation}")
+    def _call(self, service: str, operation: str, arguments: Sequence[str]) -> dict[str, Any]:
         command = ["aws", service, operation, *arguments, "--region", self.region, "--output", "json"]
         if self.profile:
             command += ["--profile", self.profile]
@@ -126,6 +129,16 @@ class AwsReadOnly:
         if not isinstance(payload, dict):
             raise ObserverError(f"AWS observation returned a non-object for {service}:{operation}")
         return payload
+
+    def call(self, service: str, operation: str, arguments: Sequence[str]) -> dict[str, Any]:
+        if operation not in READ_OPERATIONS:
+            raise ObserverError(f"observer refused non-read operation: {operation}")
+        return self._call(service, operation, arguments)
+
+    def call_targeted_ssm(self, operation: str, arguments: Sequence[str]) -> dict[str, Any]:
+        if operation not in SSM_OBSERVATION_OPERATIONS:
+            raise ObserverError(f"observer refused non-observation SSM operation: {operation}")
+        return self._call("ssm", operation, arguments)
 
 
 def read_optional(path: Path | None) -> dict[str, Any]:
@@ -238,6 +251,132 @@ def best_effort_cloudwatch_metric(
         return None
 
 
+def refresh_eks_evidence(args: argparse.Namespace, aws: AwsReadOnly) -> dict[str, Any]:
+    """Refresh sanitized EKS state through the private SSM bastion.
+
+    The initial target snapshot is intentionally not reused here. Each poll
+    sends the adapter's fixed read-only kubectl command to the bastion, joins
+    it with fresh node-group/ALB observations, and atomically replaces the
+    sanitized evidence file. A failed refresh raises so the caller records an
+    invalid observation instead of turning stale data into scale-out proof.
+    """
+    if not args.eks_bastion_id or not args.target_group_arn:
+        raise ObserverError("live EKS refresh requires --eks-bastion-id and --target-group-arn")
+    try:
+        from eks_target_adapter import (
+            EKSAdapterError,
+            build_evidence,
+            build_kubectl_commands,
+            parse_kubectl_sections,
+            resolve_node_group,
+            sanitize_invocation,
+            validate_alb_target_health,
+        )
+    except ImportError:
+        # The observer is also loaded directly by the repository's unit tests,
+        # where Python does not necessarily put this script's directory on
+        # sys.path. Load the sibling adapter without widening the import path.
+        import importlib.util
+
+        adapter_path = Path(__file__).with_name("eks_target_adapter.py")
+        spec = importlib.util.spec_from_file_location("scrum80_eks_target_adapter", adapter_path)
+        if spec is None or spec.loader is None:
+            raise ObserverError("EKS observer adapter is unavailable")
+        adapter = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(adapter)
+        build_evidence = adapter.build_evidence
+        EKSAdapterError = adapter.EKSAdapterError
+        build_kubectl_commands = adapter.build_kubectl_commands
+        parse_kubectl_sections = adapter.parse_kubectl_sections
+        resolve_node_group = adapter.resolve_node_group
+        sanitize_invocation = adapter.sanitize_invocation
+        validate_alb_target_health = adapter.validate_alb_target_health
+
+    nodegroup_payload = aws.call(
+        "eks",
+        "describe-nodegroup",
+        ["--cluster-name", args.cluster_name, "--nodegroup-name", args.node_group_name],
+    )
+    try:
+        node_group = resolve_node_group(
+            nodegroup_payload,
+            expected_cluster=args.cluster_name,
+            expected_node_group=args.node_group_name,
+        )
+        target_payload = aws.call("elbv2", "describe-target-health", ["--target-group-arn", args.target_group_arn])
+        target_health = validate_alb_target_health(target_payload, target_group_arn=args.target_group_arn)
+    except EKSAdapterError as error:
+        raise ObserverError("EKS target evidence failed adapter validation") from error
+    activities = aws.call(
+        "autoscaling",
+        "describe-scaling-activities",
+        ["--auto-scaling-group-name", node_group["autoScalingGroupName"], "--max-items", "20"],
+    )
+    try:
+        commands = build_kubectl_commands(
+            cluster_name=args.cluster_name,
+            region=args.region,
+            namespace=args.namespace,
+            deployment=args.deployment,
+        )
+    except EKSAdapterError as error:
+        raise ObserverError("EKS kubectl evidence command validation failed") from error
+    parameters = json.dumps({"commands": commands}, separators=(",", ":"))
+    command_payload = aws.call_targeted_ssm(
+        "send-command",
+        [
+            "--instance-ids", args.eks_bastion_id,
+            "--document-name", "AWS-RunShellScript",
+            "--comment", "SCRUM-80 live EKS observer snapshot",
+            "--parameters", parameters,
+        ],
+    )
+    command_id = ((command_payload.get("Command") or {}).get("CommandId"))
+    if not isinstance(command_id, str) or not command_id:
+        raise ObserverError("EKS refresh returned no SSM command id")
+
+    invocation: dict[str, Any] = {}
+    status = ""
+    for _ in range(30):
+        invocation = aws.call_targeted_ssm(
+            "get-command-invocation",
+            ["--command-id", command_id, "--instance-id", args.eks_bastion_id],
+        )
+        status = str(invocation.get("Status") or "")
+        if status == "Success":
+            break
+        if status in {"Failed", "Cancelled", "TimedOut", "Undeliverable", "Terminated"}:
+            raise ObserverError(f"EKS bastion refresh failed: {status}")
+        time.sleep(1)
+    if status != "Success":
+        raise ObserverError("EKS bastion refresh timed out")
+
+    try:
+        sections = parse_kubectl_sections(str(invocation.get("StandardOutputContent", "")))
+        evidence = build_evidence(
+            node_group=node_group,
+            target_health=target_health,
+            hpa=sections.get("hpa", {}),
+            deployment=sections.get("deployment", {}),
+            pods=sections.get("pods", {}),
+            nodes=sections.get("nodes", {}),
+            events=sections.get("events", {}),
+            asg_activities=activities,
+            all_pods=sections.get("all_pods", {}),
+        )
+    except EKSAdapterError as error:
+        raise ObserverError("EKS kubectl evidence parse failed") from error
+    evidence["observedAtUtc"] = iso(utc_now())
+    evidence["ssmInvocation"] = sanitize_invocation(invocation)
+    target_path = args.eks_evidence_file
+    if target_path is not None:
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = target_path.with_name(f".{target_path.name}.tmp")
+        temporary.write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        temporary.replace(target_path)
+    return evidence
+
+
 def collect_snapshot(args: argparse.Namespace, aws: AwsReadOnly) -> dict[str, Any]:
     now = utc_now()
     fixture = read_optional(args.sample_json)
@@ -307,7 +446,16 @@ def collect_snapshot(args: argparse.Namespace, aws: AwsReadOnly) -> dict[str, An
     if previous_path is None and getattr(args, "run_dir", None) is not None:
         previous_path = args.run_dir / "snapshots.jsonl"
     previous = last_jsonl(previous_path)
-    platform_evidence = read_optional(getattr(args, "eks_evidence_file", None)) if args.platform == "eks" else {}
+    platform_evidence: dict[str, Any] = {}
+    eks_refresh_ok = False
+    if args.platform == "eks":
+        try:
+            # Never fall back to the previous evidence file for a live poll:
+            # stale HPA/Pod/node state must invalidate scale-out proof.
+            platform_evidence = refresh_eks_evidence(args, aws)
+            eks_refresh_ok = True
+        except ObserverError:
+            observation_errors.append("eks:live-refresh-failed")
     backend_pods = platform_evidence.get("backendPods") if isinstance(platform_evidence.get("backendPods"), Mapping) else {}
     hpa_evidence = platform_evidence.get("hpa") if isinstance(platform_evidence.get("hpa"), Mapping) else {}
     deployment_evidence = platform_evidence.get("deployment") if isinstance(platform_evidence.get("deployment"), Mapping) else {}
@@ -319,7 +467,12 @@ def collect_snapshot(args: argparse.Namespace, aws: AwsReadOnly) -> dict[str, An
     baseline_nodes = previous.get("initialNodeCount") if isinstance(previous.get("initialNodeCount"), int) else current_nodes
     pod_scale_out = current_pods is not None and baseline_pods is not None and current_pods > baseline_pods
     node_scale_out = current_nodes is not None and baseline_nodes is not None and current_nodes > baseline_nodes
-    required_observations = required_eks_observations(platform_evidence) if args.platform == "eks" else {"status": "not-applicable"}
+    if args.platform == "eks" and eks_refresh_ok:
+        required_observations = required_eks_observations(platform_evidence)
+    elif args.platform == "eks":
+        required_observations = {"status": "missing", "required": {}, "reason": "live-refresh-not-observed"}
+    else:
+        required_observations = {"status": "not-applicable"}
     slo_window_present = "sloWindow" in slo
     slo_window_complete = slo.get("sloWindowComplete") if isinstance(slo.get("sloWindowComplete"), bool) else None
     data_tier_saturated = _optional_bool(slo, "dataTierSaturated")
@@ -332,6 +485,7 @@ def collect_snapshot(args: argparse.Namespace, aws: AwsReadOnly) -> dict[str, An
     snapshot = {
         "ts": iso(now),
         "platform": args.platform,
+        "campaignStage": (metadata.get("effectiveInputs") or {}).get("campaignStage", "capacity-stress") if isinstance(metadata.get("effectiveInputs"), Mapping) else "capacity-stress",
         "logicalCapacity": logical_capacity,
         "capacityHealthy": capacity_healthy,
         "logicalCapacityStable": logical_capacity_stable,
@@ -372,6 +526,7 @@ def collect_snapshot(args: argparse.Namespace, aws: AwsReadOnly) -> dict[str, An
         "nodeSchedulingPressure": platform_evidence.get("nodeSchedulingPressure") if args.platform == "eks" else None,
         "requiredObservationStatus": required_observations,
         "requiredObservationsValid": required_observations.get("status") in {"complete", "not-applicable"},
+        "eksEvidenceObservedAt": platform_evidence.get("observedAtUtc") if args.platform == "eks" else None,
         "podScaleOut": pod_scale_out if current_pods is not None and baseline_pods is not None else None,
         "nodeScaleOut": node_scale_out if current_nodes is not None and baseline_nodes is not None else None,
         "podScaleOutAt": _first_transition(previous, {"podScaleOut": pod_scale_out, "podScaleOutAt": previous.get("podScaleOutAt")}, "podScaleOut", iso(now)),
@@ -399,6 +554,10 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--asg-name", default="")
     parser.add_argument("--cluster-name", default="")
     parser.add_argument("--node-group-name", default="")
+    parser.add_argument("--eks-bastion-id", default="")
+    parser.add_argument("--target-group-arn", default="")
+    parser.add_argument("--namespace", default="travel-planner")
+    parser.add_argument("--deployment", default="backend")
     parser.add_argument("--rds-instance-id", default="")
     parser.add_argument("--redis-cluster-id", default="")
     parser.add_argument(

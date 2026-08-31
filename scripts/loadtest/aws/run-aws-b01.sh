@@ -12,7 +12,7 @@
 # of one B-01 run.
 set -euo pipefail
 
-PHASE="${1:?usage: run-aws-b01.sh <smoke|ramp|baseline|spike|soak|scale-step|capacity-stress> [rep]}"
+PHASE="${1:?usage: run-aws-b01.sh <smoke|ramp|baseline|spike|soak|scale-step|capacity-stress|pod-scale-out|node-scale-out-breakpoint|recovery> [rep]}"
 REP="${2:-}"
 
 : "${REPOSITORY_ROOT:?REPOSITORY_ROOT is required}"
@@ -24,12 +24,18 @@ REP="${2:-}"
 : "${REGION:?REGION is required}"
 : "${ENVIRONMENT:?ENVIRONMENT is required}"
 TARGET_PLATFORM="${TARGET_PLATFORM:-ec2}"
+EKS_CLUSTER_NAME="${EKS_CLUSTER_NAME:-}"
+EKS_NODE_GROUP_NAME="${EKS_NODE_GROUP_NAME:-}"
+EKS_BASTION_ID="${EKS_BASTION_ID:-}"
+BACKEND_NAMESPACE="${BACKEND_NAMESPACE:-travel-planner}"
+BACKEND_DEPLOYMENT="${BACKEND_DEPLOYMENT:-backend}"
+TARGET_GROUP_ARN="${TARGET_GROUP_ARN:-}"
 MAX_RATE="${MAX_RATE:?MAX_RATE is required}"
 OPERATOR_MAX_VUS="${MAX_VUS:?MAX_VUS is required}"
 
 case "$PHASE" in
-  smoke|ramp|baseline|spike|soak|scale-step|capacity-stress) ;;
-  *) echo "usage: run-aws-b01.sh <smoke|ramp|baseline|spike|soak|scale-step|capacity-stress> [rep]" >&2; exit 2 ;;
+  smoke|ramp|baseline|spike|soak|scale-step|capacity-stress|pod-scale-out|node-scale-out-breakpoint|recovery) ;;
+  *) echo "usage: run-aws-b01.sh <smoke|ramp|baseline|spike|soak|scale-step|capacity-stress|pod-scale-out|node-scale-out-breakpoint|recovery> [rep]" >&2; exit 2 ;;
 esac
 if [[ "$PHASE" == "baseline" && -z "$REP" ]]; then
   echo "baseline requires a rep number (1-3): run-aws-b01.sh baseline <rep>" >&2
@@ -55,7 +61,8 @@ from pathlib import Path
 
 profile_path, phase, ceiling_raw, override_raw = sys.argv[1:]
 profile = json.loads(Path(profile_path).read_text(encoding="utf-8"))
-scenario = profile.get("scenarios", {}).get(phase, {})
+profile_phase = "capacity-stress" if phase in {"pod-scale-out", "node-scale-out-breakpoint", "recovery"} else phase
+scenario = profile.get("scenarios", {}).get(profile_phase, {})
 profile_vus = scenario.get("vus") if phase == "smoke" else scenario.get("maxVUs")
 
 def positive_integer(raw, label):
@@ -113,6 +120,30 @@ case "$PHASE" in
     # "3회 중 하나라도 99% 미만이면 해당 arrival-rate 후보를 동결하지 않는다").
     # validate-aws-run.py, not this script's exit code, is the authority on
     # whether the candidate rate freezes.
+    if [[ "$TARGET_PLATFORM" == "eks" ]]; then
+      : "${EKS_CLUSTER_NAME:?EKS_CLUSTER_NAME is required for EKS baseline observation}"
+      : "${EKS_NODE_GROUP_NAME:?EKS_NODE_GROUP_NAME is required for EKS baseline observation}"
+      : "${EKS_BASTION_ID:?EKS_BASTION_ID is required for EKS baseline observation}"
+      : "${TARGET_GROUP_ARN:?TARGET_GROUP_ARN is required for EKS baseline observation}"
+      observer_pid=""
+      python3 "$REPOSITORY_ROOT/scripts/loadtest/aws/observe-aws-capacity-stress.py" \
+        --run-dir "$run_dir" --metadata-file "$run_dir/metadata.json" \
+        --platform eks --region "$REGION" --cluster-name "$EKS_CLUSTER_NAME" \
+        --node-group-name "$EKS_NODE_GROUP_NAME" --eks-bastion-id "$EKS_BASTION_ID" \
+        --target-group-arn "$TARGET_GROUP_ARN" --namespace "$BACKEND_NAMESPACE" \
+        --deployment "$BACKEND_DEPLOYMENT" --eks-evidence-file "$EVIDENCE_ROOT/aws/eks-evidence.json" \
+        --runner-stats-file "$run_dir/runner-stats.jsonl" --slo-window-file "$run_dir/slo-windows.jsonl" \
+        --snapshot-file "$run_dir/snapshots.jsonl" --poll-seconds "${CAPACITY_OBSERVER_POLL_SECONDS:-10}" \
+        > "$run_dir/observer.log" 2>&1 &
+      observer_pid=$!
+      set +e
+      ALLOW_K6_FAILURE=1 "$REPOSITORY_ROOT/scripts/loadtest/aws/run-k6-aws-scenario.sh" baseline "$run_dir"
+      baseline_status=$?
+      if kill -0 "$observer_pid" 2>/dev/null; then kill "$observer_pid" 2>/dev/null || true; fi
+      wait "$observer_pid" 2>/dev/null || true
+      set -e
+      exit "$baseline_status"
+    fi
     ALLOW_K6_FAILURE=1 "$REPOSITORY_ROOT/scripts/loadtest/aws/run-k6-aws-scenario.sh" baseline "$run_dir"
     ;;
   spike)
@@ -176,6 +207,38 @@ PY
   capacity-stress)
     : "${CONFIRMED_RATE:?CONFIRMED_RATE is required for capacity-stress (frozen normal rate)}"
     export RATE="$CONFIRMED_RATE"
+    capacity_profile_preallocated_vus="$(python3 - "$AWS_PROFILE_FILE" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+profile = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+value = profile.get("scenarios", {}).get("capacity-stress", {}).get("preAllocatedVUs")
+if not isinstance(value, int) or value < 1:
+    raise SystemExit("profile.scenarios.capacity-stress.preAllocatedVUs must be a positive integer")
+print(value)
+PY
+)"
+    export PREALLOCATED_VUS="${CAPACITY_STRESS_PREALLOCATED_VUS:-$capacity_profile_preallocated_vus}"
+    capacity_profile_max_vus="$(python3 - "$AWS_PROFILE_FILE" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+profile = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+value = profile.get("scenarios", {}).get("capacity-stress", {}).get("maxVUs")
+if not isinstance(value, int) or value < 1:
+    raise SystemExit("profile.scenarios.capacity-stress.maxVUs must be a positive integer")
+print(value)
+PY
+)"
+    configure_phase_max_vus capacity-stress "${CAPACITY_STRESS_MAX_VUS:-$capacity_profile_max_vus}"
+    ALLOW_K6_FAILURE=1 "$REPOSITORY_ROOT/scripts/loadtest/aws/run-k6-aws-scenario.sh" capacity-stress "$run_dir"
+    ;;
+  pod-scale-out|node-scale-out-breakpoint|recovery)
+    : "${CONFIRMED_RATE:?CONFIRMED_RATE is required for $PHASE}"
+    export RATE="$CONFIRMED_RATE"
+    export CAPACITY_STAGE="$PHASE"
     capacity_profile_preallocated_vus="$(python3 - "$AWS_PROFILE_FILE" <<'PY'
 import json
 import sys

@@ -149,6 +149,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--hard-time-ceiling-seconds", type=int, default=2100)
     parser.add_argument("--poll-seconds", type=float, default=10.0)
+    parser.add_argument(
+        "--campaign-stage",
+        choices=("capacity-stress", "pod-scale-out", "node-scale-out-breakpoint", "recovery"),
+        default="capacity-stress",
+    )
     parser.add_argument("--", dest="separator", nargs="?")
     parser.add_argument("command", nargs=argparse.REMAINDER)
     args = parser.parse_args(argv)
@@ -178,7 +183,7 @@ def main() -> int:
         command = command[1:]
 
     with events_path.open("w", encoding="utf-8") as events:
-        append_event(events, "CONTROLLER_START", command=command, snapshotFile=str(snapshot_file))
+        append_event(events, "CONTROLLER_START", command=command, snapshotFile=str(snapshot_file), campaignStage=args.campaign_stage)
         process = subprocess.Popen(command, cwd=os.getcwd(), env=os.environ.copy())
         append_event(events, "WORKLOAD_STARTED", pid=process.pid)
         reason: str | None = None
@@ -219,6 +224,7 @@ def main() -> int:
         "completeScheduleSeconds": args.complete_schedule_seconds,
         "hardTimeCeilingSeconds": args.hard_time_ceiling_seconds,
         "snapshotFile": str(snapshot_file),
+        "campaignStage": args.campaign_stage,
         "workloadCommandRecorded": True,
         "operatorRecoveryAutomated": False,
         "autoscalingDesiredStateWritten": False,

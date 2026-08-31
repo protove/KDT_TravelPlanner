@@ -26,6 +26,11 @@ class ObserverContractTests(unittest.TestCase):
         self.assertTrue(MODULE.READ_OPERATIONS)
         self.assertTrue(all(op.startswith("describe-") or op == "get-metric-statistics" for op in MODULE.READ_OPERATIONS))
 
+    def test_targeted_ssm_port_is_limited_to_marker_observation_operations(self):
+        aws = MODULE.AwsReadOnly(region="ap-northeast-2", profile="kdt-travel-admin")
+        with self.assertRaisesRegex(MODULE.ObserverError, "non-observation"):
+            aws.call_targeted_ssm("delete-command", [])
+
     def test_ec2_capacity_requires_healthy_in_service_members(self):
         desired, healthy, details = MODULE.ec2_capacity({
             "AutoScalingGroups": [{
@@ -160,6 +165,44 @@ class ObserverContractTests(unittest.TestCase):
             self.assertTrue(snapshot["nodeScaleOut"])
             self.assertTrue(snapshot["nodeMaxPending"])
             self.assertTrue(snapshot["requiredObservationsValid"])
+
+    def test_live_eks_refresh_failure_does_not_reuse_static_evidence(self):
+        class FakeAws:
+            def call(self, service, operation, arguments):
+                if service == "eks":
+                    return {"nodegroup": {"status": "ACTIVE", "scalingConfig": {"minSize": 2, "desiredSize": 2, "maxSize": 4}}}
+                raise MODULE.ObserverError("simulated read failure")
+
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            evidence = root / "eks-evidence.json"
+            evidence.write_text(json.dumps({
+                "hpa": {}, "backendPods": {"count": 2, "pendingReasons": []},
+                "nodeCount": 2, "nodeReadyCount": 2, "alb": {},
+            }), encoding="utf-8")
+            args = argparse.Namespace(
+                sample_json=None,
+                platform="eks",
+                asg_name="",
+                cluster_name="example-dev-eks",
+                node_group_name="example-dev-nodes",
+                eks_bastion_id="",
+                target_group_arn="",
+                namespace="travel-planner",
+                deployment="backend",
+                region="ap-northeast-2",
+                rds_instance_id="",
+                redis_cluster_id="",
+                t3_instance_ids=[],
+                runner_stats_file=None,
+                slo_window_file=None,
+                snapshot_file=None,
+                eks_evidence_file=evidence,
+            )
+            snapshot = MODULE.collect_snapshot(args, FakeAws())
+            self.assertFalse(snapshot["requiredObservationsValid"])
+            self.assertEqual(snapshot["backendPods"], {})
+            self.assertIn("eks:live-refresh-failed", snapshot["observationErrors"])
 
 
 if __name__ == "__main__":
