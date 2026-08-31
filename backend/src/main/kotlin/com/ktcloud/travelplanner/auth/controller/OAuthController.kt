@@ -23,11 +23,14 @@ class OAuthController(
 	private val loginService: OAuthLoginService,
 	private val stateCookieFactory: OAuthStateCookieFactory,
 ) {
+	// switchAccount=true는 "다른 계정으로 로그인" 링크 전용 — 세션이 남아있어도 프로바이더의
+	// 계정 선택 화면을 강제한다. 기본 로그인 버튼은 이 파라미터 없이 호출해 항상 조용히 통과된다.
 	@GetMapping("/{provider}")
 	fun start(
 		@PathVariable provider: String,
+		@RequestParam(defaultValue = "false") switchAccount: Boolean,
 	): ResponseEntity<Void> {
-		val authorizationRedirect = loginService.createAuthorizationRedirect(provider)
+		val authorizationRedirect = loginService.createAuthorizationRedirect(provider, switchAccount)
 		return ResponseEntity
 			.status(HttpStatus.FOUND)
 			.header(

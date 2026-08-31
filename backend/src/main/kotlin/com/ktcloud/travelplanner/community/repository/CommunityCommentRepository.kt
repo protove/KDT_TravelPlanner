@@ -1,10 +1,13 @@
 package com.ktcloud.travelplanner.community.repository
 
 import com.ktcloud.travelplanner.community.model.CommunityComment
+import org.springframework.data.domain.Page
+import org.springframework.data.domain.Pageable
 import org.springframework.data.jpa.repository.JpaRepository
 import org.springframework.data.jpa.repository.Modifying
 import org.springframework.data.jpa.repository.Query
 import org.springframework.data.repository.query.Param
+import java.time.Instant
 import java.util.UUID
 
 interface CommunityCommentRepository : JpaRepository<CommunityComment, UUID> {
@@ -76,6 +79,59 @@ interface CommunityCommentRepository : JpaRepository<CommunityComment, UUID> {
 		@Param("commentIds") commentIds: List<UUID>,
 		@Param("userId") userId: UUID,
 	): List<UUID>
+
+	// 마이페이지 "내가 쓴 댓글" 탭 — 어느 글에 달았는지 보여줘야 해서 post.title까지 함께 가져온다.
+	// includeDeleted=true일 때만 본인이 삭제한 댓글, 그리고 본인이 삭제한 글에 달린(댓글 자체는
+	// 안 지워진) 댓글까지 함께 보여준다(기본은 둘 다 숨김). CommunityComment/CommunityPost 양쪽의
+	// @SQLRestriction을 우회하는 네이티브 쿼리로 조회한다
+	// (CommunityPostRepository.findByAuthorIdIncludingDeletedOrderByCreatedAtDesc와 동일한 패턴).
+	// keyword는 댓글 내용/글 제목을 훑고, periodStart/periodEnd는 댓글 작성일(created_at) 기준.
+	@Query(
+		value = """
+			SELECT
+				comment.id AS commentId,
+				post.id AS postId,
+				post.title AS postTitle,
+				comment.content AS content,
+				comment.created_at AS createdAt,
+				comment.updated_at AS updatedAt,
+				comment.deleted_at AS deletedAt,
+				post.deleted_at AS postDeletedAt
+			FROM community_comment comment
+			JOIN community_post post ON post.id = comment.post_id
+			WHERE comment.author_id = :authorId
+				AND (:includeDeleted = true OR (comment.deleted_at IS NULL AND post.deleted_at IS NULL))
+				AND (CAST(:periodStart AS timestamptz) IS NULL OR comment.created_at >= CAST(:periodStart AS timestamptz))
+				AND (CAST(:periodEnd AS timestamptz) IS NULL OR comment.created_at < CAST(:periodEnd AS timestamptz))
+				AND (:keyword IS NULL OR (
+					LOWER(comment.content) LIKE LOWER(CONCAT('%', :keyword, '%'))
+					OR LOWER(post.title) LIKE LOWER(CONCAT('%', :keyword, '%'))
+				))
+			ORDER BY comment.created_at DESC
+		""",
+		countQuery = """
+			SELECT COUNT(*)
+			FROM community_comment comment
+			JOIN community_post post ON post.id = comment.post_id
+			WHERE comment.author_id = :authorId
+				AND (:includeDeleted = true OR (comment.deleted_at IS NULL AND post.deleted_at IS NULL))
+				AND (CAST(:periodStart AS timestamptz) IS NULL OR comment.created_at >= CAST(:periodStart AS timestamptz))
+				AND (CAST(:periodEnd AS timestamptz) IS NULL OR comment.created_at < CAST(:periodEnd AS timestamptz))
+				AND (:keyword IS NULL OR (
+					LOWER(comment.content) LIKE LOWER(CONCAT('%', :keyword, '%'))
+					OR LOWER(post.title) LIKE LOWER(CONCAT('%', :keyword, '%'))
+				))
+		""",
+		nativeQuery = true,
+	)
+	fun findByAuthorIdIncludingDeletedOrderByCreatedAtDesc(
+		@Param("authorId") authorId: UUID,
+		@Param("keyword") keyword: String?,
+		@Param("periodStart") periodStart: String?,
+		@Param("periodEnd") periodEnd: String?,
+		@Param("includeDeleted") includeDeleted: Boolean,
+		pageable: Pageable,
+	): Page<MyCommentRow>
 }
 
 // countReactionsByCommentIds의 네이티브 쿼리 결과를 매핑하는 Spring Data 인터페이스 프로젝션.
@@ -83,4 +139,18 @@ interface CommunityCommentRepository : JpaRepository<CommunityComment, UUID> {
 interface CommentReactionCountRow {
 	val commentId: UUID
 	val reactionCount: Long
+}
+
+// findByAuthorIdIncludingDeletedOrderByCreatedAtDesc 네이티브 쿼리 프로젝션 — 프로퍼티 이름이
+// 쿼리의 컬럼 별칭과 대소문자 무시로 매칭된다.
+interface MyCommentRow {
+	val commentId: UUID
+	val postId: UUID
+	val postTitle: String
+	val content: String
+	val createdAt: Instant
+	val updatedAt: Instant?
+	val deletedAt: Instant?
+	// 댓글 자체는 안 지워졌는데 글이 삭제된 경우를 프론트가 구분해 상세로 못 들어가게 막을 수 있도록.
+	val postDeletedAt: Instant?
 }

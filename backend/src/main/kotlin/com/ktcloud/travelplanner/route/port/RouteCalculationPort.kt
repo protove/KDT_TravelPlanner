@@ -3,31 +3,69 @@ package com.ktcloud.travelplanner.route.port
 import com.ktcloud.travelplanner.route.model.TransportationType
 
 interface RouteCalculationPort {
-	fun calculateRoute(
-		googlePlaceIds: List<String>,
-		transportationType: TransportationType,
-	): RouteCalculation
+
+    /*
+     * 기존 GET /routes.
+     */
+    fun calculateRoute(
+        googlePlaceIds: List<String>,
+        transportationType: TransportationType,
+    ): RouteCalculation
+
+    /*
+     * SCRUM-56 Preview.
+     *
+     * 전달된 waypoint 순서가 visitOrder 순서다.
+     *
+     * Adapter에서 TRANSIT으로:
+     *
+     * A -> B
+     * B -> C
+     * C -> D
+     *
+     * 각각 계산한다.
+     */
+    fun calculatePreviewRoute(
+        waypoints: List<RouteCalculationWaypoint>,
+    ): RouteCalculation
 }
 
+data class RouteCalculationWaypoint(
+    val googlePlaceId: String,
+    val latitude: Double,
+    val longitude: Double,
+)
+
 data class RouteCalculation(
-	val encodedPolyline: String?,
-	val totalDistanceMeters: Long,
-	val totalDurationSeconds: Long,
-	val legs: List<RouteLegCalculation>,
-	val warnings: List<String>,
+    val encodedPolyline: String?,
+    val encodedPolylines: List<String>,
+    val totalDistanceMeters: Long,
+    val totalDurationSeconds: Long,
+    val legs: List<RouteLegCalculation>,
+    val warnings: List<String>,
 ) {
-	init {
-		require(totalDistanceMeters >= 0) { "totalDistanceMeters must not be negative." }
-		require(totalDurationSeconds >= 0) { "totalDurationSeconds must not be negative." }
-	}
+    init {
+        require(totalDistanceMeters >= 0) {
+            "totalDistanceMeters must not be negative."
+        }
+
+        require(totalDurationSeconds >= 0) {
+            "totalDurationSeconds must not be negative."
+        }
+    }
 }
 
 data class RouteLegCalculation(
-	val distanceMeters: Long,
-	val durationSeconds: Long,
+    val distanceMeters: Long,
+    val durationSeconds: Long,
 ) {
-	init {
-		require(distanceMeters >= 0) { "distanceMeters must not be negative." }
-		require(durationSeconds >= 0) { "durationSeconds must not be negative." }
-	}
+    init {
+        require(distanceMeters >= 0) {
+            "distanceMeters must not be negative."
+        }
+
+        require(durationSeconds >= 0) {
+            "durationSeconds must not be negative."
+        }
+    }
 }

@@ -17,10 +17,10 @@ class CommunityMigrationIntegrationTest : ContainerIntegrationTestSupport() {
 	fun `empty database applies community schema migrations`() {
 		// V19는 커뮤니티와 무관한 타임라인 마이그레이션이라 의도적으로 제외한다(원래도 그랬음).
 		assertEquals(
-			8,
+			9,
 			jdbcTemplate.queryForObject(
 				"SELECT COUNT(*) FROM flyway_schema_history " +
-					"WHERE version IN ('13', '14', '15', '16', '17', '18', '20', '21') AND success = TRUE",
+					"WHERE version IN ('13', '14', '15', '16', '17', '18', '20', '21', '22') AND success = TRUE",
 				Int::class.java,
 			),
 		)
@@ -170,6 +170,34 @@ class CommunityMigrationIntegrationTest : ContainerIntegrationTestSupport() {
 				authorId,
 			)
 		}
+	}
+
+	@Test
+	fun `community_post itinerary_snapshot_json defaults to null and can store a tiptap document`() {
+		val authorId = insertUser()
+		val postId = insertPost(authorId)
+
+		assertNull(
+			jdbcTemplate.queryForObject(
+				"SELECT itinerary_snapshot_json FROM community_post WHERE id = ?",
+				String::class.java,
+				postId,
+			),
+		)
+
+		jdbcTemplate.update(
+			"UPDATE community_post SET itinerary_snapshot_json = '{\"type\":\"doc\"}'::jsonb WHERE id = ?",
+			postId,
+		)
+
+		assertEquals(
+			1,
+			jdbcTemplate.queryForObject(
+				"SELECT COUNT(*) FROM community_post WHERE id = ? AND itinerary_snapshot_json IS NOT NULL",
+				Int::class.java,
+				postId,
+			),
+		)
 	}
 
 	@Test

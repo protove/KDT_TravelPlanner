@@ -18,14 +18,16 @@ data class CommunityPostSummaryResponse(
 	val reactionCount: Long,
 	val sourceTravelId: UUID?,
 	val createdAt: Instant,
+	// 공개 목록(getPosts)에서는 @SQLRestriction 때문에 절대 채워지지 않아 항상 null이고,
+	// 마이페이지 "내가 쓴 글"(getMyPosts)에서만 본인이 소프트 삭제한 글에 실제 값이 들어간다.
+	val deletedAt: Instant? = null,
 ) {
 	companion object {
-		// community-api-contract.md 3절/8절 — 댓글/리액션 API가 아직 붙지 않아 목록 조회에서는 0으로 고정한다.
-		// sort=popular 정렬식(CommunityPostRepository.findPostsOrderByPopularity)은 이 값들이 채워지는
-		// 시점에 자연히 맞아떨어지도록 이미 (reactionCount*2 + commentCount) 형태로 맞춰 두었다.
 		fun from(
 			row: CommunityPostListRow,
 			tags: List<String>,
+			commentCount: Long,
+			reactionCount: Long,
 		): CommunityPostSummaryResponse = CommunityPostSummaryResponse(
 			postId = row.postId,
 			categoryCode = row.categoryCode,
@@ -35,10 +37,11 @@ data class CommunityPostSummaryResponse(
 			authorNickname = row.authorNickname,
 			authorProfileImageUrl = row.authorProfileImageUrl,
 			viewCount = row.viewCount,
-			commentCount = 0,
-			reactionCount = 0,
+			commentCount = commentCount,
+			reactionCount = reactionCount,
 			sourceTravelId = row.sourceTravelId,
 			createdAt = row.createdAt,
+			deletedAt = row.deletedAt,
 		)
 	}
 }

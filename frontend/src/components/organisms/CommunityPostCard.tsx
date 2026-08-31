@@ -15,16 +15,25 @@ export interface CommunityPostCardProps {
 }
 
 function CommunityPostCard({ post, categoryName, onClick, className }: CommunityPostCardProps) {
+  // 마이페이지 "내가 쓴 글"에서만 deletedAt이 채워진다(공개 목록엔 삭제된 글이 아예 안 내려옴).
+  // 삭제된 글은 상세로 들어가도 404라 클릭 자체를 막고 "삭제됨" 배지로만 보여준다.
+  const isDeleted = Boolean(post.deletedAt);
+
   return (
     <div
-      role="button"
-      tabIndex={0}
-      onClick={onClick}
-      onKeyDown={(event) => {
-        if (event.key === "Enter" || event.key === " ") onClick?.();
-      }}
+      role={isDeleted ? undefined : "button"}
+      tabIndex={isDeleted ? undefined : 0}
+      onClick={isDeleted ? undefined : onClick}
+      onKeyDown={
+        isDeleted
+          ? undefined
+          : (event) => {
+              if (event.key === "Enter" || event.key === " ") onClick?.();
+            }
+      }
       className={cn(
-        "flex cursor-pointer flex-col gap-3 rounded-lg border border-border bg-card p-5 shadow-card transition-shadow hover:shadow-dialog",
+        "flex flex-col gap-3 rounded-lg border border-border bg-card p-5 shadow-card transition-shadow",
+        isDeleted ? "opacity-60" : "cursor-pointer hover:shadow-dialog",
         className,
       )}
     >
@@ -33,6 +42,11 @@ function CommunityPostCard({ post, categoryName, onClick, className }: Community
           <Badge variant="accent" className="shrink-0">
             {categoryName}
           </Badge>
+          {isDeleted && (
+            <Badge variant="destructive" className="shrink-0">
+              삭제됨
+            </Badge>
+          )}
           <div className="flex min-w-0 items-center gap-1.5">
             <Avatar className="h-6 w-6 shrink-0">
               {post.authorProfileImageUrl && (

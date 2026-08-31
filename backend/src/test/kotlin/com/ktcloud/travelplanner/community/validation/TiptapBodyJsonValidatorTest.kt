@@ -96,4 +96,39 @@ class TiptapBodyJsonValidatorTest {
 			TiptapBodyJsonValidator.validate(bodyJson)
 		}
 	}
+
+	@Test
+	fun `accepts a bodyJson whose total text length is exactly MAX_TEXT_LENGTH`() {
+		val bodyJson = objectMapper.readTree(
+			"""
+			{
+			  "type": "doc",
+			  "content": [
+			    { "type": "paragraph", "content": [{ "type": "text", "text": "${"가".repeat(TiptapBodyJsonValidator.MAX_TEXT_LENGTH)}" }] }
+			  ]
+			}
+			""".trimIndent(),
+		)
+
+		TiptapBodyJsonValidator.validate(bodyJson)
+	}
+
+	@Test
+	fun `rejects a bodyJson whose total text length across multiple nodes exceeds MAX_TEXT_LENGTH`() {
+		val bodyJson = objectMapper.readTree(
+			"""
+			{
+			  "type": "doc",
+			  "content": [
+			    { "type": "paragraph", "content": [{ "type": "text", "text": "${"가".repeat(TiptapBodyJsonValidator.MAX_TEXT_LENGTH)}" }] },
+			    { "type": "paragraph", "content": [{ "type": "text", "text": "1" }] }
+			  ]
+			}
+			""".trimIndent(),
+		)
+
+		assertThrows<InvalidBodyJsonException> {
+			TiptapBodyJsonValidator.validate(bodyJson)
+		}
+	}
 }

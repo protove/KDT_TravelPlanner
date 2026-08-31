@@ -1,10 +1,12 @@
 "use client";
 
 import * as React from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { Button } from "@/components/atoms/Button";
 import { ProfileSection } from "@/components/organisms/ProfileSection";
 import { NotificationList } from "@/components/organisms/NotificationList";
+import { MyPostsPanel } from "@/components/organisms/MyPostsPanel";
+import { MyCommentsPanel } from "@/components/organisms/MyCommentsPanel";
 import { ConfirmDialog } from "@/components/molecules/ConfirmDialog";
 import { MyPageLayout } from "@/components/templates/MyPageLayout";
 import { useAuthStore } from "@/lib/stores/useAuthStore";
@@ -32,12 +34,20 @@ import {
 } from "@/lib/api/profileImage";
 import type { Gender } from "@/components/organisms/ProfileSection";
 
-type MypageTab = "profile" | "notif";
+type MypageTab = "profile" | "notif" | "myPosts" | "myComments";
 
 const TABS = [
   { key: "profile", label: "프로필수정" },
   { key: "notif", label: "초대알림" },
+  { key: "myPosts", label: "내가 쓴 글" },
+  { key: "myComments", label: "내가 쓴 댓글" },
 ];
+
+const VALID_TABS: MypageTab[] = ["profile", "notif", "myPosts", "myComments"];
+
+function isMypageTab(value: string | null): value is MypageTab {
+  return value !== null && (VALID_TABS as string[]).includes(value);
+}
 
 interface ProfileDraft {
   nickname: string;
@@ -68,7 +78,16 @@ function profileToDraft(profile: UserProfile): ProfileDraft {
 }
 
 export default function MypagePage() {
+  return (
+    <React.Suspense fallback={null}>
+      <MypagePageContent />
+    </React.Suspense>
+  );
+}
+
+function MypagePageContent() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const isLoggedIn = useAuthStore((s) => s.isLoggedIn);
   const isInitializing = useAuthStore((s) => s.isInitializing);
   const user = useAuthStore((s) => s.user);
@@ -80,7 +99,12 @@ export default function MypagePage() {
   const acceptNotification = useNotificationStore((s) => s.accept);
   const rejectNotification = useNotificationStore((s) => s.reject);
 
-  const [tab, setTab] = React.useState<MypageTab>("profile");
+  // 마이페이지에서 나갔다가(글/댓글 상세로 진입 등) 뒤로가기로 돌아왔을 때 탭이 "프로필수정"으로
+  // 초기화되지 않도록 URL 쿼리(?tab=)로 상태를 남긴다 — community/page.tsx의 카테고리 탭과 동일한 패턴.
+  const [tab, setTab] = React.useState<MypageTab>(() => {
+    const fromUrl = searchParams.get("tab");
+    return isMypageTab(fromUrl) ? fromUrl : "profile";
+  });
   const [showWithdraw, setShowWithdraw] = React.useState(false);
   const [profile, setProfile] = React.useState<UserProfile | null>(null);
   const [draft, setDraft] = React.useState<ProfileDraft>({
@@ -326,7 +350,10 @@ export default function MypagePage() {
     <MyPageLayout
       tabs={TABS}
       activeTab={tab}
-      onTabChange={(key) => setTab(key as MypageTab)}
+      onTabChange={(key) => {
+        setTab(key as MypageTab);
+        router.replace(`/mypage?tab=${key}`, { scroll: false });
+      }}
     >
       {tab === "profile" ? (
         <>
@@ -405,7 +432,7 @@ export default function MypagePage() {
             onConfirm={handleWithdraw}
           />
         </>
-      ) : (
+      ) : tab === "notif" ? (
         <>
           <h1 className="mb-5 text-xl font-bold text-foreground">초대알림</h1>
           <NotificationList
@@ -413,6 +440,16 @@ export default function MypagePage() {
             onAccept={acceptNotification}
             onReject={rejectNotification}
           />
+        </>
+      ) : tab === "myPosts" ? (
+        <>
+          <h1 className="mb-5 text-xl font-bold text-foreground">내가 쓴 글</h1>
+          {accessToken && <MyPostsPanel accessToken={accessToken} />}
+        </>
+      ) : (
+        <>
+          <h1 className="mb-5 text-xl font-bold text-foreground">내가 쓴 댓글</h1>
+          {accessToken && <MyCommentsPanel accessToken={accessToken} />}
         </>
       )}
     </MyPageLayout>

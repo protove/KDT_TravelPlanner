@@ -34,6 +34,7 @@ class CommunityPost(
 	bodyJson: String,
 	bodyPreview: String?,
 	sourceTravelId: UUID?,
+	itinerarySnapshotJson: String?,
 ) : BaseTimeEntity() {
 	@Column(nullable = false, length = 200)
 	var title: String = title
@@ -51,6 +52,14 @@ class CommunityPost(
 
 	@Column(name = "source_travel_id")
 	var sourceTravelId: UUID? = sourceTravelId
+		protected set
+
+	// 여행후기 작성 시점의 일정 스냅샷(TiptapDocument, bodyJson과 동일 스키마). 작성 시 한 번만
+	// 채워지고 이후 수정 API가 없는 불변 값이다 — source_travel_id가 가리키는 원본 여행이
+	// 나중에 바뀌어도 이 값은 그대로 유지된다.
+	@JdbcTypeCode(SqlTypes.JSON)
+	@Column(name = "itinerary_snapshot_json", columnDefinition = "jsonb")
+	var itinerarySnapshotJson: String? = itinerarySnapshotJson
 		protected set
 
 	@Column(name = "view_count", nullable = false)
@@ -77,5 +86,24 @@ class CommunityPost(
 
 	fun assignTags(tags: Set<CommunityTag>) {
 		this.tags = tags.toMutableSet()
+	}
+
+	// PATCH /posts/{postId} — PatchField 방식이라 호출부가 "보낸 필드"만 골라 넘긴다(null=미변경).
+	// categoryCode/sourceTravelId/itinerarySnapshotJson은 계약상 수정 대상이 아니라 여기서 다루지 않는다.
+	fun edit(
+		title: String? = null,
+		bodyJson: String? = null,
+		bodyPreview: String? = null,
+	) {
+		if (title != null) this.title = title
+		if (bodyJson != null) {
+			this.bodyJson = bodyJson
+			this.bodyPreview = bodyPreview
+		}
+	}
+
+	fun softDelete(deletedAt: Instant) {
+		require(this.deletedAt == null) { "Post is already deleted." }
+		this.deletedAt = deletedAt
 	}
 }

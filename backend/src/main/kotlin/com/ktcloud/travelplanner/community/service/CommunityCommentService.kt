@@ -2,22 +2,33 @@ package com.ktcloud.travelplanner.community.service
 
 import com.ktcloud.travelplanner.community.dto.CommentCreateRequest
 import com.ktcloud.travelplanner.community.dto.CommentResponse
+import com.ktcloud.travelplanner.community.dto.MyCommentResponse
 import com.ktcloud.travelplanner.community.model.CommunityComment
+import com.ktcloud.travelplanner.community.port.AuthorSummary
+import com.ktcloud.travelplanner.community.port.UserLookupPort
 import com.ktcloud.travelplanner.community.repository.CommunityCommentRepository
 import com.ktcloud.travelplanner.community.repository.CommunityPostRepository
 import com.ktcloud.travelplanner.global.exception.DomainException
 import com.ktcloud.travelplanner.global.exception.ErrorCode
+import com.ktcloud.travelplanner.global.response.PageResponse
+import com.ktcloud.travelplanner.global.util.toExclusiveEndOfDayInstant
+import com.ktcloud.travelplanner.global.util.toStartOfDayInstant
 import com.ktcloud.travelplanner.user.repository.UserRepository
+import org.springframework.data.domain.PageRequest
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
 import java.time.Instant
+import java.time.LocalDate
 import java.util.UUID
 
 @Service
 class CommunityCommentService(
 	private val communityPostRepository: CommunityPostRepository,
 	private val communityCommentRepository: CommunityCommentRepository,
+	// 댓글 생성 시 CommunityComment.author: User 엔티티 관계를 채우는 데 필요 — 이번 스코프에서
+	// 엔티티를 authorId: UUID로 바꾸지 않기로 했으므로 직접 유지 (CommunityPostService와 동일 사유).
 	private val userRepository: UserRepository,
+	private val userLookupPort: UserLookupPort,
 ) {
 	// community-api-contract.md 2절 — 댓글 목록. 단일 depth, 페이지네이션 없음, 인증 불필요.
 	// 게시글이 없거나 소프트 삭제된 경우 404(CommunityPost의 @SQLRestriction이 findById에서 걸러줌).
@@ -67,7 +78,9 @@ class CommunityCommentService(
 			content = request.content,
 		)
 		val saved = communityCommentRepository.save(comment)
-		return CommentResponse.from(saved, isMine = true, reactionCount = 0, isReacted = false)
+		// author 엔티티를 이미 로딩했으니 Port를 다시 호출하지 않고 그대로 AuthorSummary로 변환한다.
+		val authorSummary = AuthorSummary(id = authorId, nickname = author.nickname, profileImageUrl = author.profileImageUrl)
+		return CommentResponse.from(saved, authorSummary, isMine = true, reactionCount = 0, isReacted = false)
 	}
 
 	// PATCH /comments/{commentId} — 작성자 본인만, 내용만 바꿀 수 있다(카테고리/게시글 이동 없음).
@@ -85,7 +98,8 @@ class CommunityCommentService(
 
 		val reactionCount = communityCommentRepository.countReactions(commentId)
 		val isReacted = communityCommentRepository.existsReaction(commentId, requesterId)
-		return CommentResponse.from(comment, isMine = true, reactionCount = reactionCount, isReacted = isReacted)
+		val author = userLookupPort.findAuthor(requireNotNull(comment.author.id))
+		return CommentResponse.from(comment, author, isMine = true, reactionCount = reactionCount, isReacted = isReacted)
 	}
 
 	// community-api-contract.md 2절 — 댓글 삭제(soft), 작성자 본인만.
@@ -123,16 +137,46 @@ class CommunityCommentService(
 		}
 
 		val reactionCount = communityCommentRepository.countReactions(commentId)
+		val author = userLookupPort.findAuthor(requireNotNull(comment.author.id))
 		return CommentResponse.from(
 			comment = comment,
+			author = author,
 			isMine = requesterId == comment.author.id,
 			reactionCount = reactionCount,
 			isReacted = !alreadyReacted,
 		)
 	}
 
+	// 마이페이지 "내가 쓴 댓글" 탭 — 본인 댓글만 작성일 역순으로. includeDeleted=true일 때만
+	// 본인이 삭제한 댓글(및 삭제한 글에 달린 댓글)도 함께 보여준다(기본값 false). keyword/기간
+	// 필터는 CommunityPostService.getMyPosts와 동일한 관례.
+	@Transactional(readOnly = true)
+	fun getMyComments(
+		authorId: UUID,
+		keyword: String?,
+		periodStart: LocalDate?,
+		periodEnd: LocalDate?,
+		includeDeleted: Boolean,
+		page: Int,
+		size: Int,
+	): PageResponse<MyCommentResponse> {
+		val normalizedKeyword = keyword?.trim()?.takeIf { it.isNotEmpty() }
+		val pageable = PageRequest.of(page.coerceAtLeast(0), size.coerceIn(MIN_PAGE_SIZE, MAX_PAGE_SIZE))
+		val result = communityCommentRepository.findByAuthorIdIncludingDeletedOrderByCreatedAtDesc(
+			authorId,
+			normalizedKeyword,
+			periodStart?.toStartOfDayInstant(),
+			periodEnd?.toExclusiveEndOfDayInstant(),
+			includeDeleted,
+			pageable,
+		)
+		return PageResponse.from(result.map(MyCommentResponse::from))
+	}
+
 	companion object {
 		private const val SUPPORTED_REACTION_TYPE = "LIKE"
+		private const val MIN_PAGE_SIZE = 1
+		private const val MAX_PAGE_SIZE = 50
 	}
 }
 

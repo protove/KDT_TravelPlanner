@@ -53,6 +53,7 @@ class TravelRouteServiceTest {
 		).thenReturn(
 			RouteCalculation(
 				encodedPolyline = "polyline",
+				encodedPolylines = listOf("polyline"),
 				totalDistanceMeters = 1200,
 				totalDurationSeconds = 900,
 				legs = listOf(RouteLegCalculation(500, 300), RouteLegCalculation(700, 600)),
@@ -91,6 +92,7 @@ class TravelRouteServiceTest {
 		val twentySeven = (1..27).map { item(travel, it.toShort(), "place-$it") }
 		val calculation = RouteCalculation(
 			encodedPolyline = "polyline",
+			encodedPolylines = listOf("polyline"),
 			totalDistanceMeters = 26,
 			totalDurationSeconds = 26,
 			legs = List(26) { RouteLegCalculation(1, 1) },

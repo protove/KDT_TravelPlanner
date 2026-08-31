@@ -22,19 +22,32 @@ export interface PageResponse<T> {
   isLast: boolean;
 }
 
+/** 백엔드 TravelService.VALID_SEARCH_SCOPES와 대응. */
+export type TravelSearchScope = "ALL" | "TITLE" | "DESCRIPTION" | "DESTINATION";
+
 export interface FetchTravelsParams {
   keyword?: string;
+  searchScope?: TravelSearchScope;
+  /** YYYY-MM-DD. 여행 "자체 기간"(startDate~endDate)이 이 구간과 겹치는지로 거른다. */
+  periodStart?: string;
+  periodEnd?: string;
   page?: number;
   size?: number;
 }
 
-/** 현재 사용자가 소유하거나 참여 중인 여행 목록을 페이지 단위로 조회한다. keyword를 넘기면 제목으로 검색한다. */
+/**
+ * 현재 사용자가 소유하거나 참여 중인 여행 목록을 페이지 단위로 조회한다. keyword를 넘기면
+ * searchScope(기본 ALL)에 따라 제목/설명/여행지(국가·도시명, 한글·영문)를 검색한다.
+ */
 export async function fetchTravels(
   accessToken: string,
   params: FetchTravelsParams = {},
 ): Promise<PageResponse<TravelSummary>> {
   const searchParams = new URLSearchParams();
   if (params.keyword) searchParams.set("keyword", params.keyword);
+  if (params.searchScope) searchParams.set("searchScope", params.searchScope);
+  if (params.periodStart) searchParams.set("periodStart", params.periodStart);
+  if (params.periodEnd) searchParams.set("periodEnd", params.periodEnd);
   if (params.page != null) searchParams.set("page", String(params.page));
   if (params.size != null) searchParams.set("size", String(params.size));
   const qs = searchParams.toString();
