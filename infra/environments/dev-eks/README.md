@@ -195,7 +195,7 @@ Cluster SG에서 오는 TCP 5432/6379만 허용하며, `dev-runtime` remote Stat
 - 컨트롤 플레인 로그 5종 전체 활성화, 전용 KMS 키로 Secrets 암호화
 - `access_config { authentication_mode = "API" }` — legacy aws-auth ConfigMap 없이
   Access Entry만으로 인증
-- private app subnet의 관리형 노드그룹(`t3.small`, min=2/desired=2/max=4, public IP 없음)
+- private app subnet의 관리형 노드그룹(`t3.medium`, min=2/desired=2/max=4, public IP 없음)
 - 클러스터 자체의 IRSA용 OIDC provider (SCRUM-11에서 워크로드 Role을 여기에 연결)
 - `admin_principal_arns`에 넣은 ARN마다 `AmazonEKSClusterAdminPolicy` Access Entry
 
@@ -315,7 +315,7 @@ Plan에서 다음을 확인한다.
 - Secrets 암호화가 새로 생성되는 전용 KMS 키를 사용한다(S3 SSE용 기존 예외
   `AVD-AWS-0132`와 무관).
 - `admin_principal_arns`에 넣은 ARN 수만큼 Access Entry가 생성된다.
-- 노드그룹이 `t3.small` 2대에서 시작하고 min/desired/max가 `2/2/4`다.
+- 노드그룹이 `t3.medium` 2대에서 시작하고 min/desired/max가 `2/2/4`다.
 - NAT Gateway가 정확히 1개이고 모든 persistent `app_route_table_ids`에 default route를
   하나씩 추가한다. 기존 dev-runtime route를 update/delete/replace하지 않는다.
 - RDS는 exact PostgreSQL 17 patch, `db.t4g.micro`, private/encrypted/Single-AZ,

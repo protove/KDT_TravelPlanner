@@ -73,6 +73,14 @@ class SloBoundaryTest(unittest.TestCase):
         self.assertEqual(contract["comparison"]["sameInstanceFamily"], "t3.small")
         self.assertEqual(json.loads((ROOT / "load-tests/aws/contracts/slo-v1.1-frozen.json").read_text())["comparison"]["sameInstanceFamily"], "t3.medium")
 
+    def test_eks_v21_breakpoint_contract_binds_t3_medium_and_is_eks_context_only(self):
+        path = ROOT / "load-tests/aws/contracts/eks-monolith-breakpoint-slo-v2.1.json"
+        contract = SLO.load_contract(path, expected_version="v2.1-breakpoint")
+        self.assertEqual(contract["scope"], "aws-eks-monolith-breakpoint-t3-medium-adaptive")
+        self.assertEqual(contract["comparison"]["sameInstanceFamily"], "t3.medium")
+        self.assertEqual(contract["comparison"]["sameCapacityShape"], {"min": 2, "desired": 2, "max": 4})
+        self.assertIn("EKS-only", contract["comparison"]["interpretation"])
+
 
 class CapacitySloWindowProducerTest(unittest.TestCase):
     def test_emits_only_complete_non_overlapping_windows_and_stage_labels(self):

@@ -37,6 +37,10 @@ CAPACITY_STRESS_PROFILE_VERSIONS = {
 }
 EKS_BREAKPOINT_PROFILE_VERSION = "aws-eks-monolith-breakpoint-v1.0"
 EKS_ADAPTIVE_BREAKPOINT_PROFILE_VERSION = "aws-eks-monolith-breakpoint-v2.0"
+EKS_ADAPTIVE_BREAKPOINT_PROFILE_VERSIONS = {
+    EKS_ADAPTIVE_BREAKPOINT_PROFILE_VERSION,
+    "aws-eks-monolith-breakpoint-v2.1",
+}
 CURRENT_FEATURE_REQUEST_MIX_VERSION = "aws-eks-current-feature-coverage-v2"
 CURRENT_FEATURE_OPERATION_IDS = {
     "refresh", "profileRead", "travelList", "travelDetail", "travelUpdate",
@@ -94,7 +98,7 @@ def validate(profile):
     limits = profile["limits"]
     max_rate = limits.get("maxRate")
     max_vus = limits.get("maxVUs")
-    if profile.get("profileVersion") == EKS_ADAPTIVE_BREAKPOINT_PROFILE_VERSION:
+    if profile.get("profileVersion") in EKS_ADAPTIVE_BREAKPOINT_PROFILE_VERSIONS:
         _require(max_rate is None or (isinstance(max_rate, (int, float)) and max_rate > 0), "adaptive EKS limits.maxRate must be null or a positive number")
     else:
         _require(isinstance(max_rate, (int, float)) and max_rate > 0, "limits.maxRate must be a positive number")
@@ -127,7 +131,7 @@ def validate(profile):
         _validate_capacity_stress(profile)
     if profile.get("profileVersion") == EKS_BREAKPOINT_PROFILE_VERSION:
         _validate_eks_breakpoint(profile)
-    if profile.get("profileVersion") == EKS_ADAPTIVE_BREAKPOINT_PROFILE_VERSION:
+    if profile.get("profileVersion") in EKS_ADAPTIVE_BREAKPOINT_PROFILE_VERSIONS:
         _validate_eks_adaptive_breakpoint(profile)
 
     return True
@@ -320,11 +324,13 @@ def _validate_eks_adaptive_breakpoint(profile):
     _require(target.get("platform") == "eks", "adaptive EKS breakpoint target.platform must be eks")
     eks = profile.get("eks")
     _require(isinstance(eks, dict), "eks settings are missing")
-    _require(eks.get("instanceType") == "t3.small", "adaptive EKS breakpoint must use t3.small nodes")
+    expected_instance_type = "t3.medium" if profile.get("profileVersion") == "aws-eks-monolith-breakpoint-v2.1" else "t3.small"
+    _require(eks.get("instanceType") == expected_instance_type, f"adaptive EKS breakpoint must use {expected_instance_type} nodes")
     _require(eks.get("nodeGroup") == {"min": 2, "desired": 2, "max": 4}, "EKS node group must remain 2/2/4")
     _require(eks.get("baseHpa") == {"minReplicas": 2, "maxReplicas": 4}, "base HPA must remain 2-4")
     _require(profile.get("limits", {}).get("maxRate") is None, "adaptive EKS breakpoint limits.maxRate must be null")
-    _require(profile.get("sloVersion") == "v2.0-breakpoint", "adaptive EKS breakpoint must consume v2.0-breakpoint")
+    expected_slo_version = "v2.1-breakpoint" if profile.get("profileVersion") == "aws-eks-monolith-breakpoint-v2.1" else "v2.0-breakpoint"
+    _require(profile.get("sloVersion") == expected_slo_version, f"adaptive EKS breakpoint must consume {expected_slo_version}")
     _require(profile.get("requestMixVersion") == CURRENT_FEATURE_REQUEST_MIX_VERSION, "adaptive EKS breakpoint must use the current-feature request mix")
 
     stress = profile.get("capacityStress")

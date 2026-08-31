@@ -33,7 +33,7 @@ TARGET_GROUP_ARN="${TARGET_GROUP_ARN:-}"
 MAX_RATE="${MAX_RATE:-}"
 OPERATOR_MAX_VUS="${MAX_VUS:?MAX_VUS is required}"
 PROFILE_VERSION="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("profileVersion", ""))' "$AWS_PROFILE_FILE")"
-ADAPTIVE_BREAKPOINT="$(python3 -c 'import json,sys; print("1" if json.load(open(sys.argv[1])).get("profileVersion") == "aws-eks-monolith-breakpoint-v2.0" else "0")' "$AWS_PROFILE_FILE")"
+ADAPTIVE_BREAKPOINT="$(python3 -c 'import json,sys; print("1" if json.load(open(sys.argv[1])).get("profileVersion") in {"aws-eks-monolith-breakpoint-v2.0", "aws-eks-monolith-breakpoint-v2.1"} else "0")' "$AWS_PROFILE_FILE")"
 if [[ "$ADAPTIVE_BREAKPOINT" != "1" && -z "$MAX_RATE" ]]; then
   echo "MAX_RATE is required for historical finite AWS profiles" >&2
   exit 2

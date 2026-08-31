@@ -9,6 +9,7 @@ rules:
   - apiGroups: [""]
     resources:
       - nodes
+      - namespaces
       - pods
       - replicationcontrollers
       - services
@@ -42,6 +43,13 @@ rules:
       - csinodes
       - csidrivers
       - csistoragecapacities
+      - volumeattachments
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["resource.k8s.io"]
+    resources:
+      - deviceclasses
+      - resourceslices
+      - resourceclaims
     verbs: ["get", "list", "watch"]
   - apiGroups: ["coordination.k8s.io"]
     resources:

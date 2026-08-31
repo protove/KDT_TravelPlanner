@@ -6,6 +6,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 PROFILE = ROOT / "load-tests/aws/profiles/eks-monolith-breakpoint-v2.0.json"
+PROFILE_V21 = ROOT / "load-tests/aws/profiles/eks-monolith-breakpoint-v2.1.json"
 FLOW = ROOT / "load-tests/k6/aws/flows/current-feature-operations.js"
 
 EXPECTED_WEIGHTS = {
@@ -46,6 +47,13 @@ class CurrentFeatureMixTest(unittest.TestCase):
         for name in ("baseline", "spike", "soak"):
             self.assertEqual(profile["requestMix"][name], EXPECTED_WEIGHTS)
         self.assertEqual(sum(EXPECTED_WEIGHTS.values()), 100)
+
+    def test_v21_profile_reuses_the_same_current_feature_mix(self):
+        profile = json.loads(PROFILE_V21.read_text(encoding="utf-8"))
+        self.assertEqual(profile["requestMixVersion"], "aws-eks-current-feature-coverage-v2")
+        for name in ("normal", "baseline", "spike", "soak"):
+            self.assertEqual(profile["requestMix"][name], EXPECTED_WEIGHTS)
+        self.assertEqual(profile["eks"]["instanceType"], "t3.medium")
 
     def test_flow_declares_every_profile_operation_and_bounded_metrics(self):
         source = FLOW.read_text(encoding="utf-8")

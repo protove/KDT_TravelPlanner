@@ -309,7 +309,7 @@ def evaluate(args: argparse.Namespace) -> dict:
     slo_contract = read_json(Path(args.slo_contract))
     slo = slo_contract.get("baseline", {}) if slo_contract else {}
     metrics = summary_metrics(summary)
-    adaptive = metadata.get("profileVersion") == "aws-eks-monolith-breakpoint-v2.0" or metadata.get("sloVersion") == "v2.0-breakpoint"
+    adaptive = metadata.get("profileVersion") in {"aws-eks-monolith-breakpoint-v2.0", "aws-eks-monolith-breakpoint-v2.1"} or metadata.get("sloVersion") in {"v2.0-breakpoint", "v2.1-breakpoint"}
     runner_cpu, runner_memory, runner_samples = max_runner_values(run_dir / "runner-stats.jsonl")
     try:
         restart_count = int(status.get("k6ContainerRestartCount", 0) or 0)

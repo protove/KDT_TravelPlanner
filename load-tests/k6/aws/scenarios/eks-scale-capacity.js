@@ -16,7 +16,9 @@ if (!Number.isFinite(RATE) || RATE <= 0) {
 }
 
 const CAMPAIGN_STAGE = __ENV.CAPACITY_STAGE || 'capacity-stress';
-const ADAPTIVE = STRESS.adaptive === true || PROFILE_VERSION === 'aws-eks-monolith-breakpoint-v2.0';
+const ADAPTIVE = STRESS.adaptive === true
+  || PROFILE_VERSION === 'aws-eks-monolith-breakpoint-v2.0'
+  || PROFILE_VERSION === 'aws-eks-monolith-breakpoint-v2.1';
 const REGISTERED_MULTIPLIERS = STRESS.stageMultipliers || [];
 const REGISTERED_DURATIONS = STRESS.stageDurations || [];
 let MULTIPLIERS = REGISTERED_MULTIPLIERS;

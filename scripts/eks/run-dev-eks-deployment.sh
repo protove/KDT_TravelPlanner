@@ -266,7 +266,7 @@ PY
 }
 
 normalize_dev_eks_workload_compatibility() {
-  # The comparison node group is intentionally t3.small 2/2/4. Normalize
+  # The EKS breakpoint node group is intentionally t3.medium 2/2/4. Normalize
   # only the downloaded compatibility copy; the canonical S3 bundle and its
   # revision stay immutable.  Measured requests/limits and the 0/1 rollout
   # are part of the comparison contract, while every affected container
@@ -429,7 +429,7 @@ def ensure_fs_group_policy(path: Path) -> bool:
 
 def ensure_backend_rollout_strategy(path: Path) -> bool:
     text = path.read_text(encoding="utf-8")
-    # The comparison campaign uses t3.small 2/2/4 nodes. The prior
+    # The EKS breakpoint campaign uses t3.medium 2/2/4 nodes. The prior
     # compatibility repair forced 1/0 and would make EKS's
     # availability envelope unfairly different from EC2's 100/150 rollout.
     # Normalize stale downloaded bundles back to the approved 0/1 contract.

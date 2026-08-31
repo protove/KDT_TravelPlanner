@@ -41,13 +41,15 @@ function loadSloContract() {
   const supported = (contract.contractVersion === 'v1.0' && contract.sloVersion === 'v1.0-frozen')
     || (contract.contractVersion === 'v1.1'
       && ['v1.1-candidate', 'v1.1-frozen'].includes(contract.sloVersion))
-    || (contract.contractVersion === 'v2.0' && contract.sloVersion === 'v2.0-breakpoint');
+    || (contract.contractVersion === 'v2.0' && contract.sloVersion === 'v2.0-breakpoint')
+    || (contract.contractVersion === 'v2.1' && contract.sloVersion === 'v2.1-breakpoint');
   if (!supported) {
-    fail('SLO contract must be v1.0-frozen, v1.1 candidate/frozen or v2.0-breakpoint');
+    fail('SLO contract must be v1.0-frozen, v1.1 candidate/frozen, v2.0-breakpoint or v2.1-breakpoint');
   }
-  if (contract.contractVersion === 'v1.1' || contract.contractVersion === 'v2.0') {
-    const expectedInstanceFamily = contract.contractVersion === 'v2.0' || contract.sloVersion === 'v1.1-candidate'
-      ? 't3.small' : 't3.medium';
+  if (contract.contractVersion === 'v1.1' || contract.contractVersion === 'v2.0' || contract.contractVersion === 'v2.1') {
+    const expectedInstanceFamily = contract.contractVersion === 'v2.1'
+      ? 't3.medium' : (contract.contractVersion === 'v2.0' || contract.sloVersion === 'v1.1-candidate'
+        ? 't3.small' : 't3.medium');
     if (!contract.comparison || contract.comparison.sameInstanceFamily !== expectedInstanceFamily) {
       fail(`${contract.sloVersion} comparison contract must bind the ${expectedInstanceFamily} common host envelope`);
     }
