@@ -13,7 +13,7 @@ export function makeAwsSummaryHandler(scenarioName) {
     const metricValues = (name, fallback = {}) => metrics[name]?.values || fallback;
     const summary = {
       scenario: scenarioName,
-      platform: 'ec2',
+      platform: __ENV.TARGET_PLATFORM || 'ec2',
       runId: __ENV.RUN_ID || null,
       startedAtUtc: __ENV.RUN_STARTED_AT || null,
       region: REGION,

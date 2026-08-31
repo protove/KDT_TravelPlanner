@@ -291,7 +291,7 @@ resource "aws_autoscaling_group" "backend" {
   ]
   metrics_granularity       = "1Minute"
   health_check_type         = "ELB"
-  health_check_grace_period = 300
+  health_check_grace_period = var.health_check_grace_period_seconds
   default_instance_warmup   = var.instance_warmup_seconds
   vpc_zone_identifier       = var.app_subnet_ids
   target_group_arns         = [aws_lb_target_group.backend.arn]

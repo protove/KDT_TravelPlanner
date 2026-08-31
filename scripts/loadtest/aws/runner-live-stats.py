@@ -23,7 +23,12 @@ WINDOW_METRICS = (
     "core_unexpected_errors_total",
     "core_contract_failures_total",
 )
-DEFAULT_TAIL_BYTES = 8 * 1024 * 1024
+# A recovery run emits several JSON points per iteration (HTTP metrics plus
+# the Core counters). At the frozen 16-iteration/s rate an 8 MiB tail can cover
+# less than the coordinator's 120-second window, undercounting a healthy
+# pre-T1 workload and blocking T1. Keep the default tail comfortably wider
+# than the fixed window while retaining the explicit --tail-bytes escape hatch.
+DEFAULT_TAIL_BYTES = 64 * 1024 * 1024
 
 
 def parse_timestamp(value: str) -> float:

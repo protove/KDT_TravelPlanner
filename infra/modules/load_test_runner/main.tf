@@ -90,9 +90,12 @@ data "aws_iam_policy_document" "load_runner_runtime" {
     sid = "LoadTestTargetDiscovery"
     actions = [
       "autoscaling:DescribeAutoScalingInstances",
+      "autoscaling:DescribeAutoScalingGroups",
       "autoscaling:DescribeScalingActivities",
       "ec2:DescribeInstances",
+      "ec2:DescribeTags",
       "elasticloadbalancing:DescribeLoadBalancers",
+      "elasticloadbalancing:DescribeTags",
       "elasticloadbalancing:DescribeTargetGroups",
       "elasticloadbalancing:DescribeTargetHealth",
       "ssm:DescribeInstanceInformation",

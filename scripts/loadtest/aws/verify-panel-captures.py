@@ -43,6 +43,18 @@ def read_json(path: Path) -> dict[str, Any]:
     return payload
 
 
+def read_export_summary(evidence_root: Path) -> dict[str, Any]:
+    """Read either a Recovery export summary or the shared Grafana summary."""
+    candidates = (
+        evidence_root / "recovery-export-summary.json",
+        evidence_root / "grafana" / "export-summary.json",
+    )
+    for path in candidates:
+        if path.is_file():
+            return read_json(path)
+    raise CaptureVerificationError("Grafana export summary is missing")
+
+
 def png_dimensions(path: Path) -> tuple[int, int]:
     try:
         header = path.read_bytes()[:33]
@@ -64,7 +76,7 @@ def verify_captures(
     min_bytes: int = DEFAULT_MIN_BYTES,
 ) -> dict[str, Any]:
     panels_dir = evidence_root / "grafana" / "panels"
-    summary = read_json(evidence_root / "recovery-export-summary.json")
+    summary = read_export_summary(evidence_root)
     run_id = summary.get("runId")
     contracts = sorted(panels_dir.glob("panel-*.capture.json"))
     if not contracts:
@@ -143,6 +155,44 @@ def verify_captures(
                 "contract": contract_path.name,
             }
         )
+    dashboard_contract_path = evidence_root / "grafana" / "dashboard.capture.json"
+    dashboard_status: dict[str, Any] = {
+        "status": "not-exported",
+        "contract": None,
+        "pngPath": None,
+    }
+    if dashboard_contract_path.is_file():
+        dashboard_contract = read_json(dashboard_contract_path)
+        for field, value in expected.items():
+            if dashboard_contract.get(field) != value:
+                raise CaptureVerificationError(
+                    f"dashboard.capture.json: {field} does not match the export summary"
+                )
+        dashboard_relative = dashboard_contract.get("expectedPngPath")
+        if dashboard_relative != "grafana/dashboard.png":
+            raise CaptureVerificationError("dashboard.capture.json: expectedPngPath must be grafana/dashboard.png")
+        dashboard_png = evidence_root / dashboard_relative
+        if dashboard_png.is_symlink() or not dashboard_png.is_file():
+            raise CaptureVerificationError("missing full-dashboard capture PNG: grafana/dashboard.png")
+        dashboard_size = dashboard_png.stat().st_size
+        if dashboard_size < min_bytes:
+            raise CaptureVerificationError(
+                f"full-dashboard capture PNG is implausibly small ({dashboard_size} bytes)"
+            )
+        dashboard_width, dashboard_height = png_dimensions(dashboard_png)
+        if dashboard_width < min_width or dashboard_height < min_height:
+            raise CaptureVerificationError(
+                f"full-dashboard capture PNG is below the minimum size {min_width}x{min_height}"
+            )
+        dashboard_status = {
+            "status": "captured",
+            "contract": dashboard_contract_path.name,
+            "pngPath": dashboard_relative,
+            "bytes": dashboard_size,
+            "width": dashboard_width,
+            "height": dashboard_height,
+            "sha256": hashlib.sha256(dashboard_png.read_bytes()).hexdigest(),
+        }
     status = {
         "status": "captured",
         "runId": run_id,
@@ -151,6 +201,7 @@ def verify_captures(
         "dashboardUid": expected["dashboardUid"],
         "dashboardVersion": expected["dashboardVersion"],
         "panelCount": len(panels),
+        "dashboard": dashboard_status,
         "verifiedAtUtc": datetime.now(timezone.utc)
         .isoformat(timespec="seconds")
         .replace("+00:00", "Z"),
@@ -179,7 +230,10 @@ def main(argv: list[str] | None = None) -> int:
     except CaptureVerificationError as error:
         print(f"[capture-verify] FAILED: {error}", file=sys.stderr)
         return 1
-    print(f"[capture-verify] captured panels={status['panelCount']} run={status['runId']}")
+    print(
+        f"[capture-verify] captured panels={status['panelCount']} "
+        f"dashboard={status['dashboard']['status']} run={status['runId']}"
+    )
     return 0
 
 

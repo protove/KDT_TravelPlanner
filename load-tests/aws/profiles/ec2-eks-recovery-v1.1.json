@@ -1,0 +1,53 @@
+{
+  "profileVersion": "aws-ec2-eks-recovery-v1.1",
+  "scenarioId": "AWS-RECOVERY-COMPARISON",
+  "platform": "comparison",
+  "environment": "comparison",
+  "region": "ap-northeast-2",
+  "sloVersion": "v1.1-candidate",
+  "seedVersion": "s2",
+  "requestMixVersion": "aws-ec2-eks-comparison-v1.1",
+  "target": {
+    "baseUrl": "https://REPLACE_WITH_APPROVED_ALB_HOSTNAME",
+    "expectedTags": { "Environment": "dev" },
+    "note": "The operator supplies the exact EC2 or EKS target at action time."
+  },
+  "backend": {
+    "expectedTags": { "Environment": "dev", "Service": "travel-planner-backend" }
+  },
+  "runner": {
+    "expectedTags": { "Environment": "dev", "Service": "travel-planner-load-runner" },
+    "expectedInstanceFamily": "t3"
+  },
+  "googleApi": { "enabled": false },
+  "k6Image": "REPLACE_WITH_DIGEST_PINNED_K6_IMAGE",
+  "limits": { "maxRate": 30, "maxVUs": 80 },
+  "recovery": {
+    "executor": "constant-arrival-rate",
+    "rate": null,
+    "timeUnit": "1s",
+    "warmup": "3m",
+    "duration": "20m",
+    "preAllocatedVUs": 20,
+    "maxVUs": 60,
+    "bucketSeconds": 10,
+    "stableWindowSeconds": 120,
+    "budgetSeconds": 600,
+    "p95Ms": 500,
+    "capacityFloorRatio": 0.9,
+    "unexpectedErrorRate": 0.01,
+    "contractFailureRate": 0.0
+  },
+  "requestMix": {
+    "steady": { "refresh": 12, "travelList": 22, "travelDetail": 20, "mapPoints": 18, "timelineCreate": 18, "orderChange": 10 }
+  },
+  "observability": {
+    "required": ["core_operations_total", "core_completed_operations_total", "core_successful_operations_total", "core_unexpected_errors_total", "core_contract_failures_total", "core_operation_duration", "runner_stats", "aws_target_health", "platform_readiness"],
+    "statusPath": "monitoring/required-metrics.json"
+  },
+  "operatorRecovery": {
+    "mode": "manual",
+    "requiredActions": ["cancel-refresh", "restore-healthy-image", "record-operator-event"],
+    "automationMay": ["observe", "measure", "record-evidence"]
+  }
+}

@@ -4,7 +4,7 @@
 # TEAM_MEMBER_B01_ACTION_REQUEST.md §4.2 "B-01 실행 순서":
 #
 #   target -> seed -> smoke -> ramp -> [operator picks a candidate rate] ->
-#   baseline x3 (same rate) -> D-005 arrival-rate record -> spike ->
+#   baseline x3 (same rate) -> D-005 arrival-rate record -> spike/soak/scale-step ->
 #   evidence (Grafana Annotation + Query; CloudWatch is collected in
 #   target_stage's aws/ dir; PNG excluded for now — see D-003/Plan04) ->
 #   cleanup -> cleanup-result record -> provisional evidence review ->
@@ -39,6 +39,8 @@ REPOSITORY_ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
 MODE="all"
 PROFILE="$REPOSITORY_ROOT/load-tests/aws/profiles/ec2-b01.json"
 SLO_CONTRACT="$REPOSITORY_ROOT/load-tests/aws/contracts/slo-v1.0.json"
+SLO_CONTRACT_EXPLICIT=0
+TARGET_PLATFORM="ec2"
 REGION=""
 ENVIRONMENT=""
 EXPECTED_ACCOUNT_ID=""
@@ -70,6 +72,11 @@ GRAFANA_ADMIN_USER="${GRAFANA_ADMIN_USER:-}"
 GRAFANA_ADMIN_PASSWORD="${GRAFANA_ADMIN_PASSWORD:-}"
 PROMETHEUS_URL=""
 SLO_FREEZE_APPROVED_BY=""
+EKS_CLUSTER_NAME="kdt-travelplanner-dev-eks"
+EKS_NODE_GROUP_NAME="kdt-travelplanner-dev-eks-nodes"
+EKS_BASTION_ID=""
+BACKEND_NAMESPACE="travel-planner"
+BACKEND_DEPLOYMENT="backend"
 PROFILE_SHA256=""
 SOURCE_COMMIT_SHA=""
 START_RATE="${START_RATE:-}"
@@ -83,13 +90,21 @@ SPIKE_PREALLOCATED_VUS="${SPIKE_PREALLOCATED_VUS:-}"
 SPIKE_MAX_VUS="${SPIKE_MAX_VUS:-}"
 SPIKE_PEAK_MULTIPLIER="${SPIKE_PEAK_MULTIPLIER:-}"
 SPIKE_HOLD="${SPIKE_HOLD:-}"
+SOAK_PREALLOCATED_VUS="${SOAK_PREALLOCATED_VUS:-}"
+SOAK_MAX_VUS="${SOAK_MAX_VUS:-}"
+SCALE_STEP_PREALLOCATED_VUS="${SCALE_STEP_PREALLOCATED_VUS:-}"
+SCALE_STEP_MAX_VUS="${SCALE_STEP_MAX_VUS:-}"
+CAPACITY_STRESS_PREALLOCATED_VUS="${CAPACITY_STRESS_PREALLOCATED_VUS:-100}"
+CAPACITY_STRESS_MAX_VUS="${CAPACITY_STRESS_MAX_VUS:-320}"
 
 usage() {
   cat <<'USAGE'
-usage: orchestrate-aws-b01.sh [target|seed|smoke|ramp|baseline|d005-record|spike|evidence|cleanup|provisional-review|freeze|export|all] [options]
+usage: orchestrate-aws-b01.sh [target|seed|smoke|ramp|baseline|d005-record|spike|soak|scale-step|capacity-stress|evidence|cleanup|provisional-review|freeze|export|all] [options]
 
 Required:
   --profile PATH                 AWS load-test profile JSON (default: load-tests/aws/profiles/ec2-b01.json)
+  --slo-contract PATH            versioned SLO contract (comparison default: v1.1 candidate)
+  --target-platform PLATFORM     Explicit target adapter: ec2 or eks (default: ec2)
   --region REGION
   --environment ENVIRONMENT
   --expected-account-id ID       12-digit AWS account ID this run is approved to target
@@ -104,7 +119,7 @@ Required:
 
 Also required for most modes:
   --s3-bucket NAME                (seed/export/all) evidence S3 bucket
-  --k6-image DIGEST                (smoke/ramp/baseline/spike/all) digest-pinned k6 image
+  --k6-image DIGEST                (smoke/ramp/baseline/spike/soak/scale-step/capacity-stress/all) digest-pinned k6 image
   --database-host/--database-name/--database-secret-arn   (seed/cleanup/all)
                                     --database-secret-arn must be a dedicated test-only Secret,
                                     JSON {"username":..,"password":..} (never the RDS master secret)
@@ -124,8 +139,15 @@ Optional:
   --grafana-url / --grafana-user / --grafana-password   (evidence/all) skip annotation publish if omitted
   --prometheus-url URL            (evidence/all) skip Query JSON collection if omitted
 
+EKS target options (required when --target-platform eks):
+  --eks-cluster-name NAME        Expected EKS cluster (default: kdt-travelplanner-dev-eks)
+  --eks-node-group-name NAME     Expected managed node group (default: kdt-travelplanner-dev-eks-nodes)
+  --eks-bastion-id INSTANCE_ID   SSM-only bastion used for kubectl evidence
+  --backend-namespace NAME       Backend namespace (default: travel-planner)
+  --backend-deployment NAME      Backend Deployment (default: backend)
+
 Modes:
-  target|seed|smoke|ramp|baseline|spike   individual phases with target validation
+  target|seed|smoke|ramp|baseline|spike|soak|scale-step|capacity-stress   individual phases with target validation
   evidence            Grafana Annotation + Query collection (post-Spike; PNG excluded, see D-003/Plan04)
   cleanup              synthetic data cleanup; writes cleanup-result.json into the evidence bundle
   provisional-review    writes provisional-review.json (an inventory, not a pass/fail verdict) for the
@@ -140,8 +162,10 @@ USAGE
 
 while [[ "$#" -gt 0 ]]; do
   case "$1" in
-    target|seed|smoke|ramp|baseline|d005-record|spike|evidence|cleanup|provisional-review|freeze|export|all) MODE="$1"; shift ;;
+    target|seed|smoke|ramp|baseline|d005-record|spike|soak|scale-step|capacity-stress|evidence|cleanup|provisional-review|freeze|export|all) MODE="$1"; shift ;;
     --profile) PROFILE="$2"; shift 2 ;;
+    --slo-contract) SLO_CONTRACT="$2"; SLO_CONTRACT_EXPLICIT=1; shift 2 ;;
+    --target-platform) TARGET_PLATFORM="$2"; shift 2 ;;
     --region) REGION="$2"; shift 2 ;;
     --environment) ENVIRONMENT="$2"; shift 2 ;;
     --expected-account-id) EXPECTED_ACCOUNT_ID="$2"; shift 2 ;;
@@ -173,10 +197,32 @@ while [[ "$#" -gt 0 ]]; do
     --grafana-password) GRAFANA_ADMIN_PASSWORD="$2"; shift 2 ;;
     --prometheus-url) PROMETHEUS_URL="$2"; shift 2 ;;
     --slo-freeze-approved-by) SLO_FREEZE_APPROVED_BY="$2"; shift 2 ;;
+    --eks-cluster-name) EKS_CLUSTER_NAME="$2"; shift 2 ;;
+    --eks-node-group-name) EKS_NODE_GROUP_NAME="$2"; shift 2 ;;
+    --eks-bastion-id) EKS_BASTION_ID="$2"; shift 2 ;;
+    --backend-namespace) BACKEND_NAMESPACE="$2"; shift 2 ;;
+    --backend-deployment) BACKEND_DEPLOYMENT="$2"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) echo "unknown option: $1" >&2; usage >&2; exit 2 ;;
   esac
 done
+
+case "$TARGET_PLATFORM" in
+  ec2|eks) ;;
+  *) echo "--target-platform must be ec2 or eks" >&2; exit 2 ;;
+esac
+
+COMPARISON_PROFILE=0
+if [[ "$PROFILE" == *ec2-eks-comparison-v1.1.json* || "$SLO_CONTRACT" == *slo-v1.1-* ]]; then
+  COMPARISON_PROFILE=1
+fi
+if [[ "$COMPARISON_PROFILE" == "1" && "$SLO_CONTRACT_EXPLICIT" == "0" ]]; then
+  SLO_CONTRACT="$REPOSITORY_ROOT/load-tests/aws/contracts/slo-v1.1-candidate.json"
+fi
+if [[ "$COMPARISON_PROFILE" == "1" && "$MODE" == "all" ]]; then
+  echo "comparison profile forbids 'all': evidence capture, human recovery, rollback, freeze/export and cleanup remain operator-directed phases" >&2
+  exit 2
+fi
 
 for required in REGION ENVIRONMENT EXPECTED_ACCOUNT_ID ALB_ARN BASE_URL RUNNER_ID MAX_RATE MAX_VUS; do
   if [[ -z "${!required}" ]]; then
@@ -196,8 +242,30 @@ if [[ ! "$RUNNER_INSTANCE_TYPE" =~ ^t3\.[a-z0-9]+$ ]]; then
   echo "--runner-instance-type must be a t3 family instance type" >&2
   exit 2
 fi
+if [[ "$TARGET_PLATFORM" == "eks" ]]; then
+  for required in EKS_CLUSTER_NAME EKS_NODE_GROUP_NAME EKS_BASTION_ID BACKEND_NAMESPACE BACKEND_DEPLOYMENT; do
+    if [[ -z "${!required}" ]]; then
+      echo "--${required,,} is required for --target-platform eks" >&2
+      exit 2
+    fi
+  done
+  for identifier in "$EKS_CLUSTER_NAME" "$EKS_NODE_GROUP_NAME" "$BACKEND_NAMESPACE" "$BACKEND_DEPLOYMENT"; do
+    if [[ ! "$identifier" =~ ^[A-Za-z0-9._-]+$ ]]; then
+      echo "EKS names must contain only letters, digits, dot, underscore or hyphen" >&2
+      exit 2
+    fi
+  done
+  if [[ ! "$EKS_BASTION_ID" =~ ^i-[0-9a-f]{8,32}$ ]]; then
+    echo "--eks-bastion-id must be an EC2 instance ID" >&2
+    exit 2
+  fi
+fi
 if [[ ! -f "$PROFILE" ]]; then
   echo "--profile file does not exist: $PROFILE" >&2
+  exit 2
+fi
+if [[ ! -f "$SLO_CONTRACT" ]]; then
+  echo "--slo-contract file does not exist: $SLO_CONTRACT" >&2
   exit 2
 fi
 python3 "$REPOSITORY_ROOT/scripts/loadtest/aws/validate-aws-profile.py" "$PROFILE"
@@ -210,6 +278,7 @@ EVIDENCE_ROOT="$EVIDENCE_BASE/$RUN_ID"
 DATA_FILE="$EVIDENCE_ROOT/data.json"
 FIXTURES_DIR="$EVIDENCE_ROOT/fixtures"
 PROFILE_SHA256="$(python3 -c "import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],'rb').read()).hexdigest())" "$PROFILE")"
+SLO_CONTRACT_SHA256="$(python3 -c "import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],'rb').read()).hexdigest())" "$SLO_CONTRACT")"
 SOURCE_COMMIT_SHA="$(git -C "$REPOSITORY_ROOT" rev-parse HEAD)"
 mkdir -p "$EVIDENCE_ROOT"
 
@@ -234,14 +303,16 @@ STAGE_DIR="$EVIDENCE_ROOT/stages"
 stage_confirmed_rate() {
   local stage="$1"
   case "$stage" in
-    baseline-*|d005|spike) printf '%s' "${CONFIRMED_RATE:-}" ;;
+    baseline-*|d005|spike|soak|scale-step|capacity-stress) printf '%s' "${CONFIRMED_RATE:-}" ;;
     *) printf '' ;;
   esac
 }
 
 stage_input_digest() {
   local stage="$1"
-  python3 - "$stage" "$RUN_ID" "$PROFILE_SHA256" "$SOURCE_COMMIT_SHA" \
+  python3 - "$stage" "$RUN_ID" "$PROFILE_SHA256" "${SLO_CONTRACT_SHA256:-}" "$SOURCE_COMMIT_SHA" \
+    "${TARGET_PLATFORM:-ec2}" "${EKS_CLUSTER_NAME:-}" "${EKS_NODE_GROUP_NAME:-}" "${EKS_BASTION_ID:-}" \
+    "${BACKEND_NAMESPACE:-}" "${BACKEND_DEPLOYMENT:-}" \
     "$REGION" "$ENVIRONMENT" "$EXPECTED_ACCOUNT_ID" "$ALB_ARN" "$BASE_URL" \
     "$RUNNER_ID" "$RUNNER_INSTANCE_TYPE" "$MAX_RATE" "$MAX_VUS" "$K6_IMAGE" "$USERS" \
     "$DATABASE_HOST" "$DATABASE_PORT" "$DATABASE_NAME" "$DATABASE_SECRET_ARN" \
@@ -251,13 +322,17 @@ stage_input_digest() {
     "$SLO_FREEZE_APPROVED_BY" "$START_RATE" "$DURATION" "$WARMUP" \
     "$RAMP_PREALLOCATED_VUS" "$RAMP_MAX_VUS" "$BASELINE_PREALLOCATED_VUS" "$BASELINE_MAX_VUS" \
     "$SPIKE_PREALLOCATED_VUS" "$SPIKE_MAX_VUS" "$SPIKE_PEAK_MULTIPLIER" "$SPIKE_HOLD" \
+    "${SOAK_PREALLOCATED_VUS:-}" "${SOAK_MAX_VUS:-}" "${SCALE_STEP_PREALLOCATED_VUS:-}" "${SCALE_STEP_MAX_VUS:-}" \
+    "${CAPACITY_STRESS_PREALLOCATED_VUS:-}" "${CAPACITY_STRESS_MAX_VUS:-}" \
     "$(stage_confirmed_rate "$stage")" <<'PY'
 import hashlib
 import json
 import sys
 
 (
-    stage, run_id, profile_sha, source_commit_sha,
+    stage, run_id, profile_sha, slo_contract_sha, source_commit_sha,
+    target_platform, eks_cluster_name, eks_node_group_name, eks_bastion_id,
+    backend_namespace, backend_deployment,
     region, environment, expected_account_id, alb_arn, base_url,
     runner_id, runner_instance_type, max_rate, max_vus, k6_image, users,
     database_host, database_port, database_name, database_secret_arn,
@@ -267,10 +342,13 @@ import sys
     slo_freeze_approved_by, start_rate, duration, warmup,
     ramp_preallocated_vus, ramp_max_vus, baseline_preallocated_vus, baseline_max_vus,
     spike_preallocated_vus, spike_max_vus, spike_peak_multiplier, spike_hold,
+    soak_preallocated_vus, soak_max_vus, scale_step_preallocated_vus, scale_step_max_vus,
+    capacity_stress_preallocated_vus, capacity_stress_max_vus,
     confirmed_rate,
 ) = sys.argv[1:]
 
 common = {
+    "targetPlatform": target_platform,
     "region": region,
     "environment": environment,
     "expectedAccountId": expected_account_id,
@@ -281,10 +359,19 @@ common = {
     "maxRate": max_rate,
     "maxVus": max_vus,
 }
+if target_platform == "eks":
+    common["eks"] = {
+        "clusterName": eks_cluster_name,
+        "nodeGroupName": eks_node_group_name,
+        "bastionId": eks_bastion_id,
+        "backendNamespace": backend_namespace,
+        "backendDeployment": backend_deployment,
+    }
 payload = {
     "stage": stage,
     "runId": run_id,
     "profileSha256": profile_sha,
+    "sloContractSha256": slo_contract_sha,
     "sourceCommitSha": source_commit_sha,
     **common,
 }
@@ -307,7 +394,7 @@ elif stage == "seed":
         "redisIamUser": redis_iam_user,
         "redisReplicationGroupId": redis_replication_group_id,
     })
-elif stage in {"smoke", "ramp", "spike"} or stage.startswith("baseline-"):
+elif stage in {"smoke", "ramp", "spike", "soak", "scale-step", "capacity-stress"} or stage.startswith("baseline-"):
     payload["k6Image"] = k6_image
     payload["credentialLifecycle"] = {
         "users": users,
@@ -340,7 +427,26 @@ elif stage in {"smoke", "ramp", "spike"} or stage.startswith("baseline-"):
             "peakMultiplier": spike_peak_multiplier,
             "hold": spike_hold,
         }
-    if stage == "spike" or stage.startswith("baseline-"):
+    elif stage == "soak":
+        payload["effectiveK6Overrides"] = {
+            "rate": confirmed_rate,
+            "preAllocatedVUs": soak_preallocated_vus,
+            "maxVUs": soak_max_vus,
+        }
+    elif stage == "scale-step":
+        payload["effectiveK6Overrides"] = {
+            "rate": confirmed_rate,
+            "preAllocatedVUs": scale_step_preallocated_vus,
+            "maxVUs": scale_step_max_vus,
+        }
+    elif stage == "capacity-stress":
+        payload["effectiveK6Overrides"] = {
+            "rate": confirmed_rate,
+            "preAllocatedVUs": capacity_stress_preallocated_vus,
+            "maxVUs": capacity_stress_max_vus,
+            "stageMultipliers": [1, 2, 4, 8],
+        }
+    if stage in {"spike", "soak", "scale-step", "capacity-stress"} or stage.startswith("baseline-"):
         payload["confirmedRate"] = confirmed_rate
 elif stage == "d005":
     payload["confirmedRate"] = confirmed_rate
@@ -375,7 +481,8 @@ PY
 }
 
 stage_is_complete() {
-  local stage="$1" marker="$STAGE_DIR/$stage.json"
+  local stage="$1"
+  local marker="$STAGE_DIR/$stage.json"
   [[ "$DRY_RUN" == "1" ]] && return 1
   [[ -f "$marker" ]] || return 1
   local stage_rate stage_digest
@@ -420,7 +527,7 @@ payload = {
     "inputDigest": input_digest,
     "completedAtUtc": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
 }
-if stage == "seed" or stage in {"smoke", "ramp", "spike"} or stage.startswith("baseline-"):
+if stage == "seed" or stage in {"smoke", "ramp", "spike", "soak", "scale-step", "capacity-stress"} or stage.startswith("baseline-"):
     payload.update({
         "fixtureId": stage,
         "fixtureResultPath": f"fixtures/{stage}.json",
@@ -502,7 +609,200 @@ if len(items) != 1 or items[0].get("PingStatus") != "Online":
 PY
 }
 
+eks_target_stage() {
+  echo "[b01] target: verifying account/ALB/Runner and EKS adapter contract"
+  local observed_account
+  observed_account="$(verify_account)"
+  local account_last4 account_sha256
+  account_last4="${observed_account: -4}"
+  account_sha256="$(python3 -c "import hashlib,sys; print(hashlib.sha256(sys.argv[1].encode()).hexdigest())" "$observed_account")"
+  local adapter="$REPOSITORY_ROOT/scripts/loadtest/aws/eks_target_adapter.py"
+  local validation_dir
+  validation_dir="$(mktemp -d "${TMPDIR:-/tmp}/scrum53-eks-target.XXXXXX")"
+
+  mkdir -p "$EVIDENCE_ROOT/aws"
+  local alb_json target_group_arn target_health_json dns_name
+  local runner_json runner_ssm_json runner_validation_json nodegroup_json asg_name asg_json
+  alb_json="$(run_aws_json elbv2 describe-load-balancers --load-balancer-arns "$ALB_ARN" --region "$REGION")"
+  echo "$alb_json" > "$EVIDENCE_ROOT/aws/resource-config.json"
+  if [[ "$DRY_RUN" == "1" ]]; then
+    dns_name="dry-run.invalid"
+    target_group_arn=""
+    runner_validation_json='{"status":"dry-run"}'
+    nodegroup_json='{"status":"dry-run"}'
+    target_health_json='{"status":"dry-run"}'
+    asg_name=""
+    asg_json='{"status":"dry-run"}'
+  else
+    dns_name="$(python3 -c "import json,sys; print(json.load(sys.stdin)['LoadBalancers'][0]['DNSName'])" <<<"$alb_json")"
+    target_group_arn="$(run_aws_json elbv2 describe-target-groups --load-balancer-arn "$ALB_ARN" --region "$REGION" \
+      | python3 -c "import json,sys; groups=json.load(sys.stdin)['TargetGroups']; print(groups[0]['TargetGroupArn'] if groups else '')")"
+    if [[ -z "$target_group_arn" ]]; then
+      echo "EKS ALB has no target group" >&2
+      exit 1
+    fi
+    runner_json="$(run_aws_json ec2 describe-instances --instance-ids "$RUNNER_ID" --region "$REGION")"
+    runner_validation_json="$(validate_runner_instance "$runner_json" "$RUNNER_ID" "$ENVIRONMENT" "$RUNNER_INSTANCE_TYPE")"
+    runner_ssm_json="$(run_aws_json ssm describe-instance-information --filters "Key=InstanceIds,Values=$RUNNER_ID" --region "$REGION")"
+    validate_runner_ssm "$runner_ssm_json"
+    nodegroup_json="$(run_aws_json eks describe-nodegroup --cluster-name "$EKS_CLUSTER_NAME" --nodegroup-name "$EKS_NODE_GROUP_NAME" --region "$REGION")"
+    target_health_json="$(run_aws_json elbv2 describe-target-health --target-group-arn "$target_group_arn" --region "$REGION")"
+    printf '%s\n' "$nodegroup_json" > "$validation_dir/nodegroup.json"
+    printf '%s\n' "$target_health_json" > "$validation_dir/target-health.json"
+    python3 "$adapter" validate \
+      --cluster-name "$EKS_CLUSTER_NAME" --node-group-name "$EKS_NODE_GROUP_NAME" \
+      --target-group-arn "$target_group_arn" \
+      --node-group-json "$validation_dir/nodegroup.json" \
+      --target-health-json "$validation_dir/target-health.json" \
+      > "$validation_dir/validated.json"
+    python3 - "$validation_dir/validated.json" "$validation_dir/node-summary.json" "$validation_dir/alb-summary.json" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+validated, node_output, alb_output = map(Path, sys.argv[1:])
+payload = json.loads(validated.read_text(encoding="utf-8"))
+node_output.write_text(json.dumps(payload["nodeGroup"], indent=2) + "\n", encoding="utf-8")
+alb_output.write_text(json.dumps(payload["alb"], indent=2) + "\n", encoding="utf-8")
+PY
+    asg_name="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["autoScalingGroupName"])' "$validation_dir/node-summary.json")"
+    asg_json="$(run_aws_json autoscaling describe-scaling-activities --auto-scaling-group-name "$asg_name" --region "$REGION" --max-items 20)"
+    cp "$validation_dir/node-summary.json" "$EVIDENCE_ROOT/aws/eks-node-group-summary.json"
+    cp "$validation_dir/alb-summary.json" "$EVIDENCE_ROOT/aws/eks-alb-target-health.json"
+    cp "$validation_dir/alb-summary.json" "$EVIDENCE_ROOT/aws/target-health.json"
+  fi
+  echo "$runner_validation_json" > "$EVIDENCE_ROOT/aws/runner-validation.json"
+  echo "{\"approvedBaseUrl\":\"$BASE_URL\",\"albDnsName\":\"$dns_name\"}" > "$EVIDENCE_ROOT/aws/base-url-validation.json"
+  if [[ "$DRY_RUN" != "1" ]]; then
+    curl --silent --show-error --max-time 10 --output /dev/null "$BASE_URL/"
+  fi
+  echo "$asg_json" > "$EVIDENCE_ROOT/aws/asg-activities.json"
+  if [[ "$DRY_RUN" == "1" ]]; then
+    cat > "$EVIDENCE_ROOT/aws/eks-node-group-summary.json" <<EOF
+{"status":"dry-run","clusterName":"$EKS_CLUSTER_NAME","nodeGroupName":"$EKS_NODE_GROUP_NAME","scalingConfig":{"min":2,"desired":2,"max":4}}
+EOF
+    cat > "$EVIDENCE_ROOT/aws/eks-alb-target-health.json" <<EOF
+{"status":"dry-run","targetType":"ip","healthyTargetCount":null}
+EOF
+    cp "$EVIDENCE_ROOT/aws/eks-alb-target-health.json" "$EVIDENCE_ROOT/aws/target-health.json"
+  fi
+
+  python3 "$adapter" commands --cluster-name "$EKS_CLUSTER_NAME" --region "$REGION" \
+    --namespace "$BACKEND_NAMESPACE" --deployment "$BACKEND_DEPLOYMENT" \
+    > "$EVIDENCE_ROOT/aws/eks-kubectl-commands.json"
+  if [[ "$DRY_RUN" == "1" ]]; then
+    cat > "$EVIDENCE_ROOT/aws/eks-kubectl-invocation.json" <<'EOF'
+{"status":"dry-run","rawOutputStored":false}
+EOF
+    cat > "$EVIDENCE_ROOT/aws/eks-evidence.json" <<EOF
+{"platform":"eks","status":"dry-run","targetPlatform":"eks","nodeGroupName":"$EKS_NODE_GROUP_NAME","hpa":{"desiredReplicas":null,"currentReplicas":null},"backendPods":{"count":null,"placement":[]},"nodeCount":null,"nodeGroupScalingActivities":[],"alb":{"targetType":"ip","healthyTargetCount":null},"sanitization":{"rawKubectlOutputStored":false}}
+EOF
+  else
+    local ssm_parameters command_json command_id invocation_json invocation_status
+    ssm_parameters="$(cat "$EVIDENCE_ROOT/aws/eks-kubectl-commands.json")"
+    command_json="$(run_aws_json ssm send-command --instance-ids "$EKS_BASTION_ID" \
+      --document-name AWS-RunShellScript --comment "SCRUM-53 EKS evidence snapshot" \
+      --parameters "$ssm_parameters" --region "$REGION")"
+    command_id="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["Command"]["CommandId"])' <<<"$command_json")"
+    invocation_json=''
+    invocation_status=''
+    for _ in $(seq 1 30); do
+      invocation_json="$(run_aws_json ssm get-command-invocation --command-id "$command_id" --instance-id "$EKS_BASTION_ID" --region "$REGION")"
+      invocation_status="$(python3 -c 'import json,sys; print(json.load(sys.stdin).get("Status", ""))' <<<"$invocation_json")"
+      case "$invocation_status" in
+        Success) break ;;
+        Failed|Cancelled|TimedOut) echo "EKS bastion kubectl snapshot failed: $invocation_status" >&2; exit 1 ;;
+      esac
+      sleep 2
+    done
+    if [[ "$invocation_status" != "Success" ]]; then
+      echo "Timed out waiting for EKS bastion kubectl snapshot" >&2
+      exit 1
+    fi
+    printf '%s\n' "$invocation_json" > "$validation_dir/invocation.json"
+    python3 "$adapter" sanitize-invocation --cluster-name "$EKS_CLUSTER_NAME" \
+      --invocation-json "$validation_dir/invocation.json" > "$EVIDENCE_ROOT/aws/eks-kubectl-invocation.json"
+    python3 "$adapter" build-evidence --cluster-name "$EKS_CLUSTER_NAME" \
+      --invocation-json "$validation_dir/invocation.json" \
+      --node-group-summary-json "$validation_dir/node-summary.json" \
+      --alb-summary-json "$validation_dir/alb-summary.json" \
+      --asg-activities-json "$EVIDENCE_ROOT/aws/asg-activities.json" \
+      > "$EVIDENCE_ROOT/aws/eks-evidence.json"
+  fi
+
+  python3 - "$EVIDENCE_ROOT/aws/resource-dimensions.json" "$ALB_ARN" "$target_group_arn" "$asg_name" "$DB_INSTANCE_IDENTIFIER" "$CACHE_CLUSTER_ID" "$EKS_CLUSTER_NAME" "$EKS_NODE_GROUP_NAME" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+output, alb_arn, target_group_arn, asg_name, db_identifier, cache_cluster_id, cluster_name, node_group_name = sys.argv[1:]
+def suffix(arn, marker, include_marker=False):
+    if not arn or marker not in arn:
+        return None
+    value = arn.split(marker, 1)[1]
+    return f"{marker}{value}" if include_marker else value
+
+Path(output).write_text(json.dumps({
+    "targetPlatform": "eks",
+    "albDimension": suffix(alb_arn, "loadbalancer/"),
+    "targetGroupDimension": suffix(target_group_arn, "targetgroup/", include_marker=True),
+    "autoScalingGroupName": asg_name or None,
+    "clusterName": cluster_name,
+    "nodeGroupName": node_group_name,
+    "dbInstanceIdentifier": db_identifier or None,
+    "cacheClusterId": cache_cluster_id or None,
+    "note": "EKS ALB targets Pod IPs; the backing ASG is recorded only from the managed node-group response, never from ALB target IDs.",
+}, indent=2) + "\n", encoding="utf-8")
+PY
+
+  python3 - "$EVIDENCE_ROOT/metadata.json" "$RUN_ID" "$ENVIRONMENT" "$REGION" "$account_last4" "$account_sha256" \
+    "$ALB_ARN" "$asg_name" "$RUNNER_ID" "$RUNNER_INSTANCE_TYPE" "$BASE_URL" "$REPOSITORY_ROOT" \
+    "$TARGET_PLATFORM" "$EKS_CLUSTER_NAME" "$EKS_NODE_GROUP_NAME" "$EKS_BASTION_ID" <<'PY'
+import hashlib
+import json
+import subprocess
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+(output, run_id, environment, region, account_last4, account_sha256,
+ alb_arn, asg_name, runner_id, runner_instance_type, base_url, repo_root,
+ platform, cluster_name, node_group_name, bastion_id) = sys.argv[1:]
+commit_sha = subprocess.run(["git", "-C", repo_root, "rev-parse", "HEAD"], capture_output=True, text=True, check=True).stdout.strip()
+Path(output).write_text(json.dumps({
+    "runId": run_id,
+    "scenarioId": "B-01",
+    "platform": platform,
+    "environment": environment,
+    "startedAtUtc": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
+    "endedAtUtc": None,
+    "commitSha": commit_sha,
+    "aws": {
+        "accountIdLast4": account_last4,
+        "accountIdSha256": account_sha256,
+        "accountValidation": "sts-observed-vs-operator-approved-runtime-input",
+        "region": region,
+        "albArnHash": hashlib.sha256(alb_arn.encode()).hexdigest(),
+        "autoScalingGroupName": asg_name or None,
+        "runnerInstanceId": runner_id,
+        "runnerInstanceType": runner_instance_type,
+        "baseUrl": base_url,
+        "eksClusterName": cluster_name,
+        "eksNodeGroupName": node_group_name,
+        "eksBastionIdSha256": hashlib.sha256(bastion_id.encode()).hexdigest(),
+    },
+}, indent=2) + "\n", encoding="utf-8")
+PY
+  python3 "$REPOSITORY_ROOT/scripts/loadtest/record-rehearsal-event.py" "$EVIDENCE_ROOT" RUN_START "B-01 EKS orchestration started" --actor operator 2>/dev/null || true
+  rm -rf -- "$validation_dir"
+  echo "[b01] EKS target verified: BASE_URL=$BASE_URL evidenceRoot=$EVIDENCE_ROOT"
+}
+
 target_stage() {
+  if [[ "$TARGET_PLATFORM" == "eks" ]]; then
+    eks_target_stage
+    return
+  fi
   echo "[b01] target: verifying account/ALB/runner"
   local observed_account
   observed_account="$(verify_account)"
@@ -548,7 +848,14 @@ target_stage() {
     asg_json='{"note":"dry-run"}'
   else
     backend_target_ids_text="$(python3 -c 'import json,sys; print("\n".join(target.get("Target", {}).get("Id", "") for target in json.loads(sys.argv[1]).get("TargetHealthDescriptions", []) if target.get("TargetHealth", {}).get("State") == "healthy"))' "$target_health_json")"
-    mapfile -t backend_target_ids <<<"$backend_target_ids_text"
+    # macOS ships Bash 3.2, which does not provide mapfile/readarray. Keep
+    # the target list construction portable because this orchestrator runs
+    # from the operator workstation while the workload itself runs on the
+    # Runner EC2.
+    backend_target_ids=()
+    while IFS= read -r target_id; do
+      [[ -n "$target_id" ]] && backend_target_ids+=("$target_id")
+    done <<<"$backend_target_ids_text"
     if [[ "${#backend_target_ids[@]}" -eq 0 ]]; then
       echo "ALB target group has no healthy backend target" >&2
       exit 1
@@ -661,6 +968,9 @@ phase_max_vus_override() {
     ramp) printf '%s' "$RAMP_MAX_VUS" ;;
     baseline) printf '%s' "$BASELINE_MAX_VUS" ;;
     spike) printf '%s' "$SPIKE_MAX_VUS" ;;
+    soak) printf '%s' "$SOAK_MAX_VUS" ;;
+    scale-step) printf '%s' "$SCALE_STEP_MAX_VUS" ;;
+    capacity-stress) printf '%s' "$CAPACITY_STRESS_MAX_VUS" ;;
     *) echo "unsupported phase for VU capacity validation: $1" >&2; return 2 ;;
   esac
 }
@@ -733,6 +1043,9 @@ k6_phase_stage() {
   export RAMP_PREALLOCATED_VUS RAMP_MAX_VUS
   export BASELINE_PREALLOCATED_VUS BASELINE_MAX_VUS
   export SPIKE_PREALLOCATED_VUS SPIKE_MAX_VUS SPIKE_PEAK_MULTIPLIER SPIKE_HOLD
+  export SOAK_PREALLOCATED_VUS SOAK_MAX_VUS SCALE_STEP_PREALLOCATED_VUS SCALE_STEP_MAX_VUS
+  export CAPACITY_STRESS_PREALLOCATED_VUS CAPACITY_STRESS_MAX_VUS
+  export AWS_SLO_CONTRACT_FILE="$SLO_CONTRACT"
   if [[ -n "$CONFIRMED_RATE" ]]; then export CONFIRMED_RATE; fi
   if [[ "$phase" == "baseline" ]]; then
     if [[ -n "$baseline_rep" ]]; then
@@ -904,7 +1217,7 @@ evidence_stage() {
   echo "[b01] evidence: Grafana Annotation + Query (PNG excluded; see Plan04/D-003)"
   mkdir -p "$EVIDENCE_ROOT/grafana/queries"
   if [[ -n "$GRAFANA_URL" && -n "$GRAFANA_ADMIN_USER" && -n "$GRAFANA_ADMIN_PASSWORD" && "$DRY_RUN" != "1" ]]; then
-    python3 - "$EVIDENCE_ROOT" "$GRAFANA_URL" "$GRAFANA_ADMIN_USER" "$GRAFANA_ADMIN_PASSWORD" "$RUN_ID" <<'PY'
+    python3 - "$EVIDENCE_ROOT" "$GRAFANA_URL" "$GRAFANA_ADMIN_USER" "$GRAFANA_ADMIN_PASSWORD" "$RUN_ID" "${TARGET_PLATFORM:-ec2}" <<'PY'
 import base64
 import json
 import sys
@@ -912,7 +1225,7 @@ from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-evidence_root, url, user, password, run_id = sys.argv[1:]
+evidence_root, url, user, password, run_id, target_platform = sys.argv[1:]
 evidence_root = Path(evidence_root)
 EVENT_TAGS = {"RUN_START": "test-start", "RUN_END": "test-end"}
 auth = base64.b64encode(f"{user}:{password}".encode()).decode("ascii")
@@ -930,7 +1243,7 @@ for path in paths:
         time_ms = int(datetime.datetime.fromisoformat(event["ts"].replace("Z", "+00:00")).timestamp() * 1000)
         payload = {
             "time": time_ms,
-            "tags": ["scenario:B-01", "platform:ec2", f"run:{run_id}", EVENT_TAGS[name]],
+            "tags": ["scenario:B-01", f"platform:{target_platform}", f"run:{run_id}", EVENT_TAGS[name]],
             "text": f"{name}: {str(event.get('detail', ''))[:200]}",
         }
         request = Request(
@@ -1178,6 +1491,26 @@ case "$MODE" in
     run_stage_once target target_stage
     run_stage_once seed seed_stage
     run_stage_once spike k6_phase_stage spike
+    ;;
+  soak)
+    validate_confirmed_rate
+    require_d005_record_gate
+    run_stage_once target target_stage
+    run_stage_once seed seed_stage
+    run_stage_once soak k6_phase_stage soak
+    ;;
+  scale-step)
+    validate_confirmed_rate
+    require_d005_record_gate
+    run_stage_once target target_stage
+    run_stage_once seed seed_stage
+    run_stage_once scale-step k6_phase_stage scale-step
+    ;;
+  capacity-stress)
+    validate_confirmed_rate
+    run_stage_once target target_stage
+    run_stage_once seed seed_stage
+    run_stage_once capacity-stress k6_phase_stage capacity-stress
     ;;
   evidence)
     run_stage_once evidence evidence_stage

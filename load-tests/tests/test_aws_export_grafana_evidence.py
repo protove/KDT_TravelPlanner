@@ -146,6 +146,26 @@ class BasicAuthHeaderTest(unittest.TestCase):
         self.assertEqual(decoded, "evidence-exporter:s3cr3t")
 
 
+class GrafanaCaptureContractTest(unittest.TestCase):
+    def test_loopback_endpoint_is_required_for_capture(self):
+        self.assertTrue(EXPORT.is_loopback_grafana_url("http://127.0.0.1:3000"))
+        self.assertTrue(EXPORT.is_loopback_grafana_url("http://localhost:3000"))
+        self.assertFalse(EXPORT.is_loopback_grafana_url("https://grafana.example.com"))
+
+    def test_full_dashboard_contract_contains_fixed_window_and_png_path(self):
+        contract = EXPORT.build_dashboard_capture_contract(
+            SAMPLE_DASHBOARD_PAYLOAD,
+            "http://127.0.0.1:3000",
+            "scrum43-r01-ec2-capture",
+            "2026-08-11T09:00:00Z",
+            "2026-08-11T10:00:00Z",
+        )
+        self.assertEqual(contract["expectedPngPath"], "grafana/dashboard.png")
+        self.assertIn("from=1786438800000", contract["captureUrl"])
+        self.assertIn("to=1786442400000", contract["captureUrl"])
+        self.assertIn("tz=utc", contract["captureUrl"])
+
+
 class ToEpochSecondsTest(unittest.TestCase):
     def test_known_timestamp(self):
         self.assertEqual(EXPORT.to_epoch_seconds("1970-01-01T00:00:00Z"), 0)
@@ -200,6 +220,22 @@ class ExtractPanelQueriesTest(unittest.TestCase):
 
 
 class CollectPanelQueriesTest(unittest.TestCase):
+    def test_loki_auto_interval_is_resolved_for_http_query(self):
+        captured = []
+        original_request = EXPORT.grafana_request
+        EXPORT.grafana_request = lambda url, auth_header, timeout=15: captured.append(url) or json.dumps({"status": "success", "data": {}}).encode("utf-8")
+        try:
+            EXPORT.collect_datasource_range_query(
+                "http://127.0.0.1:3000", None, "loki", "loki",
+                'sum(count_over_time({service="x"}[$__auto]))',
+                "2026-08-11T09:00:00Z", "2026-08-11T10:00:00Z",
+            )
+        finally:
+            EXPORT.grafana_request = original_request
+        self.assertEqual(len(captured), 1)
+        self.assertIn("1m", captured[0])
+        self.assertNotIn("%24__auto", captured[0])
+
     def test_cloudwatch_command_keeps_all_dimensions_in_one_cli_list(self):
         captured = []
         original_run_command = EXPORT.run_command

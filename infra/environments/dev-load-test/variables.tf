@@ -71,13 +71,13 @@ variable "project_name" {
 
 variable "runtime_state_key" {
   type        = string
-  description = "EC2 dev-runtime Terraform State object key consumed as the load-test target."
+  description = "Disposable runtime Terraform State object key consumed as the load-test target; use dev-runtime or dev-eks, never both at once."
   default     = "dev-runtime/terraform.tfstate"
 }
 
 variable "state_bucket" {
   type        = string
-  description = "S3 bucket containing the persistent dev and EC2 dev-runtime Terraform States."
+  description = "S3 bucket containing the persistent dev, disposable runtime and load-test Terraform States."
 }
 
 variable "test_db_secret_arn" {

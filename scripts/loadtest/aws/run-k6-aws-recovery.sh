@@ -12,23 +12,75 @@ RUN_DIR="${1:?usage: run-k6-aws-recovery.sh <run-dir>}"
 : "${RATE:?RATE is required}"
 : "${DATA_FILE:?DATA_FILE is required}"
 : "${EFFECTIVE_MAX_VUS:?EFFECTIVE_MAX_VUS is required}"
+TARGET_PLATFORM="${TARGET_PLATFORM:-ec2}"
 
 K6_DIR="$REPOSITORY_ROOT/load-tests/k6"
+CONTRACT_DIR="$REPOSITORY_ROOT/load-tests/aws/contracts"
+# A private Runner may resolve the approved custom hostname on the host while
+# Docker's bridge resolver cannot see that private mapping.  Keep the
+# hostname for TLS SNI/HTTP Host, but allow the operator to pin the current
+# ALB addresses for this disposable run.  This is an execution-time input;
+# the recovery workload never discovers or mutates DNS.
+DOCKER_HOST_ARGS=()
+if [[ -n "${AWS_TARGET_HOST_IPS:-}" ]]; then
+  target_host="$(python3 - "$BASE_URL" <<'PY'
+import sys
+from urllib.parse import urlparse
+
+host = urlparse(sys.argv[1]).hostname
+if not host or "." not in host:
+    raise SystemExit("BASE_URL hostname is missing")
+print(host)
+PY
+)"
+  old_ifs="$IFS"
+  IFS=,
+  read -r -a target_ips <<< "$AWS_TARGET_HOST_IPS"
+  IFS="$old_ifs"
+  if [[ "${#target_ips[@]}" -eq 0 ]]; then
+    echo "AWS_TARGET_HOST_IPS must contain at least one IPv4 address" >&2
+    exit 2
+  fi
+  for target_ip in "${target_ips[@]}"; do
+    if [[ ! "$target_ip" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
+      echo "AWS_TARGET_HOST_IPS contains a non-IPv4 value" >&2
+      exit 2
+    fi
+    if ! python3 - "$target_ip" <<'PY'
+import ipaddress
+import sys
+
+try:
+    ipaddress.IPv4Address(sys.argv[1])
+except ipaddress.AddressValueError:
+    raise SystemExit(1)
+PY
+    then
+      echo "AWS_TARGET_HOST_IPS contains an invalid IPv4 address" >&2
+      exit 2
+    fi
+    DOCKER_HOST_ARGS+=(--add-host "${target_host}:${target_ip}")
+  done
+fi
 if [[ ! "$K6_IMAGE_DIGEST" =~ @sha256:[0-9a-fA-F]{64}$ ]]; then
   echo "K6_IMAGE_DIGEST must be digest-pinned" >&2
   exit 2
 fi
 [[ -f "$AWS_RECOVERY_PROFILE_FILE" ]] || { echo "missing Recovery profile: $AWS_RECOVERY_PROFILE_FILE" >&2; exit 2; }
+AWS_SLO_CONTRACT_FILE="${AWS_SLO_CONTRACT_FILE:-$CONTRACT_DIR/slo-v1.0.json}"
+[[ -f "$AWS_SLO_CONTRACT_FILE" ]] || { echo "missing SLO contract: $AWS_SLO_CONTRACT_FILE" >&2; exit 2; }
 [[ -f "$DATA_FILE" ]] || { echo "missing seeded credential file: $DATA_FILE" >&2; exit 2; }
-python3 - "$DATA_FILE" "$EFFECTIVE_MAX_VUS" <<'PY'
+python3 - "$DATA_FILE" "$EFFECTIVE_MAX_VUS" "$RUN_ID" <<'PY'
 import json
 import sys
 from pathlib import Path
 
-path, required_raw = sys.argv[1:]
+path, required_raw, run_id = sys.argv[1:]
 required = int(required_raw)
 payload = json.loads(Path(path).read_text(encoding="utf-8"))
 credentials = payload.get("credentials") if isinstance(payload, dict) else None
+if payload.get("runId") != run_id:
+    raise SystemExit("seeded credential file runId must match the recovery run")
 if payload.get("seedState") != "complete" or payload.get("fixtureState") != "verified":
     raise SystemExit("seeded credential file must have seedState=complete and fixtureState=verified")
 if not isinstance(credentials, list) or len(credentials) < required:
@@ -41,24 +93,32 @@ started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 git_sha="$(git -C "$REPOSITORY_ROOT" rev-parse HEAD)"
 measurement_sha="${MEASUREMENT_SOURCE_COMMIT_SHA:-$git_sha}"
 lineage_sha="${SOURCE_LINEAGE_SHA256:-}"
-python3 - "$RUN_DIR/metadata.json" "$RUN_ID" "$started_at" "$git_sha" "$measurement_sha" "$lineage_sha" "$K6_IMAGE_DIGEST" "$RATE" "$REGION" "$ENVIRONMENT" "$AWS_RECOVERY_PROFILE_FILE" <<'PY'
+python3 - "$RUN_DIR/metadata.json" "$RUN_ID" "$started_at" "$git_sha" "$measurement_sha" "$lineage_sha" "$K6_IMAGE_DIGEST" "$RATE" "$REGION" "$ENVIRONMENT" "$TARGET_PLATFORM" "$AWS_RECOVERY_PROFILE_FILE" "$BASE_URL" "${AWS_TARGET_HOST_IPS:-}" "$AWS_SLO_CONTRACT_FILE" <<'PY'
 import hashlib
 import json
 import sys
+from urllib.parse import urlparse
 from pathlib import Path
 
-output, run_id, started_at, commit_sha, measurement_sha, lineage_sha, image, rate, region, environment, profile_path = sys.argv[1:]
+output, run_id, started_at, commit_sha, measurement_sha, lineage_sha, image, rate, region, environment, platform, profile_path, base_url, target_host_ips_raw, contract_path = sys.argv[1:]
 profile = json.loads(Path(profile_path).read_text(encoding="utf-8"))
+contract = json.loads(Path(contract_path).read_text(encoding="utf-8"))
+target_host_ips = [value.strip() for value in target_host_ips_raw.split(",") if value.strip()]
 output_path = Path(output)
 metadata = {}
 if output_path.exists():
     metadata = json.loads(output_path.read_text(encoding="utf-8"))
+scenario_id = "AWS-RECOVERY-COMPARISON" if str(profile.get("sloVersion", "")).startswith("v1.1") else "AWS-RECOVERY"
 metadata.update({
     "runId": run_id,
-    "scenarioId": "AWS-RECOVERY",
+    "scenarioId": scenario_id,
     "scenario": "recovery-steady",
-    "platform": "ec2",
-    "startedAtUtc": started_at,
+    "platform": platform,
+    # The orchestrator writes immutable preflight metadata and RUN_START
+    # before invoking this runner.  Preserve that boundary so the fixed
+    # evidence range contains the complete recorded run rather than starting
+    # after the first event.
+    "startedAtUtc": metadata.get("startedAtUtc") or started_at,
     "target": "sanitized-approved-runtime-input",
     "region": region,
     "environment": environment,
@@ -71,8 +131,14 @@ metadata.update({
     "warmupSeconds": 180,
     "seedVersion": profile["seedVersion"],
     "requestMixVersion": profile["requestMixVersion"],
-    "sloVersion": profile["sloVersion"],
+    "sloVersion": contract["sloVersion"],
+    "sloContractSha256": hashlib.sha256(Path(contract_path).read_bytes()).hexdigest(),
     "profileVersion": profile["profileVersion"],
+    "targetHostResolution": {
+        "hostname": urlparse(base_url).hostname,
+        "ips": target_host_ips,
+        "method": "docker-add-host" if target_host_ips else "container-vpc-dns",
+    },
 })
 if lineage_sha:
     metadata["sourceLineageSha256"] = lineage_sha
@@ -90,17 +156,23 @@ docker run -i --name "$container_name" \
   --user 0:0 \
   --cap-drop ALL \
   --security-opt no-new-privileges \
+  "${DOCKER_HOST_ARGS[@]}" \
   -v "$K6_DIR:/scripts:ro" \
+  -v "$CONTRACT_DIR:/contracts:ro" \
   -v "$(dirname "$AWS_RECOVERY_PROFILE_FILE"):/profiles:ro" \
   -v "$DATA_FILE:/data/data.json:ro" \
   -v "$RUN_DIR:/out" \
   -e BASE_URL="$BASE_URL" \
   -e AWS_RECOVERY_PROFILE_FILE="/profiles/$(basename "$AWS_RECOVERY_PROFILE_FILE")" \
+  -e AWS_SLO_CONTRACT_FILE="/contracts/$(basename "$AWS_SLO_CONTRACT_FILE")" \
   -e DATA_FILE=/data/data.json \
   -e K6_IMAGE_DIGEST="$K6_IMAGE_DIGEST" \
   -e RATE="$RATE" \
+  -e TARGET_REGION="$REGION" \
+  -e TARGET_ENVIRONMENT="$ENVIRONMENT" \
   -e RUN_ID="$RUN_ID" \
   -e RUN_STARTED_AT="$started_at" \
+  -e TARGET_PLATFORM="$TARGET_PLATFORM" \
   -e OUT_DIR=/out \
   -e REQUIRED_UNIQUE_CREDENTIAL_COUNT="$EFFECTIVE_MAX_VUS" \
   -e REQUIRE_UNIQUE_CREDENTIALS=1 \
@@ -170,7 +242,10 @@ from pathlib import Path
 
 path = Path(sys.argv[1])
 metadata = json.loads(path.read_text(encoding="utf-8"))
-metadata["endedAtUtc"] = datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+# RUN_END is recorded immediately before this block.  Keep millisecond
+# precision so the fixed export range contains the event itself; truncating
+# to whole seconds can place a sub-second RUN_END just outside the range.
+metadata["endedAtUtc"] = datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 path.write_text(json.dumps(metadata, indent=2) + chr(10), encoding="utf-8")
 PY
 echo "[k6-recovery] run directory: $RUN_DIR"

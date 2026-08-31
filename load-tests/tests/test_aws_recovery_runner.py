@@ -28,6 +28,17 @@ class AwsRecoveryRunnerContractTest(unittest.TestCase):
         self.assertIn("metadata.update({", source)
         self.assertIn('"profileSha256": hashlib.sha256(Path(profile_path).read_bytes()).hexdigest()', source)
 
+    def test_runner_supports_operator_pinned_custom_origin_resolution(self):
+        source = RUNNER.read_text(encoding="utf-8")
+        self.assertIn("AWS_TARGET_HOST_IPS", source)
+        self.assertIn("DOCKER_HOST_ARGS+=(--add-host", source)
+        self.assertIn('"method": "docker-add-host"', source)
+
+    def test_runner_rejects_cross_run_seed_credentials(self):
+        source = RUNNER.read_text(encoding="utf-8")
+        self.assertIn('payload.get("runId") != run_id', source)
+        self.assertIn("seeded credential file runId must match the recovery run", source)
+
     def test_planned_entrypoint_delegates_to_k6_runner(self):
         source = ENTRYPOINT.read_text(encoding="utf-8")
         self.assertIn("run-k6-aws-recovery.sh", source)
@@ -60,6 +71,110 @@ class AwsRecoveryRunnerContractTest(unittest.TestCase):
         self.assertIn('python3 - "$D005_RATE_FILE" "$FREEZE_METADATA" "$B01_PROFILE"', source)
         self.assertIn('if [[ "$DRY_RUN" == "1" ]]; then', source)
         self.assertIn('would run AWS Recovery workload', source)
+
+    def test_coordinator_detaches_background_workload_stdin(self):
+        source = (ROOT / "scripts/loadtest/aws/coordinate-aws-recovery.py").read_text(encoding="utf-8")
+        self.assertIn("systemd-run --unit=", source)
+        self.assertIn("--collect --no-block", source)
+        self.assertIn("echo started:", source)
+
+    def test_v11_orchestrator_accepts_ec2_and_eks_action_time_targets(self):
+        source_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
+        profile = ROOT / "load-tests/aws/profiles/ec2-eks-recovery-v1.1.json"
+        target_group = (
+            "arn:aws:elasticloadbalancing:ap-northeast-2:419496180357:"
+            "targetgroup/fixture/0123456789abcdef"
+        )
+        alb = (
+            "arn:aws:elasticloadbalancing:ap-northeast-2:419496180357:"
+            "loadbalancer/app/fixture/0123456789abcdef"
+        )
+        for platform, extra in (
+            (
+                "ec2",
+                [
+                    "--asg-name", "kdt-travelplanner-dev-backend",
+                    "--launch-template-id", "lt-0123456789abcdef0",
+                    "--launch-template-version", "1",
+                ],
+            ),
+            (
+                "eks",
+                [
+                    "--cluster-name", "kdt-travelplanner-dev-eks",
+                    "--node-group-name", "kdt-travelplanner-dev-eks-nodes",
+                    "--eks-bastion-id", "i-0fedcba9876543210",
+                ],
+            ),
+        ):
+            with self.subTest(platform=platform), tempfile.TemporaryDirectory() as directory:
+                command = [
+                    "bash", str(ORCHESTRATOR), "preflight", "--dry-run",
+                    "--target-platform", platform,
+                    "--run-id", f"scrum43-r03-{platform}-fixture",
+                    "--profile", str(profile),
+                    "--region", "ap-northeast-2",
+                    "--environment", "dev-runtime" if platform == "ec2" else "dev-eks",
+                    "--expected-account-id", "419496180357",
+                    "--alb-arn", alb,
+                    "--target-group-arn", target_group,
+                    "--runner-id", "i-0123456789abcdef0",
+                    "--base-url", "https://fixture.example.com",
+                    "--rate", "4",
+                    "--source-sha", source_sha,
+                    *extra,
+                ]
+                environment = {**os.environ, "AWS_RECOVERY_EVIDENCE_BASE": directory}
+                result = subprocess.run(command, cwd=ROOT, env=environment, capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                metadata = json.loads(
+                    (Path(directory) / f"scrum43-r03-{platform}-fixture" / "metadata.json").read_text()
+                )
+                self.assertEqual(metadata["platform"], platform)
+
+    def test_operator_recovery_event_is_distinct_from_automated_t4(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
+            run_id = "scrum43-r03-ec2-event-fixture"
+            common = [
+                "bash", str(ORCHESTRATOR),
+                "--target-platform", "ec2",
+                "--run-id", run_id,
+                "--profile", str(ROOT / "load-tests/aws/profiles/ec2-eks-recovery-v1.1.json"),
+                "--region", "ap-northeast-2",
+                "--environment", "dev-runtime",
+                "--expected-account-id", "419496180357",
+                "--alb-arn", "arn:aws:elasticloadbalancing:ap-northeast-2:419496180357:loadbalancer/app/fixture/0123456789abcdef",
+                "--target-group-arn", "arn:aws:elasticloadbalancing:ap-northeast-2:419496180357:targetgroup/fixture/0123456789abcdef",
+                "--asg-name", "kdt-travelplanner-dev-backend",
+                "--launch-template-id", "lt-0123456789abcdef0",
+                "--launch-template-version", "1",
+                "--runner-id", "i-0123456789abcdef0",
+                "--base-url", "https://fixture.example.com",
+                "--rate", "4",
+                "--source-sha", source_sha,
+            ]
+            environment = {**os.environ, "AWS_RECOVERY_EVIDENCE_BASE": directory}
+            preflight = subprocess.run(
+                [*common, "preflight", "--dry-run"], cwd=ROOT, env=environment,
+                capture_output=True, text=True,
+            )
+            self.assertEqual(preflight.returncode, 0, preflight.stderr)
+            result = subprocess.run(
+                [
+                    *common, "event", "--event", "OPERATOR_RECOVERY", "--detail", "manual recovery completed",
+                ],
+                cwd=ROOT,
+                env=environment,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            event = json.loads(
+                (Path(directory) / run_id / "operations.jsonl").read_text().splitlines()[0]
+            )
+            self.assertEqual(event["event"], "OPERATOR_RECOVERY")
+            self.assertEqual(event["actor"], "operator")
 
     def test_preflight_evidence_is_idempotent_and_rejects_mismatch(self):
         run_id = f"aws-recovery-preflight-{uuid.uuid4().hex}"

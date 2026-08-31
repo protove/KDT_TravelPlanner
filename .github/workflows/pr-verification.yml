@@ -37,6 +37,7 @@ jobs:
       run_k8s: ${{ steps.classify.outputs.run_k8s }}
       run_compose: ${{ steps.classify.outputs.run_compose }}
       run_backend_dev_image: ${{ steps.classify.outputs.run_backend_dev_image }}
+      run_load_test: ${{ steps.classify.outputs.run_load_test }}
       verification_mode: ${{ steps.classify.outputs.verification_mode }}
       source_policy_error: ${{ steps.classify.outputs.source_policy_error }}
       classification_error: ${{ steps.classify.outputs.classification_error }}
@@ -118,6 +119,12 @@ jobs:
     if: needs.detect-changes.outputs.run_backend_dev_image == 'true'
     uses: ./.github/workflows/backend-dev-image.yml
 
+  verify-load-test:
+    name: Verify Load Test Contracts
+    needs: detect-changes
+    if: needs.detect-changes.outputs.run_load_test == 'true'
+    uses: ./.github/workflows/load-test-verification.yml
+
   affected-pr-gate:
     name: Affected PR Gate
     needs:
@@ -130,6 +137,7 @@ jobs:
       - verify-k8s
       - verify-compose
       - verify-backend-dev-image
+      - verify-load-test
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -146,6 +154,7 @@ jobs:
       RUN_K8S: ${{ needs.detect-changes.outputs.run_k8s }}
       RUN_COMPOSE: ${{ needs.detect-changes.outputs.run_compose }}
       RUN_BACKEND_DEV_IMAGE: ${{ needs.detect-changes.outputs.run_backend_dev_image }}
+      RUN_LOAD_TEST: ${{ needs.detect-changes.outputs.run_load_test }}
       FRONTEND_RESULT: ${{ needs.verify-frontend.result }}
       BACKEND_RESULT: ${{ needs.verify-backend.result }}
       MONITORING_RESULT: ${{ needs.verify-monitoring.result }}
@@ -153,6 +162,7 @@ jobs:
       K8S_RESULT: ${{ needs.verify-k8s.result }}
       COMPOSE_RESULT: ${{ needs.verify-compose.result }}
       BACKEND_DEV_IMAGE_RESULT: ${{ needs.verify-backend-dev-image.result }}
+      LOAD_TEST_RESULT: ${{ needs.verify-load-test.result }}
     steps:
       - name: Check affected verification results
         run: |
@@ -205,4 +215,5 @@ jobs:
           check_result "${RUN_K8S}" "${K8S_RESULT}" "Kubernetes verification"
           check_result "${RUN_COMPOSE}" "${COMPOSE_RESULT}" "Compose verification"
           check_result "${RUN_BACKEND_DEV_IMAGE}" "${BACKEND_DEV_IMAGE_RESULT}" "Backend development image verification"
+          check_result "${RUN_LOAD_TEST}" "${LOAD_TEST_RESULT}" "Load-test contract verification"
           echo "Affected PR gate passed."

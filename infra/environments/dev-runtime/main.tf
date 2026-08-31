@@ -70,6 +70,7 @@ module "monitoring_ec2" {
   app_subnet_id                      = data.terraform_remote_state.persistent.outputs.app_subnet_ids[0]
   aws_region                         = var.aws_region
   environment                        = local.environment
+  grafana_anonymous_viewer_enabled   = var.grafana_anonymous_viewer_enabled
   prometheus_image_reference         = var.monitoring_image_references.prometheus
   loki_image_reference               = var.monitoring_image_references.loki
   grafana_image_reference            = var.monitoring_image_references.grafana
@@ -125,6 +126,7 @@ module "backend_service" {
   google_oauth_redirect_uri          = "${local.api_origin}/api/v1/auth/oauth2/google/callback"
   instance_type                      = "t3.small"
   instance_warmup_seconds            = 180
+  health_check_grace_period_seconds  = var.backend_health_check_grace_period_seconds
   alloy_image_reference              = var.monitoring_image_references.alloy
   monitoring_endpoint_parameter_name = module.monitoring_ec2.monitoring_endpoint_parameter_name
   naver_oauth_redirect_uri           = "${local.api_origin}/api/v1/auth/oauth2/naver/callback"

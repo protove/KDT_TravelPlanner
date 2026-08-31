@@ -128,6 +128,21 @@ variable "instance_type" {
   default     = "t3.small"
 }
 
+variable "health_check_grace_period_seconds" {
+  type        = number
+  description = "ASG ELB health-check grace period. Kept as an explicit comparison input; calibration may select a value from 60 through 300 seconds."
+  default     = 300
+
+  validation {
+    condition = (
+      var.health_check_grace_period_seconds >= 0 &&
+      var.health_check_grace_period_seconds <= 600 &&
+      var.health_check_grace_period_seconds == floor(var.health_check_grace_period_seconds)
+    )
+    error_message = "health_check_grace_period_seconds must be an integer from 0 through 600."
+  }
+}
+
 variable "instance_warmup_seconds" {
   type        = number
   description = "ASG default and Instance Refresh warm-up duration."

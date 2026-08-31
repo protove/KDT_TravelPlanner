@@ -28,10 +28,25 @@ docker run --rm \
   prom/prometheus:v3.13.1 \
   check config "/etc/prometheus/prometheus.ec2.yml"
 
+docker run --rm \
+  --entrypoint /bin/promtool \
+  -v "$SCRIPT_DIR/prometheus:/etc/prometheus:ro" \
+  prom/prometheus:v3.13.1 \
+  check config "/etc/prometheus/prometheus.eks.yml"
+
+docker run --rm \
+  -v "$SCRIPT_DIR/alloy:/etc/alloy:ro" \
+  grafana/alloy:v1.16.1 \
+  validate "/etc/alloy/config.eks.alloy"
+
 python3 -m json.tool \
   "$SCRIPT_DIR/grafana/dashboards/backend-overview.json" \
   >/dev/null
 
 python3 -m json.tool \
   "$SCRIPT_DIR/grafana/dashboards/aws-load-test.json" \
+  >/dev/null
+
+python3 -m json.tool \
+  "$SCRIPT_DIR/grafana/dashboards/aws-eks-load-test.json" \
   >/dev/null

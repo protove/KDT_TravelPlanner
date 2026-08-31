@@ -62,7 +62,6 @@ class RecoveryEvidenceFixtureTest(unittest.TestCase):
         finally:
             import shutil
             shutil.rmtree(root)
-
     def test_missing_event_is_rejected(self):
         root = self.fixture()
         try:
@@ -186,6 +185,42 @@ class RecoveryEvidenceFixtureTest(unittest.TestCase):
         finally:
             import shutil
             shutil.rmtree(root)
+
+
+class ComparisonRecoveryExportContractTest(unittest.TestCase):
+    def test_comparison_metadata_and_no_t6_failure_verdict_are_accepted(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            start = datetime(2026, 8, 27, 0, 0, tzinfo=timezone.utc)
+            run_id = "scrum43-r05-ec2-export"
+            write_json(root / "metadata.json", {
+                "runId": run_id,
+                "scenarioId": "AWS-RECOVERY-COMPARISON",
+                "startedAtUtc": start.isoformat().replace("+00:00", "Z"),
+                "endedAtUtc": (start + timedelta(seconds=120)).isoformat().replace("+00:00", "Z"),
+            })
+            self.assertEqual(MODULE.resolve_comparison_run(root, run_id)[0], run_id)
+            write_json(root / "recovery-verdict.json", {
+                "runId": run_id,
+                "scenarioId": "AWS-RECOVERY-COMPARISON",
+                "status": "VALID_EXPERIMENTAL_FAILURE",
+                "errorType": "RecoverySloFailure",
+                "detail": "complete post-T5 window missed frozen SLO",
+            })
+            verdict = MODULE.validate_comparison_verdict(root / "recovery-verdict.json", run_id)
+            self.assertEqual(verdict["status"], "VALID_EXPERIMENTAL_FAILURE")
+
+    def test_comparison_verdict_rejects_missing_failure_detail(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            write_json(root / "recovery-verdict.json", {
+                "runId": "scrum43-r03-ec2-export",
+                "scenarioId": "AWS-RECOVERY-COMPARISON",
+                "status": "VALID_EXPERIMENTAL_FAILURE",
+                "errorType": "RecoverySloFailure",
+            })
+            with self.assertRaisesRegex(MODULE.RecoveryExportError, "detail"):
+                MODULE.validate_comparison_verdict(root / "recovery-verdict.json", "scrum43-r03-ec2-export")
 
 
 if __name__ == "__main__":

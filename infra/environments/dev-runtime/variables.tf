@@ -50,6 +50,12 @@ variable "monitoring_image_references" {
   }
 }
 
+variable "grafana_anonymous_viewer_enabled" {
+  type        = bool
+  description = "Temporary action-time Grafana anonymous Viewer access through an SSM loopback tunnel; default-off."
+  default     = false
+}
+
 variable "persistent_state_bucket" {
   type        = string
   description = "S3 bucket containing the persistent dev Terraform State."
@@ -95,6 +101,21 @@ variable "backend_rollout_mode" {
       "MANUAL_BASELINE",
     ], var.backend_rollout_mode)
     error_message = "backend_rollout_mode must be NORMAL, EXPERIMENT, FAULT, or MANUAL_BASELINE."
+  }
+}
+
+variable "backend_health_check_grace_period_seconds" {
+  type        = number
+  description = "EC2 ASG ELB health-check grace period; retain the availability seed until final Acceptance proves a shorter value across replacement variance."
+  default     = 300
+
+  validation {
+    condition = (
+      var.backend_health_check_grace_period_seconds >= 0 &&
+      var.backend_health_check_grace_period_seconds <= 600 &&
+      var.backend_health_check_grace_period_seconds == floor(var.backend_health_check_grace_period_seconds)
+    )
+    error_message = "backend_health_check_grace_period_seconds must be an integer from 0 through 600."
   }
 }
 

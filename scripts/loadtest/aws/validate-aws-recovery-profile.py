@@ -21,7 +21,7 @@ except ImportError:  # pragma: no cover - supports direct import by external cal
 
 DIGEST_PATTERN = re.compile(r"@sha256:[0-9a-f]{64}$")
 PLACEHOLDER_PATTERN = re.compile(r"REPLACE_")
-SLO_CONTRACT = load_contract()
+DEFAULT_SLO_CONTRACT = load_contract()
 REQUIRED = (
     "profileVersion",
     "scenarioId",
@@ -78,9 +78,12 @@ def require(condition: bool, message: str) -> None:
 def validate(profile: dict) -> bool:
     for field in REQUIRED:
         require(field in profile, f"profile is missing required field: {field}")
-    require(profile["scenarioId"] == "AWS-RECOVERY", "scenarioId must be AWS-RECOVERY")
-    require(profile["platform"] == "ec2", "platform must be ec2")
-    require(profile["sloVersion"] == SLO_CONTRACT["sloVersion"], "sloVersion must match the frozen SLO contract")
+    require(profile["scenarioId"] in {"AWS-RECOVERY", "AWS-RECOVERY-COMPARISON"}, "scenarioId must be an approved Recovery scenario")
+    require(profile["platform"] in {"ec2", "eks", "comparison"}, "platform must be ec2, eks or comparison")
+    contract_path = Path(__file__).resolve().parents[3] / "load-tests/aws/contracts/slo-v1.0.json"
+    if profile["sloVersion"] in {"v1.1-candidate", "v1.1-frozen"}:
+        contract_path = contract_path.with_name(f"slo-{profile['sloVersion']}.json")
+    slo_contract = load_contract(contract_path, expected_version=profile["sloVersion"])
     require(isinstance(profile["environment"], str) and profile["environment"], "environment is required")
     require(re.fullmatch(r"[a-z0-9-]+", profile["region"]) is not None, "region is invalid")
 
@@ -112,7 +115,7 @@ def validate(profile: dict) -> bool:
         require(field in recovery, f"recovery.{field} is missing")
     require(recovery["executor"] == "constant-arrival-rate", "recovery.executor must be constant-arrival-rate")
     require(recovery["rate"] is None or (isinstance(recovery["rate"], (int, float)) and recovery["rate"] > 0), "recovery.rate must be null or positive")
-    contract_recovery = SLO_CONTRACT["recovery"]
+    contract_recovery = slo_contract["recovery"]
     require(recovery["bucketSeconds"] == contract_recovery["bucketSeconds"], "recovery.bucketSeconds does not match SLO contract")
     require(recovery["stableWindowSeconds"] == contract_recovery["stableWindowSeconds"], "recovery.stableWindowSeconds does not match SLO contract")
     require(recovery["budgetSeconds"] == contract_recovery["budgetSeconds"], "recovery.budgetSeconds does not match SLO contract")

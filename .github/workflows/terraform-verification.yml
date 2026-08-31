@@ -14,6 +14,63 @@ env:
   TF_IN_AUTOMATION: "true"
 
 jobs:
+  eks-automation-offline:
+    name: Offline EKS Automation Contracts
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Verify offline toolchain
+        run: |
+          python3 --version
+          kubectl version --client
+          jq --version
+          shellcheck --version
+
+      - name: Render staged Kustomize roots
+        run: |
+          set -euo pipefail
+          for root in \
+            k8s/overlays/dev-eks \
+            k8s/overlays/dev-eks/platform \
+            k8s/overlays/dev-eks/workload
+          do
+            kubectl kustomize "${root}" >/dev/null
+          done
+
+      - name: Run EKS renderer and runner contracts
+        run: |
+          set -euo pipefail
+          # PR CI runs only repository-contained contracts. The remaining
+          # operator-continuity suites intentionally bind ignored backend.hcl,
+          # authenticated handoffs, private evidence, or local reference docs
+          # and remain part of the local pre-apply verification boundary.
+          python3 -m unittest \
+            scripts.eks.tests.test_bastion_repair \
+            scripts.eks.tests.test_bastion_user_data \
+            scripts.eks.tests.test_bootstrap_backend_secret \
+            scripts.eks.tests.test_dev_eks_complete_verify_destroy \
+            scripts.eks.tests.test_dev_eks_destroy_verifier \
+            scripts.eks.tests.test_dev_eks_repair_smoke \
+            scripts.eks.tests.test_render_action_time \
+            scripts.eks.tests.test_run_dev_eks_deployment
+
+      - name: Check EKS shell syntax and lint
+        run: |
+          set -euo pipefail
+          for script in scripts/eks/*.sh; do
+            bash -n "${script}"
+            shellcheck --severity=warning "${script}"
+          done
+
+      - name: Check diff whitespace and forbidden live inputs
+        run: |
+          git diff --check
+          ! rg -n --glob 'scripts/eks/**' --glob 'k8s/overlays/dev-eks/**' \
+            '(^|[[:space:]])(AKIA[0-9A-Z]{16}|ASIA[0-9A-Z]{16}|SecretString[[:space:]]*[:=])' .
+
   format:
     name: Format
     runs-on: ubuntu-latest

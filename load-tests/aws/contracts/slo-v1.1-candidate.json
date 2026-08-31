@@ -1,0 +1,65 @@
+{
+  "contractVersion": "v1.1",
+  "sloVersion": "v1.1-candidate",
+  "scope": "aws-load-test-ec2-eks-comparison",
+  "comparators": {
+    "p95Ms": { "operator": "<=", "value": 500, "unit": "ms" },
+    "successRate": { "operator": ">=", "value": 0.99, "unit": "ratio" },
+    "unexpectedErrorRate": { "operator": "<", "value": 0.01, "unit": "ratio" },
+    "baselineContractFailureRate": { "operator": "<", "value": 0.01, "unit": "ratio" },
+    "recoveryContractFailureRate": { "operator": "==", "value": 0.0, "unit": "ratio" },
+    "droppedIterations": { "operator": "==", "value": 0, "unit": "count" },
+    "runnerBottleneckSuspected": { "operator": "==", "value": false, "unit": "boolean" },
+    "capacityFloorRatio": { "operator": ">=", "value": 0.9, "unit": "ratio" },
+    "recoveryBudgetSeconds": { "operator": "<=", "value": 600, "unit": "seconds" },
+    "r01UnexpectedErrorCount": { "operator": "==", "value": 0, "unit": "count" },
+    "r01ContractFailureCount": { "operator": "==", "value": 0, "unit": "count" }
+  },
+  "baseline": {
+    "repetitions": 3,
+    "warmupExcluded": true,
+    "p95Ms": 500,
+    "successRate": 0.99,
+    "unexpectedErrorRate": 0.01,
+    "contractFailureRate": 0.01,
+    "droppedIterations": 0
+  },
+  "recovery": {
+    "bucketSeconds": 10,
+    "stableWindowSeconds": 120,
+    "budgetSeconds": 600,
+    "p95Ms": 500,
+    "capacityFloorRatio": 0.9,
+    "unexpectedErrorRate": 0.01,
+    "contractFailureRate": 0.0
+  },
+  "r01": {
+    "unexpectedErrorCount": 0,
+    "contractFailureCount": 0,
+    "http5xxTimeoutConnectionErrorCount": 0
+  },
+  "spike": {
+    "classification": "diagnostic",
+    "sloPassRequired": false,
+    "p99Recorded": true
+  },
+  "comparison": {
+    "normalRate": null,
+    "normalRateStatus": "pending-baseline-freeze",
+    "platforms": ["ec2-asg", "eks"],
+    "sameApplicationWorkload": true,
+    "sameInstanceFamily": "t3.small",
+    "sameCapacityShape": { "min": 2, "desired": 2, "max": 4 }
+  },
+  "metricDefinitions": {
+    "coreOperations": "One service-controlled Core API operation; auth refresh and retries are not additional Core API operations.",
+    "completedOperation": "A Core API operation with a final response or transport timeout.",
+    "successfulOperation": "A completed operation whose final status and response contract are allowed.",
+    "unexpectedError": "A final status 0, 5xx, timeout, or connection error after retries are exhausted.",
+    "contractFailure": "A final response status/body/schema that violates the route contract.",
+    "successRate": "core_successful_operations_total / core_completed_operations_total",
+    "unexpectedErrorRate": "core_unexpected_errors_total / core_completed_operations_total",
+    "successRps": "core_successful_operations_in_bucket / bucket_seconds",
+    "operatorRecovery": "A human cancels the faulty refresh, restores the previously healthy image, and records the action; automation only observes the resulting healthy state."
+  }
+}

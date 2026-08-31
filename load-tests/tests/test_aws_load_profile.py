@@ -12,6 +12,7 @@ assert SPEC and SPEC.loader
 SPEC.loader.exec_module(MODULE)
 
 PROFILE_PATH = Path(__file__).parents[1] / "aws/profiles/ec2-b01.json"
+COMPARISON_PROFILE_PATH = Path(__file__).parents[1] / "aws/profiles/ec2-eks-comparison-v1.1.json"
 
 
 def load_repo_profile():
@@ -112,6 +113,15 @@ class AwsLoadProfileTest(unittest.TestCase):
         snapshot = copy.deepcopy(profile)
         MODULE.validate(profile)
         self.assertEqual(profile, snapshot)
+
+    def test_comparison_profile_validates_write_mix_and_extra_phases(self):
+        profile = MODULE.load_profile(COMPARISON_PROFILE_PATH)
+        self.assertTrue(MODULE.validate(profile))
+        self.assertEqual(set(profile["requestMix"]["normal"]), {
+            "refresh", "travelList", "travelDetail", "mapPoints", "timelineCreate", "orderChange",
+        })
+        self.assertIn("soak", profile["scenarios"])
+        self.assertIn("scale-step", profile["scenarios"])
 
 
 if __name__ == "__main__":

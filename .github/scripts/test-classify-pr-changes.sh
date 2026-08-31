@@ -47,6 +47,7 @@ all_false=(
   'run_k8s=false'
   'run_compose=false'
   'run_backend_dev_image=false'
+  'run_load_test=false'
 )
 
 assert_case frontend 'frontend/src/app/page.tsx' \
@@ -79,6 +80,10 @@ assert_case k8s 'k8s/backend-deployment.yaml' \
   'run_k8s=true' 'run_backend=false' 'run_compose=false' \
   'classification_error=false'
 
+assert_case eks-automation $'scripts/eks/deploy-dev-eks.sh\nscripts/eks/render-action-time.py' \
+  'run_terraform=true' 'run_k8s=true' 'run_monitoring=true' \
+  'run_backend=false' 'classification_error=false' 'changed_count=2'
+
 assert_case compose 'compose.yml' \
   'run_compose=true' 'run_backend_dev_image=true' 'run_backend=false' \
   'classification_error=false'
@@ -101,6 +106,11 @@ assert_case mixed $'frontend/src/app/page.tsx\ninfra/modules/network/main.tf\nk8
 
 assert_case docs 'reference/strategy/git/GIT_STRATEGY.md' \
   "${all_false[@]}" 'classification_error=false' 'changed_count=1'
+
+assert_case load-test 'load-tests/aws/profiles/ec2-eks-comparison-v1.1.json' \
+  'run_load_test=true' 'run_frontend=false' 'run_backend=false' \
+  'run_terraform=false' 'run_k8s=false' 'run_compose=false' \
+  'classification_error=false'
 
 assert_case router '.github/workflows/pr-verification.yml' \
   'run_frontend=true' 'run_backend=true' 'run_monitoring=true' \

@@ -137,6 +137,10 @@ class AwsB02ActionContractTests(unittest.TestCase):
             self.assertIn("--no-should-decrement-desired-capacity", command)
             self.assertNotIn("--should-decrement-desired-capacity", command)
 
+    def test_comparison_b02_run_id_is_allowed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            MODULE.validate_request(request(Path(directory), run_id="scrum43-b02-fixture-001"))
+
     def test_plan_is_read_only_and_evidence_excludes_account_and_raw_arn(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

@@ -1,18 +1,25 @@
 locals {
-  name = "${var.project_name}-${var.environment}"
+  name = join("-", compact([var.project_name, var.environment, var.name_suffix]))
+
+  # Select only repository-owned profiles; callers cannot inject arbitrary
+  # filesystem paths into the bootstrap or S3 upload.
+  prometheus_config_path   = var.platform == "eks" ? "${path.module}/../../../monitoring/prometheus/prometheus.eks.yml" : "${path.module}/../../../monitoring/prometheus/prometheus.ec2.yml"
+  prometheus_bind_address  = var.platform == "eks" ? "0.0.0.0" : "127.0.0.1"
+  prometheus_runtime_flags = var.platform == "eks" ? "--config.file=/etc/prometheus/prometheus.yml --web.enable-remote-write-receiver" : "--config.file=/etc/prometheus/prometheus.yml"
+  eks_dashboard_download   = var.platform == "eks" ? "aws s3 cp \"s3://${aws_s3_bucket.monitoring_config.id}/grafana/dashboards/aws-eks-load-test.json\" /etc/travel-planner/grafana/dashboards/aws-eks-load-test.json" : ""
 
   # Keep the EC2 bootstrap revision tied to every configuration object that
   # the instance downloads. A changed file therefore replaces the singleton
   # Monitoring EC2 instead of leaving the old configuration in place.
-  monitoring_config_revision = sha256(join("|", [
-    filemd5("${path.module}/../../../monitoring/prometheus/prometheus.ec2.yml"),
+  monitoring_config_revision = sha256(join("|", concat([
+    filemd5(local.prometheus_config_path),
     filemd5("${path.module}/../../../monitoring/loki/loki.prod.yml"),
     filemd5("${path.module}/../../../monitoring/ec2/datasources.yml"),
     filemd5("${path.module}/../../../monitoring/grafana/provisioning/dashboards/dashboards.yml"),
     filemd5("${path.module}/../../../monitoring/grafana/dashboards/backend-overview.json"),
     filemd5("${path.module}/../../../monitoring/grafana/dashboards/aws-load-test.json"),
     filemd5("${path.module}/../../../monitoring/grafana/dashboards/aws-recovery.json"),
-  ]))
+  ], var.platform == "eks" ? [filemd5("${path.module}/../../../monitoring/grafana/dashboards/aws-eks-load-test.json")] : [])))
 }
 
 # ── 설정 파일용 S3 버킷 ─────────────────────────────────────────
@@ -53,8 +60,8 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "monitoring_config
 resource "aws_s3_object" "prometheus_config" {
   bucket = aws_s3_bucket.monitoring_config.id
   key    = "prometheus/prometheus.yml"
-  source = "${path.module}/../../../monitoring/prometheus/prometheus.ec2.yml"
-  etag   = filemd5("${path.module}/../../../monitoring/prometheus/prometheus.ec2.yml")
+  source = local.prometheus_config_path
+  etag   = filemd5(local.prometheus_config_path)
 }
 
 resource "aws_s3_object" "loki_config" {
@@ -104,6 +111,14 @@ resource "aws_s3_object" "grafana_dashboard_aws_recovery" {
   etag   = filemd5("${path.module}/../../../monitoring/grafana/dashboards/aws-recovery.json")
 }
 
+resource "aws_s3_object" "grafana_dashboard_aws_eks_load_test" {
+  count  = var.platform == "eks" ? 1 : 0
+  bucket = aws_s3_bucket.monitoring_config.id
+  key    = "grafana/dashboards/aws-eks-load-test.json"
+  source = "${path.module}/../../../monitoring/grafana/dashboards/aws-eks-load-test.json"
+  etag   = filemd5("${path.module}/../../../monitoring/grafana/dashboards/aws-eks-load-test.json")
+}
+
 # ── Monitoring EC2 IAM 권한 ─────────────────────────────────────
 data "aws_iam_policy_document" "instance_assume_role" {
   statement {
@@ -132,11 +147,16 @@ data "aws_iam_policy_document" "monitoring_runtime" {
     ]
   }
 
-  # Prometheus EC2 Service Discovery — 조회 전용, 리소스 변경 권한 없음
-  statement {
-    sid       = "PrometheusEc2Discovery"
-    actions   = ["ec2:DescribeInstances"]
-    resources = ["*"]
+  # Prometheus EC2 Service Discovery is retained only for the legacy EC2
+  # profile. EKS Alloy discovers Pods through Kubernetes RBAC instead.
+  dynamic "statement" {
+    for_each = var.platform == "ec2" ? [true] : []
+
+    content {
+      sid       = "PrometheusEc2Discovery"
+      actions   = ["ec2:DescribeInstances"]
+      resources = ["*"]
+    }
   }
 
   # Grafana CloudWatch Data Source — 조회 전용
@@ -199,12 +219,18 @@ resource "aws_instance" "monitoring" {
   user_data_replace_on_change = true
 
   user_data = templatefile("${path.module}/templates/monitoring-user-data.sh.tftpl", {
-    aws_region                 = var.aws_region
-    grafana_image_reference    = var.grafana_image_reference
-    loki_image_reference       = var.loki_image_reference
-    monitoring_config_revision = local.monitoring_config_revision
-    monitoring_bucket_name     = aws_s3_bucket.monitoring_config.id
-    prometheus_image_reference = var.prometheus_image_reference
+    aws_region                       = var.aws_region
+    eks_dashboard_download           = local.eks_dashboard_download
+    grafana_anonymous_org_role       = var.grafana_anonymous_viewer_enabled ? "Viewer" : ""
+    grafana_anonymous_viewer_enabled = var.grafana_anonymous_viewer_enabled
+    grafana_image_reference          = var.grafana_image_reference
+    loki_image_reference             = var.loki_image_reference
+    monitoring_config_revision       = local.monitoring_config_revision
+    monitoring_bucket_name           = aws_s3_bucket.monitoring_config.id
+    platform                         = var.platform
+    prometheus_bind_address          = local.prometheus_bind_address
+    prometheus_image_reference       = var.prometheus_image_reference
+    prometheus_runtime_flags         = local.prometheus_runtime_flags
   })
 
   depends_on = [
@@ -215,6 +241,7 @@ resource "aws_instance" "monitoring" {
     aws_s3_object.grafana_dashboard_backend_overview,
     aws_s3_object.grafana_dashboard_aws_load_test,
     aws_s3_object.grafana_dashboard_aws_recovery,
+    aws_s3_object.grafana_dashboard_aws_eks_load_test,
   ]
 
   tags = merge(var.tags, {

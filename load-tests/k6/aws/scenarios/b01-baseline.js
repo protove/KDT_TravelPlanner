@@ -10,7 +10,7 @@ import { accessToken } from '../../lib/auth.js';
 import { recordCoreOperation } from '../lib/core-metrics.js';
 import { b01BaselineThresholds } from '../thresholds.js';
 import { makeAwsSummaryHandler } from '../summary.js';
-import { SCENARIOS, enforceVuLimit, requireScenarioRate } from '../config.js';
+import { SCENARIOS, enforceVuLimit, requestMixFor, requireScenarioRate } from '../config.js';
 
 const BASELINE = SCENARIOS.baseline;
 if (!BASELINE) throw new Error('[aws/b01-baseline] profile.scenarios.baseline is missing');
@@ -20,6 +20,24 @@ const WARMUP = __ENV.WARMUP || BASELINE.warmup || '3m';
 const DURATION = __ENV.DURATION || BASELINE.duration || '10m';
 const PRE_ALLOCATED_VUS = enforceVuLimit(Number(__ENV.PREALLOCATED_VUS || BASELINE.preAllocatedVUs));
 const MAX_VUS = enforceVuLimit(Number(__ENV.MAX_VUS || BASELINE.maxVUs));
+const MIX = requestMixFor('baseline');
+const FLOWS = {
+  refresh: () => accessToken({ forceRefresh: true }),
+  travelList: () => recordCoreOperation(travelList),
+  travelDetail: () => recordCoreOperation(travelDetail),
+  mapPoints: () => recordCoreOperation(mapPoints),
+  timelineCreate: () => recordCoreOperation(timelineCreate),
+  orderChange: () => recordCoreOperation(orderChange),
+};
+const ORDER = Object.keys(FLOWS);
+let cursor = 0;
+const BOUNDARIES = ORDER.map((key) => {
+  const weight = Number(MIX[key]);
+  if (!Number.isFinite(weight)) throw new Error(`[aws/b01-baseline] requestMix.baseline.${key} is missing`);
+  cursor += weight;
+  return { key, upperBound: cursor };
+});
+if (Math.round(cursor) !== 100) throw new Error(`[aws/b01-baseline] requestMix.baseline must sum to 100, got ${cursor}`);
 
 function durationSeconds(value) {
   const pattern = /(\d+(?:\.\d+)?)(ms|s|m|h)/g;
@@ -63,12 +81,8 @@ export const options = {
 
 export function mix() {
   const choice = Math.random() * 100;
-  if (choice < 12) accessToken({ forceRefresh: true });
-  else if (choice < 34) recordCoreOperation(travelList);
-  else if (choice < 54) recordCoreOperation(travelDetail);
-  else if (choice < 72) recordCoreOperation(mapPoints);
-  else if (choice < 90) recordCoreOperation(timelineCreate);
-  else recordCoreOperation(orderChange);
+  const match = BOUNDARIES.find((boundary) => choice < boundary.upperBound);
+  FLOWS[match.key]();
 }
 
 export const handleSummary = makeAwsSummaryHandler('aws-b01-baseline');

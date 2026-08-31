@@ -38,6 +38,7 @@ aws s3 cp "s3://${monitoring_bucket_name}/grafana/dashboards/aws-load-test.json"
   /etc/travel-planner/grafana/dashboards/aws-load-test.json
 aws s3 cp "s3://${monitoring_bucket_name}/grafana/dashboards/aws-recovery.json" \
   /etc/travel-planner/grafana/dashboards/aws-recovery.json
+${eks_dashboard_download}
 
 # ── 데이터 소유권 (컨테이너 내부 사용자와 맞춤) ──────────────────
 chown -R 65534:65534 /var/lib/travel-planner/prometheus
@@ -62,10 +63,11 @@ ExecStart=/usr/bin/docker run \
   --rm \
   --network travel-planner-monitoring \
   --network-alias prometheus \
-  --publish 127.0.0.1:9090:9090 \
+  --publish ${prometheus_bind_address}:9090:9090 \
   --volume /etc/travel-planner/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro \
   --volume /var/lib/travel-planner/prometheus:/prometheus \
-  ${prometheus_image_reference}
+  ${prometheus_image_reference} \
+  ${prometheus_runtime_flags}
 ExecStop=-/usr/bin/docker stop --time 30 travel-planner-prometheus
 Restart=always
 RestartSec=10
@@ -120,7 +122,8 @@ ExecStart=/usr/bin/docker run \
   --rm \
   --network travel-planner-monitoring \
   --publish 127.0.0.1:3000:3000 \
-  --env GF_AUTH_ANONYMOUS_ENABLED=false \
+  --env GF_AUTH_ANONYMOUS_ENABLED=${grafana_anonymous_viewer_enabled} \
+  --env GF_AUTH_ANONYMOUS_ORG_ROLE=${grafana_anonymous_org_role} \
   --volume /etc/travel-planner/grafana/provisioning:/etc/grafana/provisioning:ro \
   --volume /etc/travel-planner/grafana/dashboards:/var/lib/grafana/dashboards:ro \
   --volume /var/lib/travel-planner/grafana:/var/lib/grafana \

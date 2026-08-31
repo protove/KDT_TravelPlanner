@@ -31,6 +31,10 @@ REQUIRED_TOP_LEVEL_FIELDS = (
 )
 
 REQUIRED_SCENARIOS = ("smoke", "ramp", "baseline", "spike")
+CAPACITY_STRESS_PROFILE_VERSIONS = {
+    "aws-ec2-eks-capacity-stress-v1.0",
+    "aws-ec2-eks-capacity-stress-v1.1",
+}
 
 
 def load_profile(path):
@@ -95,6 +99,17 @@ def validate(profile):
     _validate_mix_sums_to_100(request_mix["baseline"], "requestMix.baseline")
     if "spike" in request_mix:
         _validate_mix_sums_to_100(request_mix["spike"], "requestMix.spike")
+    if profile.get("profileVersion") == "aws-ec2-eks-comparison-v1.1":
+        _require(profile.get("sloVersion") in {"v1.1-candidate", "v1.1-frozen"}, "comparison profile must use the v1.1 contract")
+        for name in ("soak", "scale-step"):
+            _require(name in scenarios, f"scenarios.{name} is missing")
+            _require(scenarios[name].get("maxVUs", 0) <= max_vus, f"scenarios.{name}.maxVUs exceeds limits.maxVUs")
+        _require("normal" in request_mix, "requestMix.normal is missing")
+        _validate_mix_sums_to_100(request_mix["normal"], "requestMix.normal")
+        _require("soak" in request_mix, "requestMix.soak is missing")
+        _validate_mix_sums_to_100(request_mix["soak"], "requestMix.soak")
+    if profile.get("profileVersion") in CAPACITY_STRESS_PROFILE_VERSIONS:
+        _validate_capacity_stress(profile)
 
     return True
 
@@ -142,6 +157,76 @@ def _validate_spike(spike, max_vus):
 def _validate_mix_sums_to_100(mix, label):
     total = sum(mix.values())
     _require(round(total) == 100, f"{label} weights must sum to 100, got {total}")
+
+
+def _validate_capacity_stress(profile):
+    """Validate the separate post-freeze Capacity/Scale Stress contract.
+
+    The base rate is intentionally resolved at execution time from the frozen
+    Baseline contract. This validator checks deterministic stage multipliers
+    and safety ceilings, but never invents or freezes a normal rate.
+    """
+    _require(profile.get("sloVersion") == "v1.1-frozen", "capacity stress must consume v1.1-frozen")
+    _require(
+        profile.get("requestMixVersion") == "aws-ec2-eks-comparison-v1.1",
+        "capacity stress must use the comparison request mix",
+    )
+    limits = profile.get("limits", {})
+    max_vus = limits.get("maxVUs")
+    _require(
+        isinstance(max_vus, (int, float)) and max_vus >= 300,
+        "capacity stress limits.maxVUs must be at least 300",
+    )
+    stress = profile.get("capacityStress")
+    _require(isinstance(stress, dict), "capacityStress is missing")
+    multipliers = stress.get("stageMultipliers")
+    durations = stress.get("stageDurations")
+    _require(multipliers == [1, 2, 4, 8], "capacityStress.stageMultipliers must be [1, 2, 4, 8]")
+    _require(
+        isinstance(durations, list) and len(durations) == len(multipliers),
+        "capacityStress.stageDurations must match stageMultipliers",
+    )
+    for duration in durations:
+        _require(
+            isinstance(duration, str) and re.fullmatch(r"[1-9][0-9]*[smh]", duration),
+            f"invalid capacity stress duration: {duration}",
+        )
+    for name in (
+        "stageGraceSeconds",
+        "capacityStabilitySeconds",
+        "scaleInObservationSeconds",
+        "hardTimeCeilingSeconds",
+        "preAllocatedVUs",
+        "maxVUs",
+        "seededUsers",
+        "runnerRepairLimit",
+    ):
+        value = stress.get(name)
+        _require(isinstance(value, int) and value > 0, f"capacityStress.{name} must be a positive integer")
+    _require(stress["maxVUs"] == max_vus, "capacityStress.maxVUs must equal limits.maxVUs")
+    _require(stress["preAllocatedVUs"] <= stress["maxVUs"], "capacityStress.preAllocatedVUs exceeds maxVUs")
+    _require(stress["seededUsers"] >= stress["maxVUs"], "capacityStress.seededUsers must cover maxVUs")
+    _require(stress["runnerRepairLimit"] == 1, "capacityStress.runnerRepairLimit must be exactly one")
+    scenario = profile.get("scenarios", {}).get("capacity-stress")
+    _require(isinstance(scenario, dict), "scenarios.capacity-stress is missing")
+    _require(
+        scenario.get("stageMultipliers") == multipliers,
+        "scenarios.capacity-stress multipliers do not match capacityStress",
+    )
+    _require(
+        scenario.get("stageDurations") == durations,
+        "scenarios.capacity-stress durations do not match capacityStress",
+    )
+    _require(
+        scenario.get("maxVUs") == stress["maxVUs"],
+        "scenarios.capacity-stress.maxVUs does not match capacityStress",
+    )
+    _require(
+        scenario.get("preAllocatedVUs") == stress["preAllocatedVUs"],
+        "scenarios.capacity-stress.preAllocatedVUs does not match capacityStress",
+    )
+    _require("normal" in profile.get("requestMix", {}), "requestMix.normal is missing for capacity stress")
+    _validate_mix_sums_to_100(profile["requestMix"]["normal"], "requestMix.normal")
 
 
 if __name__ == "__main__":

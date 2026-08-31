@@ -152,6 +152,33 @@ class DeterminePngStatusTest(unittest.TestCase):
             self.assertEqual(result["pendingCaptureContracts"], 1)
 
 
+class DetermineDashboardStatusTest(unittest.TestCase):
+    def test_dashboard_contract_without_png_is_incomplete(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            grafana = root / "grafana"
+            grafana.mkdir()
+            (grafana / "dashboard.capture.json").write_text(
+                json.dumps({"expectedPngPath": "grafana/dashboard.png"}), encoding="utf-8"
+            )
+            result = MANIFEST.determine_dashboard_status(root)
+            self.assertEqual(result["dashboardPngStatus"], "exported-with-missing-file")
+
+    def test_dashboard_contract_and_png_are_hashed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            grafana = root / "grafana"
+            grafana.mkdir()
+            (grafana / "dashboard.capture.json").write_text(
+                json.dumps({"expectedPngPath": "grafana/dashboard.png"}), encoding="utf-8"
+            )
+            (grafana / "dashboard.png").write_bytes(b"png-bytes")
+            result = MANIFEST.determine_dashboard_status(root)
+            self.assertEqual(result["dashboardPngStatus"], "exported")
+            self.assertEqual(result["dashboardPngBytes"], len(b"png-bytes"))
+            self.assertEqual(len(result["dashboardPngSha256"]), 64)
+
+
 class DetermineQueryStatusTest(unittest.TestCase):
     def _write_contract(self, root: Path, panel_id: int = 2, query_paths=None):
         panels_dir = root / "grafana" / "panels"

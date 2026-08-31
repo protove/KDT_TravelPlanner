@@ -274,6 +274,44 @@ def determine_query_status(evidence_root: Path) -> dict:
     return result
 
 
+def determine_dashboard_status(evidence_root: Path) -> dict:
+    """Track the optional full-dashboard capture contract.
+
+    Legacy bundles may not contain a dashboard contract.  New v9 exports do,
+    and then the contract/PNG pair is required by ``--require-png`` just like
+    every claim-bearing panel pair.
+    """
+    grafana_dir = evidence_root / "grafana"
+    contract_path = grafana_dir / "dashboard.capture.json"
+    if not _is_regular_evidence_file(contract_path):
+        return {"dashboardPngStatus": "not-exported"}
+    try:
+        contract = json.loads(contract_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {
+            "dashboardPngStatus": "invalid-contract",
+            "dashboardPngStatusReason": "grafana/dashboard.capture.json is not valid JSON",
+        }
+    expected = contract.get("expectedPngPath")
+    if expected != "grafana/dashboard.png":
+        return {
+            "dashboardPngStatus": "invalid-contract",
+            "dashboardPngStatusReason": "dashboard capture must target grafana/dashboard.png",
+        }
+    png_path = evidence_root / expected
+    if not _is_regular_evidence_file(png_path):
+        return {
+            "dashboardPngStatus": "exported-with-missing-file",
+            "dashboardPngStatusReason": "grafana/dashboard.capture.json has no matching dashboard.png",
+        }
+    digest, size = sha256_of_file(png_path)
+    return {
+        "dashboardPngStatus": "exported",
+        "dashboardPngBytes": size,
+        "dashboardPngSha256": digest,
+    }
+
+
 def build_manifest(evidence_root: Path, run_id: str) -> dict:
     files = []
     for path in iter_bundle_files(evidence_root):
@@ -293,6 +331,7 @@ def build_manifest(evidence_root: Path, run_id: str) -> dict:
     }
     manifest.update(determine_png_status(evidence_root))
     manifest.update(determine_query_status(evidence_root))
+    manifest.update(determine_dashboard_status(evidence_root))
     return manifest
 
 
@@ -357,12 +396,16 @@ def main() -> int:
 
     manifest = build_manifest(evidence_root, args.run_id)
 
+    dashboard_required = (evidence_root / "grafana" / "dashboard.capture.json").is_file()
     if args.require_png and (
-        manifest.get("pngStatus") != "exported" or manifest.get("queryStatus") != "collected"
+        manifest.get("pngStatus") != "exported"
+        or manifest.get("queryStatus") != "collected"
+        or (dashboard_required and manifest.get("dashboardPngStatus") != "exported")
     ):
         raise ManifestError(
             f"--require-png requested but pngStatus={manifest.get('pngStatus')} "
-            f"queryStatus={manifest.get('queryStatus')}; complete every contracted panel and collected Query JSON before finalizing local export"
+            f"queryStatus={manifest.get('queryStatus')} dashboardPngStatus={manifest.get('dashboardPngStatus')}; "
+            "complete every contracted panel/full-dashboard PNG and collected Query JSON before finalizing local export"
         )
 
     checksum_mismatch = False

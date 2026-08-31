@@ -34,7 +34,7 @@ from typing import Any, Callable, Protocol, Sequence
 
 CONTRACT_VERSION = "aws-recovery-live-coordinator-v1"
 APPROVED_REGION_RE = re.compile(r"^[a-z]{2}(?:-gov)?-[a-z]+-[0-9]+$")
-RUN_ID_RE = re.compile(r"^aws-(b02|r01|r03|r05|r07)-[A-Za-z0-9._-]{1,80}$")
+RUN_ID_RE = re.compile(r"^(?:aws-(b02|r01|r03|r05|r07)|scrum43-(b02|r01|r03|r05|r07))-[A-Za-z0-9._-]{1,80}$")
 INSTANCE_ID_RE = re.compile(r"^i-[0-9a-f]{8,32}$")
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 DETAIL_MAX = 200
@@ -64,7 +64,7 @@ STEPS = (
     "restoration-readback",
 )
 
-MUTATION_KINDS = {"b02-terminate", "terraform-apply"}
+MUTATION_KINDS = {"b02-terminate", "terraform-apply", "recovery-rollout"}
 
 
 class CoordinatorError(ValueError):
@@ -90,6 +90,30 @@ def sha256_file(path: Path) -> str:
 def sanitize_detail(detail: str) -> str:
     single_line = " ".join(str(detail).split())
     return single_line[:DETAIL_MAX]
+
+
+def platform_high_watermark(previous: dict[str, Any] | None, current: dict[str, Any]) -> dict[str, Any]:
+    """Merge monotonic readiness observations across skipped polls."""
+
+    previous = previous or {}
+    result = dict(previous)
+    for section in ("deployment", "hpa"):
+        old_status = previous.get(section, {}).get("status", {}) if isinstance(previous.get(section), dict) else {}
+        new_status = current.get(section, {}).get("status", {}) if isinstance(current.get(section), dict) else {}
+        merged = dict(old_status) if isinstance(old_status, dict) else {}
+        if isinstance(new_status, dict):
+            for key in ("replicas", "updatedReplicas", "availableReplicas", "readyReplicas", "currentReplicas", "desiredReplicas"):
+                if isinstance(new_status.get(key), int):
+                    merged[key] = max(int(merged.get(key, 0) or 0), new_status[key])
+        if merged:
+            result[section] = {**(previous.get(section, {}) if isinstance(previous.get(section), dict) else {}), "status": merged}
+    # Pod/node membership is not monotonic, but retaining the most recent
+    # complete section is important when a later SSM poll transiently omits a
+    # kubectl section.  Do not manufacture a replacement from a missing poll.
+    for section in ("pods", "nodes", "events"):
+        if isinstance(current.get(section), dict):
+            result[section] = current[section]
+    return result
 
 
 class ClockPort(Protocol):
@@ -244,9 +268,21 @@ def load_config(path: Path) -> dict[str, Any]:
     _require(scenario in SCENARIO_PREFIX, "config scenario must be B-02/R-01/R-03/R-05/R-07")
     run_id = config.get("runId", "")
     _require(bool(RUN_ID_RE.fullmatch(str(run_id))), "config runId is not an approved Recovery run id")
-    _require(str(run_id).startswith(SCENARIO_PREFIX[scenario]), "config runId prefix does not match scenario")
+    # SCRUM-43 comparison runs use compact scenario IDs (``r01``/``r03``),
+    # while the legacy ``aws-*`` IDs retain their historical mapping.  Keep
+    # the accepted forms aligned with RUN_ID_RE; the previous check expanded
+    # ``R-01`` to ``scrum43-r-01`` and rejected every planned ``scrum43-r01``
+    # run before any AWS call was made.
+    compact_scenario = scenario.replace("-", "").lower()
+    _require(
+        str(run_id).startswith(SCENARIO_PREFIX[scenario])
+        or str(run_id).startswith(f"scrum43-{compact_scenario}-"),
+        "config runId prefix does not match scenario",
+    )
     _require(bool(APPROVED_REGION_RE.fullmatch(str(config.get("region", "")))), "config region is invalid")
-    _require(config.get("environment") == "dev-runtime", "config environment must be dev-runtime")
+    _require(config.get("environment") in {"dev-runtime", "dev-eks", "comparison"}, "config environment must be dev-runtime, dev-eks or comparison")
+    platform = config.get("platform", "ec2")
+    _require(platform in {"ec2", "eks"}, "config platform must be ec2 or eks")
 
     runner = config.get("runner")
     _require(isinstance(runner, dict), "config.runner must be an object")
@@ -265,12 +301,17 @@ def load_config(path: Path) -> dict[str, Any]:
 
     target = config.get("target")
     _require(isinstance(target, dict), "config.target must be an object")
-    for field in ("asgName", "targetGroupArn"):
-        _require(isinstance(target.get(field), str) and target[field], f"target.{field} is required")
+    _require(isinstance(target.get("targetGroupArn"), str) and target["targetGroupArn"], "target.targetGroupArn is required")
+    if platform == "ec2":
+        _require(isinstance(target.get("asgName"), str) and target["asgName"], "target.asgName is required for EC2")
+    else:
+        _require(isinstance(target.get("clusterName"), str) and target["clusterName"], "target.clusterName is required for EKS")
+        _require(isinstance(target.get("nodeGroupName"), str) and target["nodeGroupName"], "target.nodeGroupName is required for EKS")
     if scenario == "B-02":
+        target_instance = target.get("instanceId") or target.get("nodeInstanceId")
         _require(
-            bool(INSTANCE_ID_RE.fullmatch(str(target.get("instanceId", "")))),
-            "B-02 requires target.instanceId",
+            bool(INSTANCE_ID_RE.fullmatch(str(target_instance or ""))),
+            "B-02 requires target.instanceId (EC2) or target.nodeInstanceId (EKS)",
         )
 
     for name, script, mode in (
@@ -292,39 +333,55 @@ def load_config(path: Path) -> dict[str, Any]:
     )
 
     t1 = config.get("t1Mutation")
-    _validate_mutation_spec(t1, "t1Mutation", scenario)
+    _validate_mutation_spec(t1, "t1Mutation", scenario, platform)
     t4 = config.get("t4Mutation")
+    _require(t4 is None, "t4Mutation is forbidden: recovery/image restore is a human operator action")
     if scenario in RESTORE_SCENARIOS:
-        _validate_mutation_spec(t4, "t4Mutation", scenario)
-    else:
-        _require(t4 is None, f"{scenario} must not define t4Mutation")
+        operator_recovery = config.get("operatorRecovery")
+        _require(isinstance(operator_recovery, dict), "restore scenarios require operatorRecovery")
+        _require(operator_recovery.get("mode") == "manual", "operatorRecovery.mode must be manual")
     return config
 
 
-def _validate_mutation_spec(spec: Any, label: str, scenario: str) -> None:
+def _validate_mutation_spec(spec: Any, label: str, scenario: str, platform: str = "ec2") -> None:
     _require(isinstance(spec, dict), f"config.{label} must be an object")
     kind = spec.get("kind")
     _require(kind in MUTATION_KINDS, f"{label}.kind must be one of {sorted(MUTATION_KINDS)}")
     if scenario == "B-02":
         _require(kind == "b02-terminate", "B-02 T1 mutation must use the b02-terminate adapter")
     else:
-        _require(kind == "terraform-apply", f"{scenario} mutations must be exact terraform applies")
+        _require(kind in {"terraform-apply", "recovery-rollout"}, f"{scenario} mutations must use an approved rollout adapter")
     argv = spec.get("argv")
     _require(isinstance(argv, list) and argv and all(isinstance(item, str) for item in argv), f"{label}.argv must be a string list")
     if kind == "b02-terminate":
+        expected_adapter = (
+            "actions/b02-eks-node-replacement.py"
+            if platform == "eks"
+            else "actions/b02-one-instance-replacement.py"
+        )
         _require(
-            argv[0].endswith("actions/b02-one-instance-replacement.py") or (
-                argv[0] == "python3" and len(argv) > 1 and argv[1].endswith("actions/b02-one-instance-replacement.py")
+            argv[0].endswith(expected_adapter) or (
+                argv[0] == "python3" and len(argv) > 1 and argv[1].endswith(expected_adapter)
             ),
-            f"{label}.argv must invoke the B-02 adapter",
+            f"{label}.argv must invoke the platform-specific B-02 adapter",
         )
         _require("execute" in argv, f"{label}.argv must use the adapter execute mode")
         _require("--approval-file" in argv, f"{label}.argv must pass --approval-file")
-    else:
+    elif kind == "terraform-apply":
         _require(argv[0] == "terraform" and "apply" in argv, f"{label}.argv must be a terraform apply")
         _require("-auto-approve" not in argv, f"{label}.argv must not use -auto-approve")
         _require(isinstance(spec.get("planFile"), str) and spec["planFile"], f"{label}.planFile is required")
         _require(argv[-1] == spec["planFile"] or Path(argv[-1]).name == Path(spec["planFile"]).name, f"{label}.argv must apply the exact saved plan")
+        _require(bool(SHA256_RE.fullmatch(str(spec.get("planSha256", "")))), f"{label}.planSha256 is required")
+    else:
+        _require(
+            argv[0].endswith("actions/start-recovery-rollout.py") or (
+                argv[0] == "python3" and len(argv) > 1 and argv[1].endswith("actions/start-recovery-rollout.py")
+            ),
+            f"{label}.argv must invoke the Recovery rollout adapter",
+        )
+        _require("execute" in argv and "--approval-file" in argv, f"{label}.argv must use execute with --approval-file")
+        _require(isinstance(spec.get("planFile"), str) and spec["planFile"], f"{label}.planFile is required")
         _require(bool(SHA256_RE.fullmatch(str(spec.get("planSha256", "")))), f"{label}.planSha256 is required")
     approval = spec.get("approvalFile")
     _require(isinstance(approval, str) and approval, f"{label}.approvalFile is required")
@@ -361,8 +418,10 @@ class CoordinatorState:
                 "scenario": scenario,
                 "steps": {},
                 "mutations": [],
+                "observations": [],
             }
             self._write()
+        self._payload.setdefault("observations", [])
 
     def _write(self) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)
@@ -395,9 +454,30 @@ class CoordinatorState:
         )
         self._write()
 
+    def record_observation(self, stream: str, status: str, detail: dict[str, Any] | None = None) -> None:
+        """Append a non-blocking platform observation.
+
+        Platform events can legitimately be missed between polls. They are
+        recorded as ``not_observed`` rather than creating a synthetic failed
+        lifecycle step, so a skipped state cannot deadlock the run.
+        """
+
+        _require(status in {"observed", "not_observed", "terminal"}, "invalid observation status")
+        self._payload["observations"].append({
+            "stream": stream,
+            "status": status,
+            "recordedAtUtc": utc_iso(self._clock.now()),
+            **({"detail": detail} if detail else {}),
+        })
+        self._write()
+
     @property
     def mutations(self) -> list[dict[str, Any]]:
         return list(self._payload["mutations"])
+
+    @property
+    def observations(self) -> list[dict[str, Any]]:
+        return list(self._payload.get("observations", []))
 
 
 class Coordinator:
@@ -419,6 +499,8 @@ class Coordinator:
         self.mutations = mutations
         self.clock = clock
         self.log = log
+        self.platform = str(config.get("platform", "ec2"))
+        self._last_platform_snapshot: dict[str, Any] | None = None
         timing = config.get("timing", {})
         self.warmup_seconds = int(timing.get("warmupSeconds", 180))
         self.normal_window_seconds = int(timing.get("normalWindowSeconds", 120))
@@ -426,6 +508,13 @@ class Coordinator:
         self.detector_timeout_seconds = int(timing.get("detectorTimeoutSeconds", 900))
         self.run_end_timeout_seconds = int(timing.get("runEndTimeoutSeconds", 2400))
         self.minimum_window_ratio = float(timing.get("minimumWindowSuccessRatio", 0.9))
+        self._operator_recovery_event: dict[str, Any] | None = None
+        # Snapshot the EKS workload before T1.  ``updatedReplicas`` is a
+        # steady-state field and is already non-zero for a healthy Deployment;
+        # comparing it to zero would falsely call every normal run a node
+        # replacement.  The baseline lets detectors identify an actual Pod or
+        # node transition instead.
+        self._eks_pre_t1_snapshot: dict[str, Any] | None = None
 
     # ----- runner helpers ---------------------------------------------------
 
@@ -434,9 +523,21 @@ class Coordinator:
         quoted = " ".join(shlex.quote(item) for item in argv)
         command = f"cd {shlex.quote(repo)} && {quoted}"
         if background:
+            # SSM Run Command tracks descendants in its execution cgroup. A
+            # plain nohup/setsid child therefore keeps the invocation InProgress
+            # until k6 exits and is killed at executionTimeout. systemd-run
+            # creates a separate transient unit and --no-block returns after
+            # handing off the workload; k6 still owns RUN_END/run-status and no
+            # recovery action is automated here.
+            unit_suffix = re.sub(r"[^A-Za-z0-9_.-]", "-", str(self.config["runId"]))
+            unit = f"scrum43-recovery-{unit_suffix}"[:240]
+            detached = shlex.quote(
+                f"{quoted} >> {shlex.quote(self.config['runner']['runDir'])}/coordinator-workload.log 2>&1"
+            )
             command = (
-                f"cd {shlex.quote(repo)} && nohup {quoted} "
-                f">> {shlex.quote(self.config['runner']['runDir'])}/coordinator-workload.log 2>&1 & echo started:$!"
+                f"systemd-run --unit={shlex.quote(unit)} --collect --no-block "
+                f"--working-directory={shlex.quote(repo)} /bin/sh -c {detached} "
+                f"> /dev/null 2>&1 && echo started:{shlex.quote(unit)}"
             )
         return self.ssm.run(command, timeout_seconds=timeout_seconds, comment=comment)
 
@@ -468,6 +569,56 @@ class Coordinator:
             raise CoordinatorError(f"live stats output is not JSON: {error}") from error
         return payload
 
+    def _read_operator_recovery_event(self) -> dict[str, Any] | None:
+        """Read the operator's post-T3 recovery marker without mutating it.
+
+        Recovery is intentionally a human decision.  A healthy target by
+        itself is not enough to advance T4 because an ASG/EKS controller can
+        become healthy again without the operator having cancelled the bad
+        refresh or restored the known-good image.  The separate
+        ``OPERATOR_RECOVERY`` event is therefore the explicit hand-off from
+        the operator to this coordinator.
+        """
+
+        if self._operator_recovery_event is not None:
+            return dict(self._operator_recovery_event)
+        _require(self.state.is_done("t3"), "manual operator recovery requires a recorded T3")
+        run_dir = self.config["runner"]["runDir"]
+        output = self._runner_shell(
+            [
+                "sh",
+                "-c",
+                "if [ -f {path} ]; then tail -n 200 {path}; fi".format(
+                    path=shlex.quote(run_dir + "/operations.jsonl")
+                ),
+            ],
+            timeout_seconds=90,
+            comment="operator-recovery-event",
+        )
+        t3_epoch = self.state.step_epoch("t3")
+        for raw_line in output.splitlines():
+            try:
+                entry = json.loads(raw_line)
+                if not isinstance(entry, dict):
+                    continue
+                event_time = datetime.fromisoformat(
+                    str(entry.get("ts", "")).replace("Z", "+00:00")
+                ).timestamp()
+            except (TypeError, ValueError, json.JSONDecodeError):
+                continue
+            if (
+                entry.get("event") == "OPERATOR_RECOVERY"
+                and entry.get("actor") == "operator"
+                and event_time >= t3_epoch
+            ):
+                self._operator_recovery_event = {
+                    "event": "OPERATOR_RECOVERY",
+                    "actor": "operator",
+                    "recordedAtUtc": utc_iso(event_time),
+                }
+                return dict(self._operator_recovery_event)
+        return None
+
     # ----- AWS detectors ----------------------------------------------------
 
     def _target_health(self) -> dict[str, str]:
@@ -488,6 +639,8 @@ class Coordinator:
         return result
 
     def _scaling_activities(self, *, since_step: str = "t1") -> list[dict[str, Any]]:
+        if self.platform == "eks" and not self.config["target"].get("asgName"):
+            return []
         payload = self.aws.call(
             [
                 "autoscaling",
@@ -512,6 +665,16 @@ class Coordinator:
         return recent
 
     def _instance_refreshes(self) -> list[dict[str, Any]]:
+        if self.platform == "eks" and not self.config["target"].get("asgName"):
+            payload = self.aws.call([
+                "eks", "describe-nodegroup",
+                "--cluster-name", self.config["target"]["clusterName"],
+                "--nodegroup-name", self.config["target"]["nodeGroupName"],
+            ])
+            nodegroup = payload.get("nodegroup", {}) if isinstance(payload, dict) else {}
+            status = nodegroup.get("status")
+            update = nodegroup.get("updateConfig", {}) if isinstance(nodegroup, dict) else {}
+            return [{"Status": status, "PercentageComplete": update.get("maxUnavailablePercentage", 0)}]
         payload = self.aws.call(
             [
                 "autoscaling",
@@ -523,6 +686,58 @@ class Coordinator:
             ]
         )
         return payload.get("InstanceRefreshes", [])
+
+    def _eks_snapshot(self) -> dict[str, Any]:
+        """Read a sanitized kubectl snapshot through the SSM bastion."""
+
+        target = self.config["target"]
+        cluster = target["clusterName"]
+        node_group = target["nodeGroupName"]
+        namespace = target.get("namespace", "travel-planner")
+        deployment = target.get("deployment", "backend")
+        region = self.config["region"]
+        command = (
+            "set -euo pipefail; "
+            # AWS-RunShellScript executes as root with HOME unset on the
+            # Bastion. Pin the kubeconfig location so the read-only snapshot
+            # actually uses the context prepared by the deployment runner.
+            "export HOME=/root KUBECONFIG=/root/.kube/config; "
+            f"aws eks update-kubeconfig --name {shlex.quote(cluster)} --region {shlex.quote(region)} --alias scr43-eks; "
+            f"printf '%s\\n' __SCRUM53_DEPLOYMENT_BEGIN__; kubectl --context scr43-eks -n {shlex.quote(namespace)} get deployment {shlex.quote(deployment)} -o json; printf '%s\\n' __SCRUM53_DEPLOYMENT_END__; "
+            f"printf '%s\\n' __SCRUM53_PODS_BEGIN__; kubectl --context scr43-eks -n {shlex.quote(namespace)} get pods -l app.kubernetes.io/name=travel-planner-backend -o json; printf '%s\\n' __SCRUM53_PODS_END__; "
+            f"printf '%s\\n' __SCRUM53_HPA_BEGIN__; kubectl --context scr43-eks -n {shlex.quote(namespace)} get hpa {shlex.quote(deployment)} -o json; printf '%s\\n' __SCRUM53_HPA_END__"
+            f"; printf '%s\\n' __SCRUM53_NODES_BEGIN__; kubectl --context scr43-eks get nodes -o json; printf '%s\\n' __SCRUM53_NODES_END__"
+            f"; printf '%s\\n' __SCRUM53_EVENTS_BEGIN__; kubectl --context scr43-eks get events --all-namespaces --sort-by=.lastTimestamp -o json; printf '%s\\n' __SCRUM53_EVENTS_END__"
+        )
+        stdout = self.ssm.run(command, timeout_seconds=180, comment="eks-platform-snapshot")
+        snapshots: dict[str, Any] = {}
+        for key in ("deployment", "pods", "hpa", "nodes", "events"):
+            begin = f"__SCRUM53_{key.upper()}_BEGIN__"
+            end = f"__SCRUM53_{key.upper()}_END__"
+            match = re.search(re.escape(begin) + r"\s*(.*?)\s*" + re.escape(end), stdout, re.DOTALL)
+            if not match:
+                continue
+            try:
+                parsed = json.loads(match.group(1))
+            except json.JSONDecodeError as error:
+                raise CoordinatorError(f"EKS snapshot section {key} is not JSON") from error
+            if isinstance(parsed, dict):
+                snapshots[key] = parsed
+        if not snapshots:
+            self.state.record_observation("eks-platform-snapshot", "not_observed", {"reason": "no kubectl sections"})
+        else:
+            self.state.record_observation("eks-platform-snapshot", "observed", {"sections": sorted(snapshots)})
+        merged = platform_high_watermark(self._last_platform_snapshot, snapshots)
+        self._last_platform_snapshot = merged
+        return merged
+
+    def _eks_ready(self, snapshot: dict[str, Any]) -> bool:
+        deployment = snapshot.get("deployment", {}) if isinstance(snapshot.get("deployment"), dict) else {}
+        status = deployment.get("status", {}) if isinstance(deployment.get("status"), dict) else {}
+        desired = int(status.get("replicas", 2) or 2)
+        available = int(status.get("availableReplicas", 0) or 0)
+        ready = int(status.get("readyReplicas", 0) or 0)
+        return desired >= 2 and available >= 2 and ready >= 2
 
     def _poll_until(self, label: str, probe: Callable[[], str | None]) -> str:
         deadline = self.clock.now() + self.detector_timeout_seconds
@@ -573,7 +788,15 @@ class Coordinator:
         _require(stats.get("status") == "ok", "live stats unavailable for the pre-T1 window")
         rate = float(self.config.get("rate", 0) or 0)
         _require(rate > 0, "config.rate must be the frozen D-005 rate")
-        expected = rate * self.normal_window_seconds
+        # The frozen comparison mix includes auth refreshes, which are
+        # intentionally excluded from the Core API counters by contract. Keep
+        # the pre-T1 gate on the same observable unit as the evaluator instead
+        # of demanding ``rate * window`` Core operations. The run config records
+        # the share derived from the frozen request mix (0.88 for v1.1); a
+        # missing value retains the legacy 1.0 default for older fixtures.
+        core_share = float(self.config.get("coreOperationShare", 1.0))
+        _require(0 < core_share <= 1, "config.coreOperationShare must be within (0, 1]")
+        expected = rate * core_share * self.normal_window_seconds
         successful = float(stats.get("successful") or 0)
         _require(
             successful >= expected * self.minimum_window_ratio,
@@ -581,6 +804,8 @@ class Coordinator:
         )
         _require(float(stats.get("unexpectedErrors") or 0) == 0, "pre-T1 window observed unexpected errors")
         _require(float(stats.get("contractFailures") or 0) == 0, "pre-T1 window observed contract failures")
+        if self.platform == "eks":
+            self._eks_pre_t1_snapshot = self._eks_snapshot()
         self.log(f"[coordinator] pre-T1 normal window verified: successful={successful}")
 
     def _execute_mutation(self, label: str) -> None:
@@ -591,7 +816,7 @@ class Coordinator:
             sha256_file(approval_path) == spec["approvalSha256"],
             f"{label} approval artifact digest changed; approval is void",
         )
-        if spec["kind"] == "terraform-apply":
+        if spec["kind"] in {"terraform-apply", "recovery-rollout"}:
             plan_path = Path(spec["planFile"])
             _require(plan_path.is_file(), f"{label} saved plan is missing")
             _require(
@@ -600,8 +825,8 @@ class Coordinator:
             )
         argv_sha = hashlib.sha256(json.dumps(spec["argv"]).encode()).hexdigest()
         code, stdout, stderr = self.mutations.execute(spec, timeout=float(spec.get("timeoutSeconds", 900)))
-        self.state.record_mutation(spec["kind"], argv_sha)
         _require(code == 0, f"{label} mutation failed: {stderr.strip()[:300]}")
+        self.state.record_mutation(spec["kind"], argv_sha)
 
     def step_t1(self) -> None:
         _require(self.state.is_done("pre-t1-window"), "T1 requires a verified pre-T1 window")
@@ -610,14 +835,53 @@ class Coordinator:
             stats.get("status") == "ok" and (stats.get("operations") or 0) > 0,
             "T1 requires an active workload",
         )
-        self.record_event("T1", self.config.get("t1Detail", "approved fault/rollout command issued"))
         self._execute_mutation("t1Mutation")
+        self.record_event("T1", self.config.get("t1Detail", "approved fault/rollout command issued"))
         self.log("[coordinator] T1 mutation executed")
 
     # -- scenario detectors, each returns sanitized detail --
 
     def _detect_t2(self) -> str:
         scenario = self.config["scenario"]
+        if self.platform == "eks":
+            def probe() -> str | None:
+                snapshot = self._eks_snapshot()
+                previous = self._eks_pre_t1_snapshot or {}
+                previous_nodes = {
+                    item.get("metadata", {}).get("name")
+                    for item in (previous.get("nodes", {}).get("items", []) if isinstance(previous.get("nodes"), dict) else [])
+                    if isinstance(item, dict)
+                }
+                current_nodes = {
+                    item.get("metadata", {}).get("name")
+                    for item in (snapshot.get("nodes", {}).get("items", []) if isinstance(snapshot.get("nodes"), dict) else [])
+                    if isinstance(item, dict)
+                }
+                previous_pods = {
+                    item.get("metadata", {}).get("name")
+                    for item in (previous.get("pods", {}).get("items", []) if isinstance(previous.get("pods"), dict) else [])
+                    if isinstance(item, dict)
+                }
+                current_pods = {
+                    item.get("metadata", {}).get("name")
+                    for item in (snapshot.get("pods", {}).get("items", []) if isinstance(snapshot.get("pods"), dict) else [])
+                    if isinstance(item, dict)
+                }
+                if previous_nodes and current_nodes and current_nodes != previous_nodes:
+                    return "EKS managed node membership changed after B-02"
+                if previous_pods and current_pods and current_pods != previous_pods:
+                    return "EKS backend Pod was rescheduled after B-02"
+                for activity in self._scaling_activities():
+                    description = str(activity.get("Description", ""))
+                    if "Launching" in description or "Terminating" in description:
+                        return "EKS managed-node ASG recorded a replacement activity"
+                deployment = snapshot.get("deployment", {}) if isinstance(snapshot.get("deployment"), dict) else {}
+                status = deployment.get("status", {}) if isinstance(deployment.get("status"), dict) else {}
+                old_status = previous.get("deployment", {}).get("status", {}) if isinstance(previous.get("deployment"), dict) else {}
+                if int(status.get("updatedReplicas", 0) or 0) > int(old_status.get("updatedReplicas", 0) or 0):
+                    return "EKS Deployment observed an updated backend replica"
+                return None
+            return self._poll_until(f"{scenario} EKS first replacement", probe)
         if scenario == "B-02":
             instance = self.config["target"]["instanceId"]
 
@@ -654,6 +918,47 @@ class Coordinator:
 
     def _detect_t3(self) -> str:
         scenario = self.config["scenario"]
+        if self.platform == "eks":
+            if scenario == "B-02":
+                def probe_b02() -> str | None:
+                    # Node loss is the B-02 signal. Readiness may remain
+                    # healthy while Kubernetes reschedules the Pod, so do
+                    # not wait for a probe failure that this scenario does
+                    # not promise.
+                    previous = self._eks_pre_t1_snapshot or {}
+                    snapshot = self._eks_snapshot()
+                    previous_nodes = {
+                        item.get("metadata", {}).get("name")
+                        for item in (previous.get("nodes", {}).get("items", []) if isinstance(previous.get("nodes"), dict) else [])
+                        if isinstance(item, dict)
+                    }
+                    current_nodes = {
+                        item.get("metadata", {}).get("name")
+                        for item in (snapshot.get("nodes", {}).get("items", []) if isinstance(snapshot.get("nodes"), dict) else [])
+                        if isinstance(item, dict)
+                    }
+                    if previous_nodes and current_nodes and current_nodes != previous_nodes:
+                        return "EKS managed node loss/replacement signal observed"
+                    for activity in self._scaling_activities():
+                        description = str(activity.get("Description", ""))
+                        if "Terminating" in description or "Launching" in description:
+                            return "EKS managed-node ASG recorded the B-02 replacement activity"
+                    return None
+                return self._poll_until("B-02 EKS node-loss detection", probe_b02)
+
+            def probe() -> str | None:
+                snapshot = self._eks_snapshot()
+                deployment = snapshot.get("deployment", {}) if isinstance(snapshot.get("deployment"), dict) else {}
+                status = deployment.get("status", {}) if isinstance(deployment.get("status"), dict) else {}
+                if not self._eks_ready(snapshot):
+                    return "EKS Deployment/Pod readiness failure observed"
+                health = self._target_health()
+                if any(state in {"unhealthy", "initial", "draining"} for state in health.values()):
+                    return "EKS ALB Pod-IP readiness failure observed"
+                if int(status.get("updatedReplicas", 0) or 0) > 0 and int(status.get("availableReplicas", 0) or 0) < int(status.get("replicas", 2) or 2):
+                    return "EKS rollout has updated but unavailable replicas"
+                return None
+            return self._poll_until(f"{scenario} EKS readiness failure", probe)
         if scenario == "B-02":
 
             def probe() -> str | None:
@@ -695,8 +1000,32 @@ class Coordinator:
     def _detect_t4(self) -> str:
         scenario = self.config["scenario"]
         if scenario in RESTORE_SCENARIOS:
-            self._execute_mutation("t4Mutation")
-            return "manual baseline restore apply issued"
+            self.state.record_observation("operator-recovery", "not_observed", {"mode": "manual"})
+
+            def probe() -> str | None:
+                operator_event = self._read_operator_recovery_event()
+                if operator_event is None:
+                    return None
+                health = self._target_health()
+                healthy = sum(state == "healthy" for state in health.values())
+                if self.platform == "eks":
+                    snapshot = self._eks_snapshot()
+                    ready = self._eks_ready(snapshot)
+                else:
+                    ready = healthy >= int(self.config.get("expectedHealthyTargets", 2))
+                if healthy >= int(self.config.get("expectedHealthyTargets", 2)) and ready:
+                    self.state.record_observation(
+                        "operator-recovery",
+                        "observed",
+                        {
+                            "healthyTargets": healthy,
+                            "event": operator_event,
+                        },
+                    )
+                    return "human operator recovery observed; automation issued no restore mutation"
+                return None
+
+            return self._poll_until("manual operator recovery", probe)
         if scenario == "B-02":
 
             def probe() -> str | None:
@@ -730,7 +1059,10 @@ class Coordinator:
             health = self._target_health()
             healthy = {target for target, state in health.items() if state == "healthy"}
             others = {target: state for target, state in health.items() if state != "healthy"}
-            if len(healthy) >= expected_healthy and not others and not (healthy & forbidden):
+            eks_ready = True
+            if self.platform == "eks":
+                eks_ready = self._eks_ready(self._eks_snapshot())
+            if len(healthy) >= expected_healthy and not others and not (healthy & forbidden) and eks_ready:
                 return f"{len(healthy)} targets healthy"
             return None
 
@@ -762,6 +1094,40 @@ class Coordinator:
         self.log("[coordinator] RUN_END observed on runner")
 
     def step_restoration_readback(self) -> None:
+        if self.platform == "eks":
+            payload = self.aws.call([
+                "eks", "describe-nodegroup",
+                "--cluster-name", self.config["target"]["clusterName"],
+                "--nodegroup-name", self.config["target"]["nodeGroupName"],
+            ])
+            nodegroup = payload.get("nodegroup", {}) if isinstance(payload, dict) else {}
+            scaling = nodegroup.get("scalingConfig", {}) if isinstance(nodegroup, dict) else {}
+            _require(
+                (scaling.get("minSize"), scaling.get("desiredSize"), scaling.get("maxSize")) == (2, 2, 4),
+                f"EKS node group capacity is not restored: {scaling}",
+            )
+            health = self._target_health()
+            healthy = [target for target, state in health.items() if state == "healthy"]
+            snapshot = self._eks_snapshot()
+            _require(self._eks_ready(snapshot), "EKS Deployment is not ready during restoration read-back")
+            _require(len(healthy) >= int(self.config.get("expectedHealthyTargets", 2)), "EKS healthy Pod target count is below the expected floor")
+            readback = {
+                "contractVersion": CONTRACT_VERSION,
+                "runId": self.config["runId"],
+                "scenario": self.config["scenario"],
+                "platform": "eks",
+                "status": "verified",
+                "capacity": {"minSize": scaling.get("minSize"), "desiredCapacity": scaling.get("desiredSize"), "maxSize": scaling.get("maxSize")},
+                "healthyTargetCount": len(healthy),
+                "deploymentReady": True,
+                "mutationsExecuted": self.state.mutations,
+                "recordedAtUtc": utc_iso(self.clock.now()),
+            }
+            control_dir = Path(self.config["controlDir"])
+            control_dir.mkdir(parents=True, exist_ok=True)
+            (control_dir / "restoration-readback.json").write_text(json.dumps(readback, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+            self.log("[coordinator] EKS restoration read-back verified")
+            return
         asg_payload = self.aws.call(
             [
                 "autoscaling",
@@ -785,6 +1151,7 @@ class Coordinator:
             "contractVersion": CONTRACT_VERSION,
             "runId": self.config["runId"],
             "scenario": self.config["scenario"],
+            "status": "verified",
             "capacity": {"minSize": capacity[0], "desiredCapacity": capacity[1], "maxSize": capacity[2]},
             "healthyTargetCount": len(healthy),
             "mutationsExecuted": self.state.mutations,
@@ -833,7 +1200,7 @@ class Coordinator:
 
 def dry_run_report(config: dict[str, Any]) -> dict[str, Any]:
     checks = []
-    for label in ("t1Mutation", "t4Mutation"):
+    for label in ("t1Mutation",):
         spec = config.get(label)
         if not spec:
             continue
@@ -853,9 +1220,11 @@ def dry_run_report(config: dict[str, Any]) -> dict[str, Any]:
         "mode": "dry-run",
         "runId": config["runId"],
         "scenario": config["scenario"],
+        "platform": config.get("platform", "ec2"),
         "steps": list(STEPS),
         "mutationChecks": checks,
         "mutations": [],
+        "operatorRecovery": config.get("operatorRecovery", {"mode": "not-applicable"}),
     }
 
 
