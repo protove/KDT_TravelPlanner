@@ -13,7 +13,7 @@
       {
         "datasource": { "type": "loki", "uid": "loki" },
         "enable": true,
-        "expr": "{job=\"kubernetes-pods\", environment=\"dev-eks\"} |= \"load-test\"",
+        "expr": "{service=\"travel-planner-backend\"} |= \"load-test\"",
         "iconColor": "#F2495C",
         "name": "EKS load-test events",
         "type": "tags"
@@ -26,52 +26,154 @@
   "panels": [
     {
       "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "description": "Kube-state-metrics Pod phase series for the selected namespace.",
       "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
       "id": 1,
       "options": { "legend": { "displayMode": "table", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
       "targets": [
-        { "expr": "sum(kube_pod_status_phase{namespace=~\"$namespace\", phase=\"Running\"})", "legendFormat": "running pods", "refId": "A" },
-        { "expr": "sum(kube_pod_status_phase{namespace=~\"$namespace\", phase=\"Failed\"})", "legendFormat": "failed pods", "refId": "B" }
+        { "expr": "sum(kube_pod_status_phase{namespace=~\"$namespace\",phase=\"Running\"})", "legendFormat": "running pods", "refId": "A" },
+        { "expr": "sum(kube_pod_status_phase{namespace=~\"$namespace\",phase=\"Pending\"})", "legendFormat": "pending pods", "refId": "B" },
+        { "expr": "sum(kube_pod_status_phase{namespace=~\"$namespace\",phase=\"Failed\"})", "legendFormat": "failed pods", "refId": "C" }
       ],
       "title": "Pod phase by namespace",
       "type": "timeseries"
     },
     {
       "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "description": "Kube-state-metrics Deployment desired, available and unavailable replicas.",
       "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
       "id": 2,
       "options": { "legend": { "displayMode": "table", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
       "targets": [
-        { "expr": "sum(kube_deployment_status_replicas_available{namespace=~\"$namespace\"})", "legendFormat": "available replicas", "refId": "A" },
-        { "expr": "sum(kube_deployment_status_replicas_unavailable{namespace=~\"$namespace\"})", "legendFormat": "unavailable replicas", "refId": "B" }
+        { "expr": "sum(kube_deployment_spec_replicas{namespace=~\"$namespace\"})", "legendFormat": "desired replicas", "refId": "A" },
+        { "expr": "sum(kube_deployment_status_replicas_available{namespace=~\"$namespace\"})", "legendFormat": "available replicas", "refId": "B" },
+        { "expr": "sum(kube_deployment_status_replicas_unavailable{namespace=~\"$namespace\"})", "legendFormat": "unavailable replicas", "refId": "C" }
       ],
       "title": "Deployment availability",
       "type": "timeseries"
     },
     {
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] },
+      "description": "HPA decisions are separate from observed Pod and node placement.",
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
       "id": 3,
       "options": { "legend": { "displayMode": "table", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
       "targets": [
-        { "expr": "sum(rate(http_server_requests_seconds_count{environment=\"dev-eks\"}[5m]))", "legendFormat": "backend request rate", "refId": "A" }
+        { "expr": "sum(kube_horizontalpodautoscaler_status_desired_replicas{namespace=~\"$namespace\"})", "legendFormat": "HPA desired", "refId": "A" },
+        { "expr": "sum(kube_horizontalpodautoscaler_status_current_replicas{namespace=~\"$namespace\"})", "legendFormat": "HPA current", "refId": "B" },
+        { "expr": "sum(kube_horizontalpodautoscaler_spec_max_replicas{namespace=~\"$namespace\"})", "legendFormat": "HPA max", "refId": "C" }
       ],
-      "title": "Annotated backend request rate",
+      "title": "Backend HPA desired / current / max",
       "type": "timeseries"
     },
     {
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "fieldConfig": { "defaults": { "unit": "percent" }, "overrides": [] },
+      "description": "Kube-state-metrics Ready condition shows node-level scale-out capacity.",
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
       "id": 4,
       "options": { "legend": { "displayMode": "table", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
       "targets": [
-        { "expr": "100 * (1 - avg(rate(node_cpu_seconds_total{mode=\"idle\"}[5m])))", "legendFormat": "node cpu busy", "refId": "A" }
+        { "expr": "sum(kube_node_status_condition{condition=\"Ready\",status=\"true\"})", "legendFormat": "ready nodes", "refId": "A" },
+        { "expr": "sum(kube_node_status_condition{condition=\"Ready\",status=\"false\"})", "legendFormat": "not-ready nodes", "refId": "B" }
       ],
-      "title": "EKS node CPU pressure",
+      "title": "Ready node count",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "description": "Pending Pods are the scheduling-pressure signal; an idle run may legitimately have no reason series.",
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+      "id": 5,
+      "options": { "legend": { "displayMode": "table", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        { "expr": "sum(kube_pod_status_phase{namespace=~\"$namespace\",phase=\"Pending\"})", "legendFormat": "pending pods", "refId": "A" },
+        { "expr": "sum(kube_pod_status_reason{namespace=~\"$namespace\",reason=~\"Unschedulable|FailedScheduling\"})", "legendFormat": "unschedulable reasons", "refId": "B" }
+      ],
+      "title": "Scheduling pressure",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "description": "Spring Boot Actuator request counter scraped from annotated backend Pods.",
+      "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
+      "id": 6,
+      "options": { "legend": { "displayMode": "table", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        { "expr": "sum(rate(http_server_requests_seconds_count{app=\"travel-planner-backend\",environment=\"$environment\"}[5m]))", "legendFormat": "backend request rate", "refId": "A" }
+      ],
+      "title": "Backend throughput",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "description": "Spring Boot request histogram p95 from the backend scrape.",
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 24 },
+      "id": 7,
+      "options": { "legend": { "displayMode": "table", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        { "expr": "histogram_quantile(0.95,sum by (le) (rate(http_server_requests_seconds_bucket{app=\"travel-planner-backend\",environment=\"$environment\"}[5m])))", "legendFormat": "backend p95", "refId": "A" }
+      ],
+      "title": "Backend latency p95",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "description": "5xx ratio from the same backend request counter used for the SLO check.",
+      "fieldConfig": { "defaults": { "unit": "percent" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 24 },
+      "id": 8,
+      "options": { "legend": { "displayMode": "table", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        { "expr": "100 * sum(rate(http_server_requests_seconds_count{app=\"travel-planner-backend\",environment=\"$environment\",status=~\"5..\"}[5m])) / clamp_min(sum(rate(http_server_requests_seconds_count{app=\"travel-planner-backend\",environment=\"$environment\"}[5m])),0.001)", "legendFormat": "5xx ratio", "refId": "A" }
+      ],
+      "title": "Backend 5xx ratio",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "description": "Actuator process CPU is an application bottleneck signal, not node CPU utilization.",
+      "fieldConfig": { "defaults": { "unit": "percent" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 32 },
+      "id": 9,
+      "options": { "legend": { "displayMode": "table", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        { "expr": "100 * avg(rate(process_cpu_seconds_total{app=\"travel-planner-backend\",environment=\"$environment\"}[5m]))", "legendFormat": "backend process CPU", "refId": "A" }
+      ],
+      "title": "Backend process CPU",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "description": "Actuator JVM heap usage across backend Pods.",
+      "fieldConfig": { "defaults": { "unit": "bytes" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 32 },
+      "id": 10,
+      "options": { "legend": { "displayMode": "table", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        { "expr": "sum(jvm_memory_used_bytes{app=\"travel-planner-backend\",environment=\"$environment\",area=\"heap\"})", "legendFormat": "heap used", "refId": "A" }
+      ],
+      "title": "Backend JVM heap",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "description": "Hikari active and pending connections expose a database-pool bottleneck.",
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 40 },
+      "id": 11,
+      "options": { "legend": { "displayMode": "table", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        { "expr": "sum(hikaricp_connections_active{app=\"travel-planner-backend\",environment=\"$environment\"})", "legendFormat": "active connections", "refId": "A" },
+        { "expr": "sum(hikaricp_connections_pending{app=\"travel-planner-backend\",environment=\"$environment\"})", "legendFormat": "pending connections", "refId": "B" }
+      ],
+      "title": "Backend Hikari connections",
       "type": "timeseries"
     }
   ],
@@ -80,7 +182,7 @@
   "templating": {
     "list": [
       { "current": { "text": "dev-eks", "value": "dev-eks" }, "hide": 0, "includeAll": false, "label": "Environment", "name": "environment", "options": [{ "selected": true, "text": "dev-eks", "value": "dev-eks" }], "query": "dev-eks", "type": "custom" },
-      { "current": { "text": "All", "value": "$__all" }, "datasource": { "type": "prometheus", "uid": "prometheus" }, "definition": "label_values(kube_pod_info, namespace)", "includeAll": true, "label": "Namespace", "name": "namespace", "options": [], "query": "label_values(kube_pod_info, namespace)", "refresh": 1, "type": "query" }
+      { "current": { "text": "All", "value": "$__all" }, "datasource": { "type": "prometheus", "uid": "prometheus" }, "definition": "label_values(kube_pod_info{environment=\"$environment\"}, namespace)", "includeAll": true, "label": "Namespace", "name": "namespace", "options": [], "query": "label_values(kube_pod_info{environment=\"$environment\"}, namespace)", "refresh": 1, "type": "query" }
     ]
   },
   "time": { "from": "now-1h", "to": "now" },
@@ -88,5 +190,5 @@
   "timezone": "browser",
   "title": "AWS EKS Load Test",
   "uid": "aws-eks-load-test",
-  "version": 1
+  "version": 2
 }

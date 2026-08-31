@@ -1,0 +1,29 @@
+{
+  "schemaVersion": "aws-eks-load-test-required-queries/v1",
+  "dashboardUid": "aws-eks-load-test",
+  "defaultMaxAgeSeconds": 180,
+  "freshnessReference": "fixedRangeEnd",
+  "statuses": ["collected", "empty", "stale", "error"],
+  "queries": [
+    { "key": "1/A", "name": "pod_running", "required": true, "idleEmptyAllowed": false, "maxAgeSeconds": 180 },
+    { "key": "1/B", "name": "pod_pending", "required": true, "idleEmptyAllowed": true, "maxAgeSeconds": 180 },
+    { "key": "1/C", "name": "pod_failed", "required": true, "idleEmptyAllowed": true, "maxAgeSeconds": 180 },
+    { "key": "2/A", "name": "deployment_desired", "required": true, "idleEmptyAllowed": false, "maxAgeSeconds": 180 },
+    { "key": "2/B", "name": "deployment_available", "required": true, "idleEmptyAllowed": false, "maxAgeSeconds": 180 },
+    { "key": "2/C", "name": "deployment_unavailable", "required": true, "idleEmptyAllowed": true, "maxAgeSeconds": 180 },
+    { "key": "3/A", "name": "hpa_desired", "required": true, "idleEmptyAllowed": false, "maxAgeSeconds": 180 },
+    { "key": "3/B", "name": "hpa_current", "required": true, "idleEmptyAllowed": false, "maxAgeSeconds": 180 },
+    { "key": "3/C", "name": "hpa_max", "required": true, "idleEmptyAllowed": false, "maxAgeSeconds": 180 },
+    { "key": "4/A", "name": "ready_nodes", "required": true, "idleEmptyAllowed": false, "maxAgeSeconds": 180 },
+    { "key": "4/B", "name": "not_ready_nodes", "required": true, "idleEmptyAllowed": true, "maxAgeSeconds": 180 },
+    { "key": "5/A", "name": "pending_pods_for_scheduling", "required": true, "idleEmptyAllowed": true, "maxAgeSeconds": 180 },
+    { "key": "5/B", "name": "unschedulable_pod_reasons", "required": false, "idleEmptyAllowed": true, "maxAgeSeconds": 180 },
+    { "key": "6/A", "name": "backend_throughput", "required": true, "idleEmptyAllowed": false, "maxAgeSeconds": 120 },
+    { "key": "7/A", "name": "backend_latency_p95", "required": true, "idleEmptyAllowed": false, "maxAgeSeconds": 120 },
+    { "key": "8/A", "name": "backend_5xx_ratio", "required": true, "idleEmptyAllowed": true, "maxAgeSeconds": 120 },
+    { "key": "9/A", "name": "backend_process_cpu", "required": true, "idleEmptyAllowed": false, "maxAgeSeconds": 120 },
+    { "key": "10/A", "name": "backend_jvm_heap", "required": true, "idleEmptyAllowed": false, "maxAgeSeconds": 120 },
+    { "key": "11/A", "name": "hikari_active", "required": true, "idleEmptyAllowed": false, "maxAgeSeconds": 120 },
+    { "key": "11/B", "name": "hikari_pending", "required": true, "idleEmptyAllowed": true, "maxAgeSeconds": 120 }
+  ]
+}

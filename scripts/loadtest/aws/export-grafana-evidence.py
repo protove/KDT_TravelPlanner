@@ -39,6 +39,7 @@ import argparse
 import base64
 import json
 import os
+import re
 import subprocess
 import sys
 import urllib.parse
@@ -48,6 +49,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 QUERYABLE_DATASOURCE_TYPES = {"prometheus", "loki", "cloudwatch"}
+CUSTOM_VARIABLE_PATTERN = re.compile(r"\$(?!__)([A-Za-z_][A-Za-z0-9_]*)")
 CLOUDWATCH_DIMENSION_VARIABLES = {
     "alb_dimension": "albDimension",
     "target_group_dimension": "targetGroupDimension",
@@ -72,6 +74,22 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--from-utc", default="", help="Default: metadata.json's startedAtUtc")
     parser.add_argument("--to-utc", default="", help="Default: metadata.json's endedAtUtc")
     parser.add_argument("--region", default="", help="Required to collect CloudWatch panel queries")
+    parser.add_argument(
+        "--required-query-contract",
+        type=Path,
+        default=None,
+        help=(
+            "JSON contract for required/optional dashboard queries; the EKS dashboard uses "
+            "monitoring/grafana/contracts/aws-eks-load-test-required-queries.json by default"
+        ),
+    )
+    parser.add_argument(
+        "--variable",
+        action="append",
+        default=[],
+        metavar="NAME=VALUE",
+        help="Override a Grafana dashboard variable before direct Prometheus/Loki export (repeatable)",
+    )
     parser.add_argument(
         "--anonymous-viewer",
         action="store_true",
@@ -209,7 +227,73 @@ def resolve_cloudwatch_dimensions(dimensions: dict, resource_dimensions: dict | 
     return resolved
 
 
-def extract_panel_queries(dashboard_payload: dict, resource_dimensions: dict | None = None) -> list[dict]:
+def parse_variable_overrides(raw_values: list[str]) -> dict[str, str]:
+    """Parse explicit ``--variable name=value`` overrides without secrets."""
+    overrides: dict[str, str] = {}
+    for raw in raw_values:
+        if "=" not in raw:
+            raise ExportError(f"dashboard variable override must use NAME=VALUE: {raw.split('=', 1)[0]}")
+        name, value = raw.split("=", 1)
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name) or not value.strip():
+            raise ExportError(f"invalid dashboard variable override: {name}")
+        overrides[name] = value
+    return overrides
+
+
+def _normalise_dashboard_variable(value: object) -> str:
+    if isinstance(value, list):
+        values = [str(item) for item in value if str(item).strip()]
+        return ".*" if not values or "$__all" in values else "|".join(values)
+    if isinstance(value, dict):
+        value = value.get("value") or value.get("text")
+    if value is None:
+        raise ExportError("dashboard variable has no current value")
+    normalised = str(value).strip()
+    if normalised in {"", "All", "$__all"}:
+        return ".*"
+    return normalised
+
+
+def resolve_dashboard_variables(dashboard_payload: dict, overrides: dict[str, str] | None = None) -> dict[str, str]:
+    """Resolve current Grafana template values before direct datasource queries."""
+    variables: dict[str, str] = {}
+    for variable in dashboard_payload.get("dashboard", {}).get("templating", {}).get("list", []):
+        name = variable.get("name")
+        if not name:
+            continue
+        current = variable.get("current") or {}
+        value = current.get("value") if isinstance(current, dict) else current
+        if value is None and isinstance(current, dict):
+            value = current.get("text")
+        if value is not None:
+            variables[name] = _normalise_dashboard_variable(value)
+    for name, value in (overrides or {}).items():
+        variables[name] = _normalise_dashboard_variable(value)
+    return variables
+
+
+def substitute_dashboard_variables(expr: str, variables: dict[str, str]) -> str:
+    """Replace Grafana ``$variable`` references while preserving ``$__`` macros."""
+    unresolved: set[str] = set()
+
+    def replace(match: re.Match[str]) -> str:
+        name = match.group(1)
+        if name not in variables:
+            unresolved.add(name)
+            return match.group(0)
+        return variables[name]
+
+    resolved = CUSTOM_VARIABLE_PATTERN.sub(replace, expr)
+    if unresolved:
+        raise ExportError("unresolved dashboard variables: " + ", ".join(sorted(unresolved)))
+    return resolved
+
+
+def extract_panel_queries(
+    dashboard_payload: dict,
+    resource_dimensions: dict | None = None,
+    dashboard_variables: dict[str, str] | None = None,
+) -> list[dict]:
     """Pure/offline: derive one collectible query per panel target from a
     fetched (or test-supplied) Grafana dashboard API payload. No network
     calls — safe to unit test without mocking HTTP."""
@@ -232,7 +316,12 @@ def extract_panel_queries(dashboard_payload: dict, resource_dimensions: dict | N
             if ds_type in {"prometheus", "loki"}:
                 if not target.get("expr"):
                     continue
-                entry["expr"] = target["expr"]
+                entry["exprTemplate"] = target["expr"]
+                entry["expr"] = (
+                    substitute_dashboard_variables(target["expr"], dashboard_variables)
+                    if dashboard_variables is not None
+                    else target["expr"]
+                )
             else:
                 if not target.get("metricName"):
                     continue
@@ -285,11 +374,144 @@ def collect_cloudwatch_query(namespace: str, metric_name: str, statistic: str, p
     return json.loads(run_command(command))
 
 
-def collect_panel_queries(grafana_url: str, auth_header: str | None, panel_queries: list[dict], from_utc: str, to_utc: str, region: str, queries_dir: Path) -> tuple[int, int]:
+def load_required_query_contract(path: Path) -> dict:
+    if not path.exists():
+        raise ExportError(f"required query contract not found: {path}")
+    try:
+        contract = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as error:
+        raise ExportError(f"required query contract is not valid JSON: {path}") from error
+    if not isinstance(contract, dict) or not isinstance(contract.get("queries"), list):
+        raise ExportError("required query contract must contain a queries array")
+    return contract
+
+
+def _query_key(entry: dict) -> str:
+    return f"{entry.get('panelId')}/{entry.get('refId')}"
+
+
+def _contract_query_map(contract: dict | None) -> dict[str, dict]:
+    if not contract:
+        return {}
+    mapping: dict[str, dict] = {}
+    for item in contract.get("queries", []):
+        key = item.get("key") or f"{item.get('panelId')}/{item.get('refId')}"
+        if key in mapping:
+            raise ExportError(f"duplicate required query contract key: {key}")
+        mapping[key] = item
+    return mapping
+
+
+def validate_required_query_contract(contract: dict, panel_queries: list[dict], dashboard_uid: str | None = None) -> None:
+    """Ensure every exported dashboard target has an explicit collection policy."""
+    if dashboard_uid and contract.get("dashboardUid") not in {None, dashboard_uid}:
+        raise ExportError(
+            f"required query contract dashboardUid mismatch: {contract.get('dashboardUid')} != {dashboard_uid}"
+        )
+    mapping = _contract_query_map(contract)
+    actual = {_query_key(entry) for entry in panel_queries}
+    missing = sorted(actual - set(mapping))
+    if missing:
+        raise ExportError("dashboard queries missing required-query policy: " + ", ".join(missing))
+    extra = sorted(set(mapping) - actual)
+    if extra:
+        raise ExportError("required-query contract references absent dashboard queries: " + ", ".join(extra))
+    for key, item in mapping.items():
+        if not isinstance(item.get("required", True), bool):
+            raise ExportError(f"required query policy must use boolean required: {key}")
+        if not isinstance(item.get("idleEmptyAllowed", False), bool):
+            raise ExportError(f"required query policy must use boolean idleEmptyAllowed: {key}")
+        max_age = item.get("maxAgeSeconds", contract.get("defaultMaxAgeSeconds", 120))
+        if not isinstance(max_age, (int, float)) or max_age <= 0:
+            raise ExportError(f"required query policy maxAgeSeconds must be positive: {key}")
+
+
+def _query_policy(contract: dict | None, entry: dict) -> dict | None:
+    if contract is None:
+        return None
+    mapping = _contract_query_map(contract)
+    item = mapping.get(_query_key(entry), {})
+    return {
+        "required": bool(item.get("required", True)),
+        "idleEmptyAllowed": bool(item.get("idleEmptyAllowed", False)),
+        "maxAgeSeconds": item.get("maxAgeSeconds", contract.get("defaultMaxAgeSeconds", 120)),
+        "name": item.get("name"),
+    }
+
+
+def _sample_timestamps(result: dict) -> list[float]:
+    data = result.get("data") if isinstance(result.get("data"), dict) else result
+    timestamps: list[float] = []
+    if isinstance(result.get("Datapoints"), list):
+        for point in result["Datapoints"]:
+            if isinstance(point, dict) and point.get("Timestamp"):
+                try:
+                    timestamps.append(datetime.fromisoformat(str(point["Timestamp"]).replace("Z", "+00:00")).timestamp())
+                except ValueError:
+                    continue
+    series = data.get("result", []) if isinstance(data, dict) else []
+    for item in series if isinstance(series, list) else []:
+        if not isinstance(item, dict):
+            continue
+        for key in ("values", "value"):
+            samples = item.get(key, [])
+            if key == "value" and isinstance(samples, list):
+                samples = [samples]
+            for sample in samples if isinstance(samples, list) else []:
+                if not isinstance(sample, (list, tuple)) or not sample:
+                    continue
+                try:
+                    timestamp = float(sample[0])
+                    if timestamp > 1_000_000_000_000:  # Loki nanoseconds
+                        timestamp /= 1_000_000_000
+                    timestamps.append(timestamp)
+                except (TypeError, ValueError):
+                    continue
+    return timestamps
+
+
+def _result_has_samples(result: dict) -> bool:
+    if isinstance(result.get("Datapoints"), list):
+        return bool(result["Datapoints"])
+    data = result.get("data") if isinstance(result.get("data"), dict) else result
+    if isinstance(data, dict) and isinstance(data.get("result"), list):
+        return bool(_sample_timestamps(result))
+    return False
+
+
+def classify_query_result(result: dict, to_utc: str, policy: dict) -> tuple[str, str | None]:
+    """Classify a datasource response without converting missing data to zero."""
+    if not isinstance(result, dict):
+        return "error", "query response is not a JSON object"
+    if result.get("status") == "error" or result.get("error"):
+        detail = result.get("error") or result.get("errorType") or "datasource returned an error"
+        return "error", str(detail)
+    if not _result_has_samples(result):
+        return "empty", "datasource returned no samples"
+    timestamps = _sample_timestamps(result)
+    if timestamps:
+        age = to_epoch_seconds(to_utc) - max(timestamps)
+        if age > float(policy.get("maxAgeSeconds", 120)):
+            return "stale", f"latest sample is {int(age)}s older than the fixed range end"
+    return "collected", None
+
+
+def collect_panel_queries(
+    grafana_url: str,
+    auth_header: str | None,
+    panel_queries: list[dict],
+    from_utc: str,
+    to_utc: str,
+    region: str,
+    queries_dir: Path,
+    required_query_contract: dict | None = None,
+) -> tuple[int, int]:
     collected = 0
     failed = 0
+    contract = required_query_contract
     for entry in panel_queries:
         filename = f"panel-{entry['panelId']}-{entry['refId']}.json"
+        policy = _query_policy(contract, entry)
         try:
             if entry["datasourceType"] in {"prometheus", "loki"}:
                 result = collect_datasource_range_query(
@@ -303,13 +525,53 @@ def collect_panel_queries(grafana_url: str, auth_header: str | None, panel_queri
                     cloudwatch["namespace"], cloudwatch["metricName"], cloudwatch["statistic"],
                     cloudwatch["period"], cloudwatch["dimensions"], region, from_utc, to_utc,
                 )
-            record = {**entry, "fromUtc": from_utc, "toUtc": to_utc, "status": "collected", "result": result}
-            collected += 1
-        except ExportError as error:
+            if policy is None:
+                status, detail = "collected", None
+            else:
+                status, detail = classify_query_result(result, to_utc, policy)
+            record = {
+                **entry,
+                "fromUtc": from_utc,
+                "toUtc": to_utc,
+                "status": status,
+                "result": result,
+            }
+            if policy is not None:
+                record.update(policy)
+            if detail:
+                record["detail"] = detail
+            if status == "collected":
+                collected += 1
+            elif policy is None or (
+                policy["required"] and not (status == "empty" and policy["idleEmptyAllowed"])
+            ):
+                failed += 1
+        except (ExportError, ValueError, TypeError) as error:
             record = {**entry, "fromUtc": from_utc, "toUtc": to_utc, "status": "error", "detail": str(error)}
-            failed += 1
+            if policy is not None:
+                record.update(policy)
+                if policy["required"]:
+                    failed += 1
+            else:
+                failed += 1
         (queries_dir / filename).write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
     return collected, failed
+
+
+def summarize_query_records(queries_dir: Path) -> dict[str, int]:
+    counts = {"collected": 0, "empty": 0, "stale": 0, "error": 0, "optionalUnavailable": 0}
+    for path in sorted(queries_dir.glob("panel-*.json")):
+        try:
+            record = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            counts["error"] += 1
+            continue
+        status = record.get("status")
+        if status in counts:
+            counts[status] += 1
+        if status in {"empty", "stale", "error"} and record.get("required") is False:
+            counts["optionalUnavailable"] += 1
+    return counts
 
 
 def build_dashboard_url(grafana_url: str, dashboard_uid: str, resource_dimensions: dict | None = None) -> str:
@@ -484,6 +746,23 @@ def main() -> int:
     dashboard_payload = fetch_dashboard(args.grafana_url, auth_header, args.dashboard_uid)
     (grafana_dir / "dashboard.json").write_text(json.dumps(dashboard_payload, indent=2) + "\n", encoding="utf-8")
 
+    variable_overrides = parse_variable_overrides(args.variable)
+    dashboard_variables = resolve_dashboard_variables(dashboard_payload, variable_overrides)
+
+    required_query_contract = None
+    contract_path = args.required_query_contract
+    if contract_path is None and args.dashboard_uid == "aws-eks-load-test":
+        contract_path = Path(__file__).resolve().parents[3] / "monitoring/grafana/contracts/aws-eks-load-test-required-queries.json"
+    if contract_path is not None:
+        required_query_contract = load_required_query_contract(contract_path.resolve())
+        if required_query_contract.get("dashboardUid") not in {None, args.dashboard_uid}:
+            raise ExportError(
+                f"required query contract dashboardUid mismatch: {required_query_contract.get('dashboardUid')} != {args.dashboard_uid}"
+            )
+        (grafana_dir / "required-query-contract.json").write_text(
+            json.dumps(required_query_contract, indent=2) + "\n", encoding="utf-8",
+        )
+
     resource_dimensions = load_resource_dimensions(evidence_root)
     validate_resource_dimensions(resource_dimensions)
     (grafana_dir / "resource-dimensions.json").write_text(
@@ -510,8 +789,24 @@ def main() -> int:
         encoding="utf-8",
     )
 
-    panel_queries = extract_panel_queries(dashboard_payload, resource_dimensions)
-    collected, failed = collect_panel_queries(args.grafana_url, auth_header, panel_queries, from_utc, to_utc, args.region, queries_dir)
+    panel_queries = extract_panel_queries(dashboard_payload, resource_dimensions, dashboard_variables)
+    if required_query_contract is not None:
+        validate_required_query_contract(
+            required_query_contract,
+            panel_queries,
+            dashboard_payload.get("dashboard", {}).get("uid"),
+        )
+    collected, failed = collect_panel_queries(
+        args.grafana_url,
+        auth_header,
+        panel_queries,
+        from_utc,
+        to_utc,
+        args.region,
+        queries_dir,
+        required_query_contract,
+    )
+    query_statuses = summarize_query_records(queries_dir)
 
     contracts = build_panel_capture_contracts(
         dashboard_payload, panel_queries, args.grafana_url, run_id, from_utc, to_utc, resource_dimensions,
@@ -546,6 +841,11 @@ def main() -> int:
         "queryCount": len(panel_queries),
         "queryCollected": collected,
         "queryFailed": failed,
+        "queryStatuses": query_statuses,
+        "dashboardVariables": dashboard_variables,
+        "requiredQueryContractPath": (
+            "grafana/required-query-contract.json" if required_query_contract is not None else None
+        ),
         "panelCount": len(contracts),
         "dashboardCapturePath": "grafana/dashboard.capture.json",
         "expectedDashboardPngPath": "grafana/dashboard.png",

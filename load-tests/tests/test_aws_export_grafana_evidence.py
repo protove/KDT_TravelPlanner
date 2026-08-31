@@ -218,6 +218,36 @@ class ExtractPanelQueriesTest(unittest.TestCase):
         with self.assertRaises(EXPORT.ExportError):
             EXPORT.extract_panel_queries(SAMPLE_DASHBOARD_PAYLOAD, {})
 
+    def test_dashboard_variables_resolve_current_and_all_values(self):
+        payload = {
+            "dashboard": {
+                "templating": {"list": [
+                    {"name": "environment", "current": {"value": "dev-eks"}},
+                    {"name": "namespace", "current": {"text": "All", "value": "$__all"}},
+                ]}
+            }
+        }
+        self.assertEqual(
+            EXPORT.resolve_dashboard_variables(payload),
+            {"environment": "dev-eks", "namespace": ".*"},
+        )
+
+    def test_prometheus_expression_keeps_template_and_exports_resolved_expression(self):
+        payload = json.loads(json.dumps(SAMPLE_DASHBOARD_PAYLOAD))
+        payload["dashboard"]["templating"] = {"list": []}
+        payload["dashboard"]["panels"][1]["targets"][0]["expr"] = "up{namespace=~\"$namespace\",environment=\"$environment\"}"
+        queries = EXPORT.extract_panel_queries(
+            payload,
+            dashboard_variables={"namespace": "travel-planner", "environment": "dev-eks"},
+        )
+        entry = next(item for item in queries if item["panelId"] == 2 and item["refId"] == "A")
+        self.assertEqual(entry["exprTemplate"], "up{namespace=~\"$namespace\",environment=\"$environment\"}")
+        self.assertEqual(entry["expr"], "up{namespace=~\"travel-planner\",environment=\"dev-eks\"}")
+
+    def test_unresolved_dashboard_variable_fails_closed(self):
+        with self.assertRaises(EXPORT.ExportError):
+            EXPORT.substitute_dashboard_variables("up{namespace=\"$namespace\"}", {})
+
 
 class CollectPanelQueriesTest(unittest.TestCase):
     def test_loki_auto_interval_is_resolved_for_http_query(self):
@@ -337,6 +367,120 @@ class CollectPanelQueriesTest(unittest.TestCase):
             self.assertEqual((collected, failed), (0, 1))
             record = json.loads((queries_dir / "panel-7-A.json").read_text(encoding="utf-8"))
             self.assertEqual(record["status"], "error")
+
+    def test_required_empty_result_is_not_collected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            queries_dir = Path(directory)
+            panel_queries = [{
+                "panelId": 2, "refId": "A", "datasourceType": "prometheus",
+                "datasourceUid": "prometheus", "expr": "up",
+            }]
+            contract = {"defaultMaxAgeSeconds": 120, "queries": [{
+                "key": "2/A", "required": True, "idleEmptyAllowed": False,
+            }]}
+            original = EXPORT.grafana_request
+            EXPORT.grafana_request = lambda url, auth_header, timeout=15: json.dumps({
+                "status": "success", "data": {"resultType": "matrix", "result": []},
+            }).encode("utf-8")
+            try:
+                self.assertEqual(
+                    EXPORT.collect_panel_queries(
+                        "http://127.0.0.1:3000", None, panel_queries,
+                        "2026-08-11T09:00:00Z", "2026-08-11T10:00:00Z", "", queries_dir, contract,
+                    ),
+                    (0, 1),
+                )
+            finally:
+                EXPORT.grafana_request = original
+            record = json.loads((queries_dir / "panel-2-A.json").read_text(encoding="utf-8"))
+            self.assertEqual(record["status"], "empty")
+
+    def test_idle_empty_and_optional_error_do_not_fail_required_gate(self):
+        with tempfile.TemporaryDirectory() as directory:
+            queries_dir = Path(directory)
+            panel_queries = [
+                {"panelId": 2, "refId": "A", "datasourceType": "prometheus", "datasourceUid": "prometheus", "expr": "up"},
+                {"panelId": 2, "refId": "B", "datasourceType": "prometheus", "datasourceUid": "prometheus", "expr": "down"},
+            ]
+            contract = {"defaultMaxAgeSeconds": 120, "queries": [
+                {"key": "2/A", "required": True, "idleEmptyAllowed": True},
+                {"key": "2/B", "required": False, "idleEmptyAllowed": True},
+            ]}
+            calls = {"n": 0}
+            original = EXPORT.grafana_request
+
+            def response(url, auth_header, timeout=15):
+                calls["n"] += 1
+                if calls["n"] == 1:
+                    return json.dumps({"status": "success", "data": {"result": []}}).encode("utf-8")
+                return json.dumps({"status": "error", "error": "unsupported metric"}).encode("utf-8")
+
+            EXPORT.grafana_request = response
+            try:
+                self.assertEqual(
+                    EXPORT.collect_panel_queries(
+                        "http://127.0.0.1:3000", None, panel_queries,
+                        "2026-08-11T09:00:00Z", "2026-08-11T10:00:00Z", "", queries_dir, contract,
+                    ),
+                    (0, 0),
+                )
+            finally:
+                EXPORT.grafana_request = original
+            self.assertEqual(json.loads((queries_dir / "panel-2-A.json").read_text())["status"], "empty")
+            self.assertEqual(json.loads((queries_dir / "panel-2-B.json").read_text())["status"], "error")
+
+
+class QueryResultClassificationTest(unittest.TestCase):
+    END = "2026-08-11T10:00:00Z"
+    POLICY = {"maxAgeSeconds": 120}
+
+    def _matrix(self, timestamp: str):
+        return {"status": "success", "data": {"resultType": "matrix", "result": [{
+            "metric": {"job": "backend"},
+            "values": [[EXPORT.to_epoch_seconds(timestamp), "1"]],
+        }]}}
+
+    def test_collected_when_recent_samples_exist(self):
+        status, detail = EXPORT.classify_query_result(self._matrix("2026-08-11T09:59:30Z"), self.END, self.POLICY)
+        self.assertEqual((status, detail), ("collected", None))
+
+    def test_stale_when_latest_sample_misses_fixed_window_freshness(self):
+        status, detail = EXPORT.classify_query_result(self._matrix("2026-08-11T09:50:00Z"), self.END, self.POLICY)
+        self.assertEqual(status, "stale")
+        self.assertIn("older", detail)
+
+    def test_empty_and_error_are_distinct(self):
+        self.assertEqual(
+            EXPORT.classify_query_result({"status": "success", "data": {"result": []}}, self.END, self.POLICY)[0],
+            "empty",
+        )
+        self.assertEqual(
+            EXPORT.classify_query_result({"status": "error", "error": "bad query"}, self.END, self.POLICY)[0],
+            "error",
+        )
+
+    def test_loki_nanosecond_samples_are_supported(self):
+        timestamp = EXPORT.to_epoch_seconds("2026-08-11T09:59:30Z") * 1_000_000_000
+        response = {"status": "success", "data": {"result": [{"values": [[timestamp, "RUN_START"]]}]}}
+        self.assertEqual(EXPORT.classify_query_result(response, self.END, self.POLICY)[0], "collected")
+
+
+class RequiredQueryContractTest(unittest.TestCase):
+    def test_rejects_missing_dashboard_policy(self):
+        panel_queries = [{"panelId": 1, "refId": "A"}, {"panelId": 1, "refId": "B"}]
+        with self.assertRaises(EXPORT.ExportError):
+            EXPORT.validate_required_query_contract(
+                {"dashboardUid": "aws-eks-load-test", "queries": [{"key": "1/A"}]},
+                panel_queries,
+                "aws-eks-load-test",
+            )
+
+    def test_rejects_invalid_freshness_policy(self):
+        with self.assertRaises(EXPORT.ExportError):
+            EXPORT.validate_required_query_contract(
+                {"queries": [{"key": "1/A", "maxAgeSeconds": 0}]},
+                [{"panelId": 1, "refId": "A"}],
+            )
 
 
 class BuildPanelCaptureContractsTest(unittest.TestCase):

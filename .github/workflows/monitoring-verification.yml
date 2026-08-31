@@ -51,6 +51,17 @@ jobs:
       - name: Validate monitoring component configuration
         run: ./monitoring/validate-configs.sh
 
+      - name: Validate EKS load-test dashboard contracts
+        run: |
+          python3 -m json.tool monitoring/grafana/dashboards/aws-eks-load-test.json >/dev/null
+          python3 -m json.tool monitoring/grafana/contracts/aws-eks-load-test-required-queries.json >/dev/null
+
+      - name: Run EKS load-test dashboard and exporter tests
+        run: |
+          python3 -m unittest \
+            monitoring.tests.test_aws_eks_load_dashboard \
+            load-tests.tests.test_aws_export_grafana_evidence
+
       - name: Run production-like monitoring smoke
         run: ./monitoring/smoke-test.sh prod
 
