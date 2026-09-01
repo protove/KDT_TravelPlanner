@@ -443,7 +443,12 @@ import re
 import sys
 from pathlib import Path
 
-output, status, access_path, error_path, inspect_path, stats_path = map(Path, sys.argv[1:])
+output, status, access_path, error_path, inspect_path, stats_path = sys.argv[1:]
+output = Path(output)
+access_path = Path(access_path)
+error_path = Path(error_path)
+inspect_path = Path(inspect_path)
+stats_path = Path(stats_path)
 def text(path):
     try:
         return path.read_text(encoding="utf-8", errors="replace")

@@ -225,6 +225,20 @@ class AwsOrchestrationContractTests(unittest.TestCase):
         self.assertNotIn("get configmap backend-config -o json;", helper)
         self.assertNotIn("get deployment {q(deployment)} -o json;", helper)
 
+    def test_mock_evidence_keeps_http_status_as_text(self) -> None:
+        source = AWS_K6_RUNNER.read_text(encoding="utf-8")
+        start = source.index('python3 - "$RUN_DIR/mock/evidence.json"')
+        end = source.index("\nelse\n", start)
+        helper = source[start:end]
+        self.assertIn(
+            "output, status, access_path, error_path, inspect_path, stats_path = sys.argv[1:]",
+            helper,
+        )
+        self.assertNotIn(
+            "output, status, access_path, error_path, inspect_path, stats_path = map(Path, sys.argv[1:])",
+            helper,
+        )
+
     def test_eks_breakpoint_profile_is_referenced_by_the_runner_contract(self) -> None:
         profile = REPOSITORY_ROOT / "load-tests/aws/profiles/eks-monolith-breakpoint-v1.0.json"
         self.assertTrue(profile.is_file())
