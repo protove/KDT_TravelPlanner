@@ -1687,7 +1687,10 @@ PY
   mkdir -p "$EVIDENCE_ROOT"
   export REPOSITORY_ROOT EVIDENCE_ROOT BASE_URL REGION ENVIRONMENT TARGET_PLATFORM SOURCE_COMMIT_SHA RUNNER_BOOTSTRAP_RUN_ID="$RUN_ID"
   export RUNNER_READINESS_FILE="${RUNNER_READINESS_FILE:-/var/lib/travel-planner/load-test-evidence/runner-readiness.json}"
-  export RUN_ID AWS_PROFILE_FILE DATA_FILE K6_IMAGE_DIGEST="$K6_IMAGE" AWS_SLO_CONTRACT_FILE="$SLO_CONTRACT"
+  # The adaptive coordinator delegates each stage to run-aws-b01.sh.  Keep
+  # the reviewed profile path explicit here; unlike the ordinary phase path,
+  # adaptive execution returns before k6_phase_stage's later export block.
+  export RUN_ID AWS_PROFILE_FILE="$PROFILE" DATA_FILE K6_IMAGE_DIGEST="$K6_IMAGE" AWS_SLO_CONTRACT_FILE="$SLO_CONTRACT"
   export EKS_CLUSTER_NAME EKS_NODE_GROUP_NAME EKS_BASTION_ID BACKEND_NAMESPACE BACKEND_DEPLOYMENT TARGET_GROUP_ARN
   export MAX_RATE MAX_VUS
   local alb_dimension target_group_dimension

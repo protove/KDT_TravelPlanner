@@ -188,6 +188,13 @@ class AwsOrchestrationContractTests(unittest.TestCase):
         self.assertIn("--eks-evidence-file", source)
         self.assertIn('phase" == "capacity-stress" && "$TARGET_PLATFORM" == "eks"', source)
 
+    def test_adaptive_capacity_delegate_exports_reviewed_profile_path(self) -> None:
+        source = SCRIPT.read_text(encoding="utf-8")
+        start = source.index("adaptive_capacity_stress_stage()")
+        end = source.index("\ncapacity_stress_stage()", start)
+        helper = source[start:end]
+        self.assertIn('export RUN_ID AWS_PROFILE_FILE="$PROFILE"', helper)
+
     def test_eks_campaign_has_separate_baseline_pod_node_and_recovery_paths(self) -> None:
         source = SCRIPT.read_text(encoding="utf-8")
         for stage in ("eks-baseline", "pod-scale-out", "node-scale-out-breakpoint", "recovery"):
