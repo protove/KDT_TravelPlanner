@@ -20,6 +20,7 @@ class GoogleApiMockContractTest(unittest.TestCase):
         ):
             self.assertIn(path, config)
         self.assertIn("listen 8080", config)
+        self.assertIn("root /usr/share/nginx/html;", config)
         self.assertNotIn("proxy_pass", config)
         self.assertNotIn("https://", config)
 
@@ -42,17 +43,17 @@ class GoogleApiMockContractTest(unittest.TestCase):
         self.assertTrue(routes["routes"][0]["polyline"]["encodedPolyline"])
 
     def test_mock_bootstrap_is_unprivileged_bounded_and_digest_pinned(self):
-        template = (ROOT / "infra/modules/load_test_runner/templates/runner-user-data.sh.tftpl").read_text(encoding="utf-8")
+        bootstrap = (ROOT / "scripts/loadtest/aws/bootstrap-load-runner-source.sh").read_text(encoding="utf-8")
         variables = (ROOT / "infra/modules/load_test_runner/variables.tf").read_text(encoding="utf-8")
         self.assertRegex(
             variables,
             r"nginxinc/nginx-unprivileged:[^\"\s]+@sha256:[0-9a-f]{64}",
         )
-        self.assertIn("${google_mock_image_reference}", template)
-        for flag in ("--read-only", "--cap-drop ALL", "--security-opt no-new-privileges", "--cpus 1", "--memory 256m", "--pids-limit 64", "--platform linux/amd64"):
-            self.assertIn(flag, template)
-        self.assertIn("/healthz", template)
-        self.assertIn("--name travel-planner-google-api-mock", template)
+        self.assertIn('"$MOCK_IMAGE" nginx -g', bootstrap)
+        for flag in ("--read-only", "--cap-drop ALL", "--security-opt no-new-privileges", "--cpus 1", "--memory 256m", "--pids-limit 64", "--platform linux/amd64", "--tmpfs /var/cache/nginx:rw,noexec,nosuid,size=16m,mode=1777"):
+            self.assertIn(flag, bootstrap)
+        self.assertIn("/healthz", bootstrap)
+        self.assertIn("--name travel-planner-google-api-mock", bootstrap)
 
     def test_mock_network_is_sg_referenced_and_not_public(self):
         security = (ROOT / "infra/modules/load_test_security/main.tf").read_text(encoding="utf-8")
