@@ -204,6 +204,15 @@ class AwsOrchestrationContractTests(unittest.TestCase):
         self.assertIn("observe-aws-capacity-stress.py", phase_source)
         self.assertIn('CAPACITY_STAGE="$PHASE"', phase_source)
 
+    def test_recovery_target_allows_observed_ca_desired_without_relaxing_bounds(self) -> None:
+        source = SCRIPT.read_text(encoding="utf-8")
+        start = source.index("eks_target_stage()")
+        end = source.index("\ntarget_stage()", start)
+        eks_source = source[start:end]
+        self.assertIn('if [[ "$MODE" == "recovery" ]]', eks_source)
+        self.assertIn("--allow-current-desired", eks_source)
+        self.assertIn('shape.get("min") == 2 and shape.get("max") == 4', (REPOSITORY_ROOT / "scripts/loadtest/aws/eks_target_adapter.py").read_text(encoding="utf-8"))
+
     def test_adaptive_eks_lifecycle_binds_mock_hpa_and_restores_both(self) -> None:
         source = SCRIPT.read_text(encoding="utf-8")
         for helper in (

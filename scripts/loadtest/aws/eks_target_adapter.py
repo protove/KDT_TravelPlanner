@@ -51,8 +51,16 @@ def resolve_node_group(
     *,
     expected_cluster: str,
     expected_node_group: str,
+    allow_current_desired: bool = False,
 ) -> dict[str, Any]:
-    """Validate and reduce ``eks describe-nodegroup`` to safe dimensions."""
+    """Validate and reduce ``eks describe-nodegroup`` to safe dimensions.
+
+    A fresh target must still be the canonical 2/2/4 envelope.  Recovery is
+    entered after the stress terminal, however, so Cluster Autoscaler may
+    legitimately leave the managed node group at desired 3 or 4 while the
+    recovery observer records scale-in.  That path may relax only the desired
+    value; the 2/4 bounds and ACTIVE node group identity remain mandatory.
+    """
 
     _validate_name(expected_cluster, "cluster name")
     _validate_name(expected_node_group, "node group name")
@@ -67,7 +75,19 @@ def resolve_node_group(
         "desired": scaling.get("desiredSize"),
         "max": scaling.get("maxSize"),
     }
-    _require(shape == {"min": 2, "desired": 2, "max": 4}, f"EKS node group scaling must be 2/2/4, got {shape}")
+    if allow_current_desired:
+        _require(
+            shape.get("min") == 2 and shape.get("max") == 4,
+            f"EKS recovery node group bounds must be 2/4, got {shape}",
+        )
+        _require(
+            isinstance(shape.get("desired"), int)
+            and not isinstance(shape.get("desired"), bool)
+            and 2 <= shape["desired"] <= 4,
+            f"EKS recovery node group desired must be within 2..4, got {shape}",
+        )
+    else:
+        _require(shape == {"min": 2, "desired": 2, "max": 4}, f"EKS node group scaling must be 2/2/4, got {shape}")
     resources = nodegroup.get("resources") or {}
     asgs = resources.get("autoScalingGroups") or []
     _require(isinstance(asgs, list) and len(asgs) == 1, "EKS node group must expose exactly one backing ASG")
@@ -637,6 +657,7 @@ def _command(args: argparse.Namespace) -> int:
             _load_json(args.node_group_json),
             expected_cluster=args.cluster_name,
             expected_node_group=args.node_group_name,
+            allow_current_desired=args.allow_current_desired,
         )
         target = validate_alb_target_health(_load_json(args.target_health_json), target_group_arn=args.target_group_arn)
         print(json.dumps({"nodeGroup": node_group, "alb": target}, indent=2, sort_keys=True))
@@ -709,6 +730,11 @@ def main() -> int:
     parser.add_argument("--deployment-json")
     parser.add_argument("--capacity-curve-json")
     parser.add_argument("--output")
+    parser.add_argument(
+        "--allow-current-desired",
+        action="store_true",
+        help="Recovery-only: accept desired 2..4 while retaining min=2/max=4",
+    )
     parser.add_argument("--expected-max-replicas", type=int)
     parser.add_argument("--override-sha256")
     args = parser.parse_args()

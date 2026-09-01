@@ -35,6 +35,27 @@ class EksTargetAdapterTests(unittest.TestCase):
         self.assertEqual(target_health["targetType"], "ip")
         self.assertEqual(target_health["healthyTargetCount"], 2)
 
+    def test_recovery_accepts_ca_desired_four_with_canonical_bounds(self) -> None:
+        payload = json.loads(json.dumps(self.fixture["nodeGroup"]))
+        payload["nodegroup"]["scalingConfig"]["desiredSize"] = 4
+        node_group = MODULE.resolve_node_group(
+            payload,
+            expected_cluster=self.fixture["clusterName"],
+            expected_node_group=self.fixture["nodeGroupName"],
+            allow_current_desired=True,
+        )
+        self.assertEqual(node_group["scalingConfig"], {"min": 2, "desired": 4, "max": 4})
+
+    def test_fresh_target_still_rejects_noncanonical_desired(self) -> None:
+        payload = json.loads(json.dumps(self.fixture["nodeGroup"]))
+        payload["nodegroup"]["scalingConfig"]["desiredSize"] = 4
+        with self.assertRaisesRegex(MODULE.EKSAdapterError, "must be 2/2/4"):
+            MODULE.resolve_node_group(
+                payload,
+                expected_cluster=self.fixture["clusterName"],
+                expected_node_group=self.fixture["nodeGroupName"],
+            )
+
     def test_instance_id_target_is_rejected_in_eks_mode(self) -> None:
         payload = json.loads(json.dumps(self.fixture["targetHealth"]))
         payload["TargetHealthDescriptions"][0]["Target"]["Id"] = "i-0123456789abcdef0"
