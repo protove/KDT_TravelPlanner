@@ -494,14 +494,17 @@ fi
 
 if [[ -n "$slo_producer_pid" ]]; then
   if kill -0 "$slo_producer_pid" 2>/dev/null; then
-    kill -INT "$slo_producer_pid" 2>/dev/null || true
+    kill -TERM "$slo_producer_pid" 2>/dev/null || true
   fi
   wait "$slo_producer_pid" 2>/dev/null
   slo_producer_status=$?
-  # SIGINT is the normal producer shutdown path. Any other exit is retained
-  # in run-status.json and causes the capacity evaluator to invalidate the
-  # metric window instead of treating a missing stream as a passing SLO.
-  [[ "$slo_producer_status" -eq 130 ]] && slo_producer_status=0
+  # Background jobs launched by a non-interactive shell inherit SIGINT as an
+  # ignored disposition, so kill -INT can leave the producer tailing raw.json
+  # forever after k6 exits. SIGTERM is not ignored in that context and is the
+  # normal, explicit producer shutdown path. Keep both legacy SIGINT (130) and
+  # SIGTERM (143) as successful shutdowns; any other exit remains fail-closed
+  # in run-status.json and invalidates complete-window requirements.
+  [[ "$slo_producer_status" -eq 130 || "$slo_producer_status" -eq 143 ]] && slo_producer_status=0
   set +e
   python3 "$REPOSITORY_ROOT/scripts/loadtest/aws/produce-capacity-slo-windows.py" \
     --input "$RUN_DIR/raw.json" --output "$RUN_DIR/slo-windows.jsonl" \

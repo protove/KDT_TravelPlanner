@@ -297,6 +297,11 @@ class AwsOrchestrationContractTests(unittest.TestCase):
         self.assertIn("__ENV.TARGET_ENVIRONMENT || PROFILE.environment", config_source)
         self.assertIn("__ENV.TARGET_REGION || PROFILE.region", config_source)
 
+    def test_eks_k6_slo_producer_uses_non_interactive_safe_shutdown(self) -> None:
+        runner_source = AWS_PHASE_RUNNER.parent.joinpath("run-k6-aws-scenario.sh").read_text(encoding="utf-8")
+        self.assertIn('kill -TERM "$slo_producer_pid"', runner_source)
+        self.assertIn('"$slo_producer_status" -eq 143', runner_source)
+
     def test_k6_runner_keeps_custom_host_and_allows_operator_ip_resolution(self) -> None:
         runner_source = AWS_PHASE_RUNNER.parent.joinpath("run-k6-aws-scenario.sh").read_text(encoding="utf-8")
         self.assertIn("AWS_TARGET_HOST_IPS", runner_source)
