@@ -227,6 +227,37 @@ class AwsOrchestrationContractTests(unittest.TestCase):
         self.assertIn("eks-monolith-breakpoint-slo-v1.0.json", source)
         self.assertIn("historical t3.medium contract is not valid here", source)
 
+    def test_eks_v21_adaptive_profile_does_not_require_finite_rate_ceiling(self) -> None:
+        source = SCRIPT.read_text(encoding="utf-8")
+        profile = REPOSITORY_ROOT / "load-tests/aws/profiles/eks-monolith-breakpoint-v2.1.json"
+        slo = REPOSITORY_ROOT / "load-tests/aws/contracts/eks-monolith-breakpoint-slo-v2.1.json"
+        self.assertIn("eks-monolith-breakpoint-v2.1.json", source)
+        self.assertIn("eks-monolith-breakpoint-slo-v2.1.json", source)
+        with tempfile.TemporaryDirectory() as directory:
+            result = subprocess.run(
+                [
+                    "bash", str(SCRIPT), "target", "--dry-run",
+                    "--target-platform", "eks",
+                    "--region", "ap-northeast-2", "--environment", "dev-eks",
+                    "--expected-account-id", "111111111111",
+                    "--alb-arn", "arn:aws:elasticloadbalancing:ap-northeast-2:111111111111:loadbalancer/app/example/1234567890abcdef",
+                    "--base-url", "https://b01.example.com",
+                    "--runner-id", "i-0123456789abcdef0",
+                    "--eks-bastion-id", "i-0fedcba9876543210",
+                    "--max-vus", "16384",
+                    "--run-id", "aws-b01-eks-v21-adaptive-test",
+                    "--profile", str(profile),
+                    "--slo-contract", str(slo),
+                ],
+                cwd=REPOSITORY_ROOT,
+                env={**os.environ, "B01_EVIDENCE_BASE": directory},
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("--max_rate is required", result.stderr)
+
     def test_shared_k6_profile_gets_action_time_platform_environment(self) -> None:
         runner_source = AWS_PHASE_RUNNER.parent.joinpath("run-k6-aws-scenario.sh").read_text(encoding="utf-8")
         config_source = (K6_ROOT / "aws/config.js").read_text(encoding="utf-8")

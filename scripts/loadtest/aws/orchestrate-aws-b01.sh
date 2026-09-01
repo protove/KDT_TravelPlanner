@@ -227,7 +227,7 @@ ADAPTIVE_BREAKPOINT_PROFILE=0
 if [[ "$PROFILE" == *eks-monolith-breakpoint-v1.0.json* ]]; then
   BREAKPOINT_PROFILE=1
 fi
-if [[ "$PROFILE" == *eks-monolith-breakpoint-v2.0.json* ]]; then
+if [[ "$PROFILE" == *eks-monolith-breakpoint-v2.0.json* || "$PROFILE" == *eks-monolith-breakpoint-v2.1.json* ]]; then
   ADAPTIVE_BREAKPOINT_PROFILE=1
   BREAKPOINT_PROFILE=1
 fi
@@ -241,10 +241,14 @@ if [[ "$BREAKPOINT_PROFILE" == "1" && "$SLO_CONTRACT_EXPLICIT" == "0" ]]; then
   SLO_CONTRACT="$REPOSITORY_ROOT/load-tests/aws/contracts/eks-monolith-breakpoint-slo-v1.0.json"
 fi
 if [[ "$ADAPTIVE_BREAKPOINT_PROFILE" == "1" && "$SLO_CONTRACT_EXPLICIT" == "0" ]]; then
-  SLO_CONTRACT="$REPOSITORY_ROOT/load-tests/aws/contracts/eks-monolith-breakpoint-slo-v2.0.json"
+  if [[ "$PROFILE" == *eks-monolith-breakpoint-v2.1.json* ]]; then
+    SLO_CONTRACT="$REPOSITORY_ROOT/load-tests/aws/contracts/eks-monolith-breakpoint-slo-v2.1.json"
+  else
+    SLO_CONTRACT="$REPOSITORY_ROOT/load-tests/aws/contracts/eks-monolith-breakpoint-slo-v2.0.json"
+  fi
 fi
 if [[ "$BREAKPOINT_PROFILE" == "1" && "$SLO_CONTRACT" != *eks-monolith-breakpoint-slo-v1.0.json ]]; then
-  if [[ "$ADAPTIVE_BREAKPOINT_PROFILE" != "1" || "$SLO_CONTRACT" != *eks-monolith-breakpoint-slo-v2.0.json ]]; then
+  if [[ "$ADAPTIVE_BREAKPOINT_PROFILE" != "1" || ("$SLO_CONTRACT" != *eks-monolith-breakpoint-slo-v2.0.json && "$SLO_CONTRACT" != *eks-monolith-breakpoint-slo-v2.1.json) ]]; then
     echo "EKS breakpoint profile must use its matching breakpoint SLO contract" >&2
     exit 2
   fi
