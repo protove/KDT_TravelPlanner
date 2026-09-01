@@ -130,15 +130,31 @@ data "aws_iam_policy_document" "load_runner_runtime" {
     }
   }
 
+  # SendCommand evaluates the SSM document and the target instance as
+  # separate resources. Keep the document allow-list in its own statement;
+  # applying instance resource-tag conditions to the document ARN makes AWS
+  # reject the entire request before it evaluates the tagged Bastion target.
   dynamic "statement" {
     for_each = var.eks_observation_stack != "" ? [1] : []
     content {
-      sid     = "EKSBreakpointBastionCommand"
-      actions = ["ssm:SendCommand"]
-      resources = [
-        "arn:aws:ssm:${var.aws_region}:*:document/AWS-RunShellScript",
-        "arn:aws:ec2:${var.aws_region}:*:instance/*",
-      ]
+      sid       = "EKSBreakpointBastionDocument"
+      actions   = ["ssm:SendCommand"]
+      resources = ["arn:aws:ssm:${var.aws_region}:*:document/AWS-RunShellScript"]
+
+      condition {
+        test     = "StringEquals"
+        variable = "aws:RequestedRegion"
+        values   = [var.aws_region]
+      }
+    }
+  }
+
+  dynamic "statement" {
+    for_each = var.eks_observation_stack != "" ? [1] : []
+    content {
+      sid       = "EKSBreakpointBastionInstance"
+      actions   = ["ssm:SendCommand"]
+      resources = ["arn:aws:ec2:${var.aws_region}:*:instance/*"]
 
       condition {
         test     = "StringEquals"
