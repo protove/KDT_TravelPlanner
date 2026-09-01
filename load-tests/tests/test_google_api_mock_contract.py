@@ -21,6 +21,7 @@ class GoogleApiMockContractTest(unittest.TestCase):
             self.assertIn(path, config)
         self.assertIn("listen 8080", config)
         self.assertIn("root /usr/share/nginx/html;", config)
+        self.assertIn("location ^~ /responses/", config)
         self.assertIn("error_page 405 =200 /responses/places-search.json;", config)
         self.assertIn("error_page 405 =200 /responses/places-nearby.json;", config)
         self.assertIn("error_page 405 =200 /responses/routes-compute.json;", config)
