@@ -285,9 +285,14 @@ class AwsOrchestrationContractTests(unittest.TestCase):
 
     def test_shared_k6_profile_gets_action_time_platform_environment(self) -> None:
         runner_source = AWS_PHASE_RUNNER.parent.joinpath("run-k6-aws-scenario.sh").read_text(encoding="utf-8")
+        orchestrator_source = SCRIPT.read_text(encoding="utf-8")
         config_source = (K6_ROOT / "aws/config.js").read_text(encoding="utf-8")
         self.assertIn('TARGET_PLATFORM="$TARGET_PLATFORM"', runner_source)
         self.assertIn('TARGET_ENVIRONMENT="$ENVIRONMENT"', runner_source)
+        self.assertIn(
+            "export REPOSITORY_ROOT EVIDENCE_ROOT BASE_URL REGION ENVIRONMENT TARGET_PLATFORM MAX_RATE",
+            orchestrator_source,
+        )
         self.assertIn("__ENV.TARGET_ENVIRONMENT || PROFILE.environment", config_source)
         self.assertIn("__ENV.TARGET_REGION || PROFILE.region", config_source)
 
