@@ -184,11 +184,11 @@ export function travelUpdate() {
 }
 
 export function countryList() {
-  return requestOperation('countryList', 'GET', '/countries', null, [200], (data) => Array.isArray(data), false);
+  return requestOperation('countryList', 'GET', '/countries', null, [200], (data) => Array.isArray(data));
 }
 
 export function cityList() {
-  return requestOperation('cityList', 'GET', '/countries/1/cities', null, [200], (data) => Array.isArray(data), false);
+  return requestOperation('cityList', 'GET', '/countries/1/cities', null, [200], (data) => Array.isArray(data));
 }
 
 export function placeSearch() {
@@ -199,7 +199,6 @@ export function placeSearch() {
     null,
     [200],
     (data) => Array.isArray(data) && data.length > 0,
-    false,
   );
 }
 
@@ -211,7 +210,6 @@ export function nearbySearch() {
     null,
     [200],
     (data) => Array.isArray(data) && data.length > 0,
-    false,
   );
 }
 

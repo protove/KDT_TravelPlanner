@@ -21,6 +21,7 @@ class GoogleApiMockContractTest(unittest.TestCase):
             self.assertIn(path, config)
         self.assertIn("listen 8080", config)
         self.assertIn("root /usr/share/nginx/html;", config)
+        self.assertIn("error_page 405 =200 /responses/routes-compute.json;", config)
         self.assertNotIn("proxy_pass", config)
         self.assertNotIn("https://", config)
 
@@ -54,6 +55,7 @@ class GoogleApiMockContractTest(unittest.TestCase):
             self.assertIn(flag, bootstrap)
         self.assertIn("/healthz", bootstrap)
         self.assertIn("--name travel-planner-google-api-mock", bootstrap)
+        self.assertIn('curl --fail --silent --show-error --max-time 3 -X POST', bootstrap)
 
     def test_mock_network_is_sg_referenced_and_not_public(self):
         security = (ROOT / "infra/modules/load_test_security/main.tf").read_text(encoding="utf-8")
