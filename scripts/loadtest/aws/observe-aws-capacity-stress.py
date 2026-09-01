@@ -303,6 +303,13 @@ def refresh_eks_evidence(args: argparse.Namespace, aws: AwsReadOnly) -> dict[str
             nodegroup_payload,
             expected_cluster=args.cluster_name,
             expected_node_group=args.node_group_name,
+            # The observer runs during scale-out and Recovery, when the
+            # managed node group may legitimately be at desired=3/4 while
+            # retaining the canonical min/max 2/4 bounds.  Fresh target
+            # validation remains strict; this read-only path must accept the
+            # live desired value so EKS evidence is not discarded exactly at
+            # the transition we need to measure.
+            allow_current_desired=True,
         )
         target_payload = aws.call("elbv2", "describe-target-health", ["--target-group-arn", args.target_group_arn])
         target_health = validate_alb_target_health(
