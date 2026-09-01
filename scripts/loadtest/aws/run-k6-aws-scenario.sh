@@ -84,6 +84,10 @@ if [[ ! -f "$AWS_PROFILE_FILE" ]]; then
   echo "missing AWS profile file: $AWS_PROFILE_FILE" >&2
   exit 2
 fi
+# Orchestrator callers may pass a repository-relative profile path. Docker
+# interprets a relative `-v` source containing `/` as an invalid named volume,
+# so normalize the reviewed file before calculating its parent mount.
+AWS_PROFILE_FILE="$(cd "$(dirname "$AWS_PROFILE_FILE")" && pwd -P)/$(basename "$AWS_PROFILE_FILE")"
 PROFILE_VERSION="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("profileVersion", ""))' "$AWS_PROFILE_FILE")"
 case "$SCENARIO" in
   smoke) SCENARIO_FILE="smoke.js" ;;

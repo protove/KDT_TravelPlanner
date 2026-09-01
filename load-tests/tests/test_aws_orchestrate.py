@@ -296,6 +296,10 @@ class AwsOrchestrationContractTests(unittest.TestCase):
         self.assertIn("AWS_TARGET_HOST_IPS", runner_source)
         self.assertIn("DOCKER_HOST_ARGS+=(--add-host", runner_source)
         self.assertIn('"method": "docker-add-host"', runner_source)
+        self.assertIn(
+            'AWS_PROFILE_FILE="$(cd "$(dirname "$AWS_PROFILE_FILE")" && pwd -P)/$(basename "$AWS_PROFILE_FILE")"',
+            runner_source,
+        )
         self.assertNotIn("amazonaws.com", runner_source)
 
     def test_d005_and_spike_are_fail_closed_on_baseline_candidate(self) -> None:
