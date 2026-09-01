@@ -496,8 +496,14 @@ if [[ -n "$slo_producer_pid" ]]; then
   if kill -0 "$slo_producer_pid" 2>/dev/null; then
     kill -TERM "$slo_producer_pid" 2>/dev/null || true
   fi
-  wait "$slo_producer_pid" 2>/dev/null
-  slo_producer_status=$?
+  # `set -e` must not terminate the parent before we can normalize the
+  # producer's intentional SIGTERM (143) below.  A background producer is
+  # expected to return non-zero when it is explicitly stopped after k6 exits.
+  if wait "$slo_producer_pid" 2>/dev/null; then
+    slo_producer_status=0
+  else
+    slo_producer_status=$?
+  fi
   # Background jobs launched by a non-interactive shell inherit SIGINT as an
   # ignored disposition, so kill -INT can leave the producer tailing raw.json
   # forever after k6 exits. SIGTERM is not ignored in that context and is the
