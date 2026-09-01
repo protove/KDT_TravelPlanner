@@ -163,6 +163,9 @@ class SeedAwsLoadDataTest(unittest.TestCase):
             },
         )
         self.assertIn("planner_counts", captured[0])
+        self.assertIn("t.name LIKE 'seed-item-%'", captured[0])
+        self.assertIn("t.day_number IS NOT NULL", captured[0])
+        self.assertIn("t.visit_date IS NOT NULL", captured[0])
         self.assertIn("provider_user_id ~ '^loadtest-aws-aws-b01-fixture-[0-9]{3}$'", captured[0])
 
     def test_reset_and_fixture_count_use_the_same_exact_run_predicate(self):
@@ -175,7 +178,8 @@ class SeedAwsLoadDataTest(unittest.TestCase):
 
         predicates = [statement.split("provider_user_id ~ ", 1)[1].split(")", 1)[0] for statement in captured]
         self.assertEqual(predicates[0], predicates[1])
-        self.assertNotIn("LIKE", "\n".join(captured).upper())
+        self.assertNotIn("LIKE", captured[0].upper())
+        self.assertIn("LIKE 'seed-item-%'", captured[1])
 
     def test_fixture_count_validation_requires_normalized_three_item_planners(self):
         valid = {

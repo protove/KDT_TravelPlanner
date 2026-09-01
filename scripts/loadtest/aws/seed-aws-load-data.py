@@ -426,7 +426,13 @@ class AwsSeed:
             raise SeedError("fixture reset returned a non-integer planner count") from error
 
     def fixture_counts(self, run_id: str) -> dict[str, int]:
-        """Return sanitized counts for this run's users, planners and timeline rows."""
+        """Return sanitized counts for this run's users, planners and seed rows.
+
+        The current-feature workload legitimately creates unassigned timeline
+        items while it runs.  Count only the deterministic ``seed-item-*``
+        rows when proving the reusable fixture cardinality; otherwise a
+        healthy Baseline makes the next adaptive stage look corrupted.
+        """
         pattern = sql_literal(provider_user_id_regex(run_id, getattr(self, "index_width", 3)))
         result = self.psql(
             "WITH synthetic_users AS ("
@@ -435,11 +441,15 @@ class AwsSeed:
             "SELECT p.id FROM planners_table p JOIN synthetic_users u ON u.id = p.owner_id), "
             "planner_counts AS ("
             "SELECT p.id, count(t.id)::int AS item_count FROM synthetic_planners p "
-            "LEFT JOIN timeline_table t ON t.planner_id = p.id GROUP BY p.id) "
+            "LEFT JOIN timeline_table t ON t.planner_id = p.id "
+            "AND t.day_number IS NOT NULL AND t.visit_date IS NOT NULL "
+            "AND t.name LIKE 'seed-item-%' GROUP BY p.id) "
             "SELECT "
             "(SELECT count(*) FROM synthetic_users)::text || '|' || "
             "(SELECT count(*) FROM synthetic_planners)::text || '|' || "
-            "(SELECT count(*) FROM timeline_table t JOIN synthetic_planners p ON p.id = t.planner_id)::text || '|' || "
+            "(SELECT count(*) FROM timeline_table t JOIN synthetic_planners p ON p.id = t.planner_id "
+            "AND t.day_number IS NOT NULL AND t.visit_date IS NOT NULL "
+            "AND t.name LIKE 'seed-item-%')::text || '|' || "
             "COALESCE((SELECT min(item_count) FROM planner_counts), 0)::text || '|' || "
             "COALESCE((SELECT max(item_count) FROM planner_counts), 0)::text"
         ).strip()
