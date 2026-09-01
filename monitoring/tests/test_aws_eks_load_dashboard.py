@@ -34,6 +34,12 @@ class EksLoadDashboardTest(unittest.TestCase):
         self.assertIn("kube_node_status_condition", serialized)
         self.assertIn("http_server_requests_seconds_bucket", serialized)
         self.assertIn("hikaricp_connections_pending", serialized)
+        cpu_panel = next(panel for panel in self.dashboard["panels"] if panel["id"] == 9)
+        self.assertEqual(
+            cpu_panel["targets"][0]["expr"],
+            '100 * avg(process_cpu_usage{app="travel-planner-backend",environment="$environment"})',
+        )
+        self.assertNotIn("process_cpu_seconds_total{app=", serialized)
         self.assertNotIn("node_cpu_seconds_total", serialized)
         self.assertIn("environment", serialized)
         for forbidden in ("userId", "user_id", "travelId", "travel_id", "requestId", "request_id", "flow_id"):

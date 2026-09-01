@@ -144,7 +144,7 @@
       "id": 9,
       "options": { "legend": { "displayMode": "table", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
       "targets": [
-        { "expr": "100 * avg(rate(process_cpu_seconds_total{app=\"travel-planner-backend\",environment=\"$environment\"}[1m]))", "legendFormat": "backend process CPU", "refId": "A" }
+        { "expr": "100 * avg(process_cpu_usage{app=\"travel-planner-backend\",environment=\"$environment\"})", "legendFormat": "backend process CPU", "refId": "A" }
       ],
       "title": "Backend process CPU",
       "type": "timeseries"
