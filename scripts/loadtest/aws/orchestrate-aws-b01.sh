@@ -1954,8 +1954,11 @@ k6_phase_stage() {
     if [[ -z "${!required}" ]]; then echo "--k6-image is required for $phase" >&2; exit 2; fi
   done
   local fixture_id="$phase${baseline_rep:+-$baseline_rep}"
-  echo "[b01] resetting and refreshing fixture before $fixture_id"
-  seed_credentials "$fixture_id"
+  echo "[b01] verifying and refreshing fixture before $fixture_id"
+  # The run-level seed stage owns the reset.  Phase entry only performs an
+  # incremental verification/top-up so Smoke/Baseline/Recovery do not delete
+  # and recreate the same 512-user fixture a second time.
+  seed_credentials "$fixture_id" 1
   export REPOSITORY_ROOT EVIDENCE_ROOT BASE_URL REGION ENVIRONMENT TARGET_PLATFORM MAX_RATE MAX_VUS SOURCE_COMMIT_SHA RUNNER_BOOTSTRAP_RUN_ID="$RUN_ID"
   export RUNNER_READINESS_FILE="${RUNNER_READINESS_FILE:-/var/lib/travel-planner/load-test-evidence/runner-readiness.json}"
   export EKS_CLUSTER_NAME EKS_NODE_GROUP_NAME EKS_BASTION_ID BACKEND_NAMESPACE BACKEND_DEPLOYMENT TARGET_GROUP_ARN

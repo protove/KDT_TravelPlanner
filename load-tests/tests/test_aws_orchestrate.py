@@ -293,6 +293,7 @@ class AwsOrchestrationContractTests(unittest.TestCase):
             "export REPOSITORY_ROOT EVIDENCE_ROOT BASE_URL REGION ENVIRONMENT TARGET_PLATFORM MAX_RATE",
             orchestrator_source,
         )
+        self.assertIn('seed_credentials "$fixture_id" 1', orchestrator_source)
         self.assertIn("__ENV.TARGET_ENVIRONMENT || PROFILE.environment", config_source)
         self.assertIn("__ENV.TARGET_REGION || PROFILE.region", config_source)
 
