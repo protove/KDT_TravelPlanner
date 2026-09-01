@@ -191,7 +191,9 @@ else
   [[ -z "$(git -C "$clone_dir" status --porcelain --untracked-files=all)" ]] || { echo "temporary source clone is not clean" >&2; exit 1; }
   # The clone has no ignored working-tree content. Keeping .git is intentional:
   # the Runner's existing source-lineage checks use git rev-parse HEAD.
-  COPYFILE_DISABLE=1 tar -czf "$archive_tmp" -C "$clone_dir" .
+  # Disable macOS metadata explicitly.  AL2023's GNU tar treats libarchive
+  # xattr PAX records as an extraction error under `set -e`.
+  COPYFILE_DISABLE=1 tar --no-xattrs --no-mac-metadata --no-acls --no-fflags -czf "$archive_tmp" -C "$clone_dir" .
   archive_path="$archive_tmp"
   validate_archive "$archive_path" "$SOURCE_COMMIT_SHA"
 fi

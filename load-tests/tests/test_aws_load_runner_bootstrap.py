@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import gzip
 import os
 import stat
 import subprocess
@@ -78,11 +79,13 @@ class LoadRunnerBootstrapContractTests(unittest.TestCase):
             self.assertTrue(metadata["remoteRemoved"])
             self.assertTrue(metadata["trackedOnly"])
             self.assertEqual(stat.S_IMODE((Path(evidence_dir) / "evidence/aws/runner-source-bootstrap.json").stat().st_mode), 0o600)
+            raw_archive = gzip.open(archive, "rb").read()
             with tarfile.open(archive, "r:gz") as bundle:
                 names = bundle.getnames()
             self.assertTrue(any(name.endswith("tracked.txt") for name in names))
             self.assertTrue(any(name.endswith(".git/shallow") for name in names))
             self.assertFalse(any("ignored/" in name or "/evidence/" in name for name in names))
+            self.assertNotIn(b"LIBARCHIVE.xattr", raw_archive)
 
             with tempfile.TemporaryDirectory(prefix="scrum80-bootstrap-extract-") as extract_dir:
                 with tarfile.open(archive, "r:gz") as bundle:
