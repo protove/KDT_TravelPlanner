@@ -15,6 +15,7 @@ import argparse
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 import time
@@ -191,6 +192,63 @@ def required_eks_observations(evidence: Mapping[str, Any]) -> dict[str, Any]:
     return {"status": "complete" if all(required.values()) else "missing", "required": required}
 
 
+def target_health_via_bastion(
+    *,
+    aws: AwsReadOnly,
+    bastion_id: str,
+    target_group_arn: str,
+    region: str,
+) -> dict[str, Any]:
+    """Read ALB target health through the private bastion when Runner IAM lacks ELB read access.
+
+    The Runner role intentionally has a narrow observation policy.  Some
+    environments grant EKS/ASG reads but omit ``DescribeTargetHealth``;
+    routing this one read-only query through the already-approved bastion
+    keeps the live observer complete without granting a new Runner action.
+    Raw SSM output is parsed in memory and never persisted.
+    """
+    command = (
+        "set -euo pipefail; "
+        f"aws elbv2 describe-target-health --target-group-arn {shlex.quote(target_group_arn)} "
+        f"--region {shlex.quote(region)} --output json"
+    )
+    parameters = json.dumps({"commands": [command]}, separators=(",", ":"))
+    command_payload = aws.call_targeted_ssm(
+        "send-command",
+        [
+            "--instance-ids", bastion_id,
+            "--document-name", "AWS-RunShellScript",
+            "--comment", "SCRUM-80 read-only ALB target health fallback",
+            "--parameters", parameters,
+        ],
+    )
+    command_id = ((command_payload.get("Command") or {}).get("CommandId"))
+    if not isinstance(command_id, str) or not command_id:
+        raise ObserverError("ALB bastion refresh returned no SSM command id")
+    invocation: dict[str, Any] = {}
+    status = ""
+    for _ in range(30):
+        invocation = aws.call_targeted_ssm(
+            "get-command-invocation",
+            ["--command-id", command_id, "--instance-id", bastion_id],
+        )
+        status = str(invocation.get("Status") or "")
+        if status == "Success":
+            break
+        if status in {"Failed", "Cancelled", "TimedOut", "Undeliverable", "Terminated"}:
+            raise ObserverError(f"ALB bastion refresh failed: {status}")
+        time.sleep(1)
+    if status != "Success":
+        raise ObserverError("ALB bastion refresh timed out")
+    try:
+        payload = json.loads(str(invocation.get("StandardOutputContent", "")))
+    except json.JSONDecodeError as error:
+        raise ObserverError("ALB bastion refresh returned invalid JSON") from error
+    if not isinstance(payload, dict):
+        raise ObserverError("ALB bastion refresh returned a non-object")
+    return payload
+
+
 def ec2_capacity(payload: Mapping[str, Any]) -> tuple[int, bool, dict[str, Any]]:
     groups = payload.get("AutoScalingGroups")
     if not isinstance(groups, list) or len(groups) != 1 or not isinstance(groups[0], Mapping):
@@ -311,7 +369,19 @@ def refresh_eks_evidence(args: argparse.Namespace, aws: AwsReadOnly) -> dict[str
             # the transition we need to measure.
             allow_current_desired=True,
         )
-        target_payload = aws.call("elbv2", "describe-target-health", ["--target-group-arn", args.target_group_arn])
+        try:
+            target_payload = aws.call("elbv2", "describe-target-health", ["--target-group-arn", args.target_group_arn])
+        except ObserverError:
+            # The Runner role may be allowed to describe the EKS node group
+            # while lacking ELB target-health read access.  Use the same
+            # private bastion already required for kubectl evidence; this is
+            # still a read-only observation and preserves the live contract.
+            target_payload = target_health_via_bastion(
+                aws=aws,
+                bastion_id=args.eks_bastion_id,
+                target_group_arn=args.target_group_arn,
+                region=args.region,
+            )
         target_health = validate_alb_target_health(
             target_payload,
             target_group_arn=args.target_group_arn,

@@ -31,6 +31,38 @@ class ObserverContractTests(unittest.TestCase):
         with self.assertRaisesRegex(MODULE.ObserverError, "non-observation"):
             aws.call_targeted_ssm("delete-command", [])
 
+    def test_alb_target_health_fallback_uses_read_only_bastion_command(self):
+        class FakeAws:
+            def call_targeted_ssm(self, operation, arguments):
+                if operation == "send-command":
+                    self.sent_arguments = arguments
+                    return {"Command": {"CommandId": "cmd-read-only"}}
+                self.assertEqual(operation, "get-command-invocation")
+                return {
+                    "Status": "Success",
+                    "StandardOutputContent": json.dumps({
+                        "TargetHealthDescriptions": [{
+                            "Target": {"Id": "10.0.0.8"},
+                            "TargetHealth": {"State": "healthy"},
+                        }]
+                    }),
+                }
+
+            def assertEqual(self, left, right):
+                if left != right:
+                    raise AssertionError((left, right))
+
+        fake = FakeAws()
+        payload = MODULE.target_health_via_bastion(
+            aws=fake,
+            bastion_id="i-0123456789abcdef0",
+            target_group_arn="arn:aws:elasticloadbalancing:ap-northeast-2:419496180357:targetgroup/backend/0123456789abcdef",
+            region="ap-northeast-2",
+        )
+        self.assertEqual(payload["TargetHealthDescriptions"][0]["TargetHealth"]["State"], "healthy")
+        self.assertIn("--document-name", fake.sent_arguments)
+        self.assertIn("AWS-RunShellScript", fake.sent_arguments)
+
     def test_ec2_capacity_requires_healthy_in_service_members(self):
         desired, healthy, details = MODULE.ec2_capacity({
             "AutoScalingGroups": [{
