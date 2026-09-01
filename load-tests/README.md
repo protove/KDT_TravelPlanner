@@ -7,6 +7,28 @@ Backend 장애·복구, T1~T6 회복 판정을 반복하는 로컬 검증 키트
 스크립트·인증·데이터·증거 파이프라인이 동작하는지 확인하는 용도이며 AWS 성능 수치나
 SLO 합격을 주장하는 근거가 아니다.
 
+## SCRUM-80 최신 기능 로컬 진입 게이트
+
+AWS EKS 수명주기를 시작하기 전에 SCRUM-80이 고정한 ECR `d11e78…` Backend
+이미지를 새로 빌드하지 않고 `linux/amd64`로 실행한다. 시더는 Place ID 세 개와
+Community post/comment를 합성해 현재 26개 operation flow의 상태 의존성을 채우고,
+기존 private Google mock으로만 Places/Routes 어댑터를 호출한다. 로컬 p95는 Apple
+Silicon의 amd64 에뮬레이션 영향을 받으므로 정보용이고, AWS SLO나 처리 한계를
+주장하지 않는다.
+
+```bash
+python3 scripts/loadtest/run-compose-current-feature-validation.py all \
+  --users 16 --rate 16 --warmup 30s --duration 180s
+```
+
+Runner는 run 전용 Compose override와 mode `0600` env/credential 파일을 만들고,
+`docker compose up --no-build`만 사용한다. 완료 시 PostgreSQL/Redis/mock/backend
+볼륨·컨테이너를 모두 내리고 credential 파일을 폐기한다. 증거는
+`evidence/load-tests/scrum80-local-d11e78-<UTC>/`에 image lineage, Flyway V22,
+fixture, Smoke/Baseline raw·summary, private mock 및 cleanup/safety 결과로 보존된다.
+이 게이트가 `LOCAL_PASS`가 아니면 AWS State를 만들지 않고 원인을 수정한 뒤 새
+로컬 stack에서 해당 검증을 다시 한다.
+
 ## 사전 조건
 
 - Docker Desktop 또는 Docker Engine과 Compose v2

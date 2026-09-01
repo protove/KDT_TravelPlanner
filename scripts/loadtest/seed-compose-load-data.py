@@ -24,6 +24,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
+from urllib.parse import urlencode
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
@@ -32,6 +33,8 @@ DEFAULT_ENV_FILE = REPOSITORY_ROOT / ".env.prod.example"
 DEFAULT_COMPOSE_FILE = REPOSITORY_ROOT / "compose.yml"
 DEFAULT_REFRESH_TTL_MS = 30 * 24 * 60 * 60 * 1000
 TOKEN_PATTERN = re.compile(r"^[A-Za-z0-9_-]{43}$")
+CURRENT_FEATURE_FIXTURE_VERSION = "compose-current-feature-fixture-v1"
+CURRENT_FEATURE_PLACE_IDS_PER_TRAVEL = 3
 
 
 class SeedError(RuntimeError):
@@ -84,6 +87,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--base-url", default=os.environ.get("BASE_URL", "http://127.0.0.1:8080"))
     parser.add_argument("--data-file", type=Path, default=DEFAULT_DATA_FILE)
     parser.add_argument("--seed-tag", default=None)
+    parser.add_argument(
+        "--current-feature",
+        action="store_true",
+        help="seed the Place and Community IDs required by the 26-operation current-feature flow",
+    )
+    parser.add_argument("--fixture-result-file", type=Path)
     return parser.parse_args()
 
 
@@ -205,6 +214,16 @@ class ComposeSeed:
             raise SeedError(f"travel creation contract failed with status {status}")
         return travel_id
 
+    @staticmethod
+    def current_feature_marker(seed_tag: str, index: int) -> str:
+        safe_tag = re.sub(r"[^A-Za-z0-9-]", "", seed_tag)[-18:]
+        return f"loadtest-{safe_tag}-{index:03d}"
+
+    @classmethod
+    def current_feature_place_ids(cls, seed_tag: str, index: int) -> list[str]:
+        marker = cls.current_feature_marker(seed_tag, index)
+        return [f"loadtest-{marker}-place-{place_index:03d}" for place_index in range(1, CURRENT_FEATURE_PLACE_IDS_PER_TRAVEL + 1)]
+
     def create_timeline_items(self, access_token: str, travel_id: str) -> list[str]:
         item_ids: list[str] = []
         for visit_order in (1, 2, 3):
@@ -218,6 +237,7 @@ class ComposeSeed:
                     "category": "관광지",
                     "name": f"seed-item-{visit_order}",
                     "visitOrder": visit_order,
+                    "googlePlaceId": getattr(self, "_active_place_ids", [None, None, None])[visit_order - 1],
                 },
             )
             item_id = body.get("data", {}).get("timelineItemId") if isinstance(body, dict) else None
@@ -225,6 +245,136 @@ class ComposeSeed:
                 raise SeedError(f"timeline creation contract failed with status {status}")
             item_ids.append(item_id)
         return item_ids
+
+    def _travel_detail(self, access_token: str, travel_id: str) -> dict:
+        status, body, _ = self.api("GET", f"/travels/{travel_id}", token=access_token)
+        data = body.get("data") if isinstance(body, dict) else None
+        if status != 200 or not isinstance(data, dict):
+            raise SeedError(f"current-feature travel fixture lookup failed with status {status}")
+        return data
+
+    def _ensure_place_ids(
+        self,
+        access_token: str,
+        travel_id: str,
+        timeline_ids: list[str],
+        desired_place_ids: list[str],
+        travel_detail: dict,
+    ) -> None:
+        if len(timeline_ids) < CURRENT_FEATURE_PLACE_IDS_PER_TRAVEL:
+            raise SeedError("current-feature fixture requires three timeline items")
+        timeline_by_id = {
+            str(item.get("timelineItemId")): item
+            for item in travel_detail.get("timelineItems", [])
+            if isinstance(item, dict) and item.get("timelineItemId")
+        }
+        for item_id, place_id in zip(timeline_ids, desired_place_ids):
+            current = timeline_by_id.get(str(item_id), {}).get("googlePlaceId")
+            if current == place_id:
+                continue
+            status, _, _ = self.api(
+                "PATCH",
+                f"/travels/{travel_id}/timeline-items/{item_id}",
+                token=access_token,
+                body={"googlePlaceId": place_id},
+            )
+            if status != 200:
+                raise SeedError(f"current-feature Place fixture update failed with status {status}")
+
+    def _find_or_create_post(self, access_token: str, travel_id: str, marker: str) -> tuple[str, int]:
+        status, body, _ = self.api(
+            "GET",
+            f"/community/me/posts?{urlencode({'keyword': marker, 'page': 0, 'size': 50})}",
+            token=access_token,
+        )
+        data = body.get("data") if isinstance(body, dict) else None
+        content = data.get("content", []) if isinstance(data, dict) else []
+        post_id = None
+        for item in content if isinstance(content, list) else []:
+            if isinstance(item, dict) and marker in str(item.get("title", "")):
+                post_id = item.get("postId")
+                break
+        if status != 200:
+            raise SeedError(f"current-feature community fixture lookup failed with status {status}")
+        if not isinstance(post_id, str) or not post_id:
+            body_json = {
+                "type": "doc",
+                "content": [{"type": "paragraph", "content": [{"type": "text", "text": marker}]}],
+            }
+            status, body, _ = self.api(
+                "POST",
+                "/community/posts",
+                token=access_token,
+                body={
+                    "categoryCode": "TRAVEL_REVIEW",
+                    "title": f"{marker} travel review",
+                    "bodyJson": body_json,
+                    "tags": ["loadtest", marker[-12:]],
+                    "sourceTravelId": travel_id,
+                },
+            )
+            data = body.get("data") if isinstance(body, dict) else None
+            post_id = data.get("postId") if isinstance(data, dict) else None
+            if status not in (200, 201) or not isinstance(post_id, str) or not post_id:
+                raise SeedError(f"current-feature community post creation failed with status {status}")
+
+        status, body, _ = self.api("GET", f"/community/posts/{post_id}", token=access_token)
+        data = body.get("data") if isinstance(body, dict) else None
+        version = data.get("version") if isinstance(data, dict) else None
+        if status != 200 or not isinstance(version, int):
+            raise SeedError(f"current-feature community post detail failed with status {status}")
+        return post_id, version
+
+    def _find_or_create_comment(self, access_token: str, post_id: str, marker: str) -> str:
+        status, body, _ = self.api("GET", f"/community/posts/{post_id}/comments", token=access_token)
+        data = body.get("data") if isinstance(body, dict) else None
+        comment_id = None
+        for item in data if isinstance(data, list) else []:
+            if isinstance(item, dict) and marker in str(item.get("content", "")):
+                comment_id = item.get("commentId")
+                break
+        if status != 200:
+            raise SeedError(f"current-feature community comment lookup failed with status {status}")
+        if not isinstance(comment_id, str) or not comment_id:
+            status, body, _ = self.api(
+                "POST",
+                f"/community/posts/{post_id}/comments",
+                token=access_token,
+                body={"content": f"{marker} comment"},
+            )
+            data = body.get("data") if isinstance(body, dict) else None
+            comment_id = data.get("commentId") if isinstance(data, dict) else None
+            if status not in (200, 201) or not isinstance(comment_id, str) or not comment_id:
+                raise SeedError(f"current-feature community comment creation failed with status {status}")
+        return comment_id
+
+    def ensure_current_feature_fixture(
+        self,
+        access_token: str,
+        seed_tag: str,
+        index: int,
+        travel_id: str,
+        timeline_ids: list[str],
+    ) -> dict:
+        """Ensure every stateful ID used by the 26-operation flow exists."""
+        place_ids = self.current_feature_place_ids(seed_tag, index)
+        detail = self._travel_detail(access_token, travel_id)
+        self._ensure_place_ids(access_token, travel_id, timeline_ids, place_ids, detail)
+        marker = self.current_feature_marker(seed_tag, index)
+        post_id, post_version = self._find_or_create_post(access_token, travel_id, marker)
+        comment_id = self._find_or_create_comment(access_token, post_id, marker)
+        travel_version = detail.get("version")
+        if not isinstance(travel_version, int):
+            raise SeedError("current-feature travel detail has no integer version")
+        return {
+            "fixtureMarker": marker,
+            "placeIds": place_ids,
+            "postId": post_id,
+            "commentId": comment_id,
+            "travelVersion": travel_version,
+            "postVersion": post_version,
+            "commentSequence": 0,
+        }
 
     def write_credentials(self, payload: dict, path: Path) -> None:
         path = path.resolve()
@@ -252,21 +402,46 @@ def seed_all(runtime: ComposeSeed, args: argparse.Namespace, ttl_ms: int) -> Non
         )
         refresh_token, family_id = runtime.seed_redis_token(user_id, ttl_ms)
         access_token, refresh_token = runtime.refresh(refresh_token)
+        if args.current_feature:
+            runtime._active_place_ids = runtime.current_feature_place_ids(seed_tag, index)
         travel_id = runtime.create_travel(access_token, index)
         timeline_ids = runtime.create_timeline_items(access_token, travel_id)
-        credentials.append({
+        credential = {
             "userId": user_id,
             "travelId": travel_id,
             "refreshToken": refresh_token,
             "refreshFamilyId": family_id,
             "visitDate": "2026-08-01",
             "timelineItemIds": timeline_ids,
-        })
+        }
+        if args.current_feature:
+            credential.update(runtime.ensure_current_feature_fixture(
+                access_token, seed_tag, index, travel_id, timeline_ids,
+            ))
+        credentials.append(credential)
         print(f"[seed] user {index}/{args.users} prepared")
-    runtime.write_credentials(
-        {"seedVersion": "s1", "seedTag": seed_tag, "seededAt": datetime.now(timezone.utc).isoformat(), "credentials": credentials},
-        args.data_file,
-    )
+    payload = {
+        "seedVersion": "s1",
+        "seedTag": seed_tag,
+        "seededAt": datetime.now(timezone.utc).isoformat(),
+        "seedState": "complete",
+        "fixtureState": "verified" if args.current_feature else "not-verified",
+        "fixtureVersion": CURRENT_FEATURE_FIXTURE_VERSION if args.current_feature else None,
+        "credentials": credentials,
+    }
+    runtime.write_credentials(payload, args.data_file)
+    if args.fixture_result_file:
+        result = {
+            "schemaVersion": "compose-current-feature-fixture/v1",
+            "status": "verified" if args.current_feature else "not-required",
+            "seedTag": seed_tag,
+            "users": len(credentials),
+            "usersWithPlaceIds": sum(bool(item.get("placeIds")) for item in credentials),
+            "usersWithCommunityPost": sum(bool(item.get("postId")) for item in credentials),
+            "usersWithCommunityComment": sum(bool(item.get("commentId")) for item in credentials),
+        }
+        args.fixture_result_file.parent.mkdir(parents=True, exist_ok=True)
+        args.fixture_result_file.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
     print(f"[seed] complete: {len(credentials)} synthetic users")
 
 

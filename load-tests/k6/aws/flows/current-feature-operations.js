@@ -21,13 +21,11 @@ import {
   registerComment,
   registerPlaceIds,
   registerPost,
-  registerTimelineItem,
   setPostVersion,
   setTravelVersion,
   timelineItemIds,
   travelId,
   travelVersion,
-  visitDate,
 } from '../../lib/data.js';
 import { record } from '../../lib/metrics.js';
 import { recordCoreOperation } from '../lib/core-metrics.js';
@@ -252,8 +250,13 @@ export function timelineCreate() {
     'POST',
     `/travels/${travelId()}/timeline-items`,
     {
-      dayNumber: 1,
-      visitDate: visitDate(),
+      // Keep the create operation representative without growing the day-1
+      // route fixture on every arrival.  An unassigned item is a supported
+      // backend state (dayNumber and visitDate are both null); the seeded
+      // three-item day-1 fixture remains the stable input for routeGet and
+      // orderChange throughout a long Baseline/stress run.
+      dayNumber: null,
+      visitDate: null,
       category: '관광지',
       name: `load-${marker()}-${exec.vu.idInTest}-${exec.scenario.iterationInTest}`,
       googlePlaceId: firstPlaceId(),
@@ -262,10 +265,6 @@ export function timelineCreate() {
     [200, 201],
     (data) => isObject(data) && typeof data.timelineItemId === 'string',
   );
-  const data = dataOf(response);
-  if (response.status === 200 || response.status === 201) {
-    if (data && data.timelineItemId) registerTimelineItem(data.timelineItemId);
-  }
   return response;
 }
 

@@ -14,6 +14,28 @@ SPEC.loader.exec_module(MODULE)
 
 
 class SeedComposeLoadDataTest(unittest.TestCase):
+    def test_current_feature_fixture_ids_are_deterministic_and_complete(self):
+        marker = MODULE.ComposeSeed.current_feature_marker("run-20260901", 7)
+        self.assertEqual(marker, "loadtest-run-20260901-007")
+        self.assertEqual(
+            MODULE.ComposeSeed.current_feature_place_ids("run-20260901", 7),
+            [
+                "loadtest-loadtest-run-20260901-007-place-001",
+                "loadtest-loadtest-run-20260901-007-place-002",
+                "loadtest-loadtest-run-20260901-007-place-003",
+            ],
+        )
+
+    def test_current_feature_seed_arguments_are_available(self):
+        original = MODULE.sys.argv
+        MODULE.sys.argv = ["seed", "--current-feature", "--fixture-result-file", "/tmp/fixture.json"]
+        try:
+            args = MODULE.parse_args()
+        finally:
+            MODULE.sys.argv = original
+        self.assertTrue(args.current_feature)
+        self.assertEqual(str(args.fixture_result_file), "/tmp/fixture.json")
+
     def test_opaque_token_matches_backend_format(self):
         token = MODULE.new_opaque_token()
 

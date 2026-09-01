@@ -72,6 +72,12 @@ class CurrentFeatureMixTest(unittest.TestCase):
         self.assertIn("routePreview", source)
         self.assertIn("current-feature", source)
 
+    def test_timeline_create_uses_unassigned_fixture_without_growing_route_day(self):
+        source = FLOW.read_text(encoding="utf-8")
+        self.assertIn("dayNumber: null", source)
+        self.assertIn("visitDate: null", source)
+        self.assertIn("three-item day-1 fixture", source)
+
 
 if __name__ == "__main__":
     unittest.main()
