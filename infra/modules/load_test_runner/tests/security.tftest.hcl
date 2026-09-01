@@ -61,7 +61,9 @@ run "load_runner_is_private_and_encrypted" {
       strcontains(aws_instance.load_runner.user_data, var.source_commit_sha) &&
       strcontains(aws_instance.load_runner.user_data, "base-ready.json") &&
       strcontains(aws_instance.load_runner.user_data, "command -v aws") &&
+      strcontains(aws_instance.load_runner.user_data, "command -v curl") &&
       strcontains(aws_instance.load_runner.user_data, "chmod 0600") &&
+      !strcontains(aws_instance.load_runner.user_data, "dnf install -y docker git python3-pip curl") &&
       !strcontains(aws_instance.load_runner.user_data, "git clone") &&
       !strcontains(aws_instance.load_runner.user_data, "git fetch") &&
       !strcontains(aws_instance.load_runner.user_data, "docker pull") &&

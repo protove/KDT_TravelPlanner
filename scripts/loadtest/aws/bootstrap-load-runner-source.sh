@@ -22,6 +22,7 @@ K6_IMAGE=""
 MOCK_IMAGE="nginxinc/nginx-unprivileged:1.27.1-alpine3.20-perl@sha256:86b08eb3082f1f796f0ce1ef75a1c356a116fafc5f88754924fba2286fbd0221"
 DRY_RUN=0
 ARCHIVE_OUTPUT=""
+ARCHIVE_INPUT=""
 
 usage() {
   cat <<'USAGE'
@@ -42,6 +43,7 @@ Optional:
   --botocore-version VERSION   Default: 1.43.68
   --mock-image IMAGE@sha256:... Digest-pinned private mock image
   --archive-output PATH        Preserve the generated archive at this path
+  --archive-input PATH         Reuse a previously prepared archive byte-for-byte
   --dry-run                    Build/hash the archive but skip S3 and SSM
 USAGE
 }
@@ -60,6 +62,7 @@ while [[ "$#" -gt 0 ]]; do
     --k6-image) K6_IMAGE="$2"; shift 2 ;;
     --mock-image) MOCK_IMAGE="$2"; shift 2 ;;
     --archive-output) ARCHIVE_OUTPUT="$2"; shift 2 ;;
+    --archive-input) ARCHIVE_INPUT="$2"; shift 2 ;;
     --dry-run) DRY_RUN=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "unknown option: $1" >&2; usage >&2; exit 2 ;;
@@ -111,6 +114,10 @@ if [[ ! "$MOCK_IMAGE" =~ ^nginxinc/nginx-unprivileged:[A-Za-z0-9._-]+@sha256:[0-
   echo "--mock-image must be a digest-pinned nginxinc/nginx-unprivileged image" >&2
   exit 2
 fi
+if [[ -n "$ARCHIVE_INPUT" && -n "$ARCHIVE_OUTPUT" ]]; then
+  echo "--archive-input and --archive-output cannot be used together" >&2
+  exit 2
+fi
 if [[ ! "$BOTOCORE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
   echo "--botocore-version must be a pinned semantic version" >&2
   exit 2
@@ -120,29 +127,77 @@ mkdir -p "$EVIDENCE_ROOT/aws"
 work_dir="$(mktemp -d "${TMPDIR:-/tmp}/scrum80-runner-source.XXXXXX")"
 cleanup() { rm -rf -- "$work_dir"; }
 trap cleanup EXIT
-clone_dir="$work_dir/source"
-archive_tmp="$work_dir/source-${SOURCE_COMMIT_SHA}.tar.gz"
 
 git -C "$REPOSITORY_ROOT" cat-file -e "$SOURCE_COMMIT_SHA^{commit}" 2>/dev/null || {
   echo "source commit is not present in the local repository" >&2
   exit 1
 }
-git clone --quiet --no-checkout --depth 1 "file://$REPOSITORY_ROOT" "$clone_dir"
-git -C "$clone_dir" fetch --quiet --depth 1 origin "$SOURCE_COMMIT_SHA"
-git -C "$clone_dir" checkout --quiet --detach "$SOURCE_COMMIT_SHA"
-actual_source_sha="$(git -C "$clone_dir" rev-parse HEAD)"
-[[ "$actual_source_sha" == "$SOURCE_COMMIT_SHA" ]] || { echo "temporary clone SHA mismatch" >&2; exit 1; }
-[[ "$(git -C "$clone_dir" rev-parse --is-shallow-repository)" == "true" ]] || { echo "source clone is not shallow" >&2; exit 1; }
-git -C "$clone_dir" remote remove origin
-[[ -z "$(git -C "$clone_dir" remote)" ]] || { echo "source clone remote removal failed" >&2; exit 1; }
-[[ -z "$(git -C "$clone_dir" status --porcelain --untracked-files=all)" ]] || { echo "temporary source clone is not clean" >&2; exit 1; }
-tree_sha="$(git -C "$clone_dir" rev-parse 'HEAD^{tree}')"
+archive_path=""
+archive_reused=false
+tree_sha="$(git -C "$REPOSITORY_ROOT" rev-parse "$SOURCE_COMMIT_SHA^{tree}")"
 
-# The clone has no ignored working-tree content. Keeping .git is intentional:
-# the Runner's existing source-lineage checks use git rev-parse HEAD.
-tar -czf "$archive_tmp" -C "$clone_dir" .
-archive_sha256="$(sha256sum "$archive_tmp" | awk '{print $1}')"
-archive_size="$(python3 - "$archive_tmp" <<'PY'
+validate_archive() {
+  local archive="$1"
+  local expected_source="$2"
+  local extracted="$work_dir/archive-check"
+  [[ -f "$archive" ]] || { echo "prepared archive does not exist" >&2; exit 1; }
+  mkdir -p "$extracted"
+  python3 - "$archive" "$extracted" <<'PY'
+import os
+import sys
+import tarfile
+from pathlib import Path
+from pathlib import PurePosixPath
+
+archive = sys.argv[1]
+destination = Path(sys.argv[2])
+destination.mkdir(parents=True, exist_ok=True)
+with tarfile.open(archive, "r:gz") as bundle:
+    for member in bundle.getmembers():
+        path = PurePosixPath(member.name)
+        if path.is_absolute() or ".." in path.parts:
+            raise SystemExit("prepared archive contains an unsafe path")
+        target = (destination / Path(member.name)).resolve()
+        if os.path.commonpath((str(destination.resolve()), str(target))) != str(destination.resolve()):
+            raise SystemExit("prepared archive escapes its extraction directory")
+        if member.issym() or member.islnk():
+            link_target = (destination / Path(member.name).parent / member.linkname).resolve()
+            if os.path.commonpath((str(destination.resolve()), str(link_target))) != str(destination.resolve()):
+                raise SystemExit("prepared archive contains an unsafe link")
+    bundle.extractall(destination)
+PY
+  [[ "$(git -C "$extracted" rev-parse HEAD)" == "$expected_source" ]] || { echo "prepared archive source SHA mismatch" >&2; exit 1; }
+  [[ "$(git -C "$extracted" rev-parse 'HEAD^{tree}')" == "$tree_sha" ]] || { echo "prepared archive tree SHA mismatch" >&2; exit 1; }
+  [[ "$(git -C "$extracted" rev-parse --is-shallow-repository)" == "true" ]] || { echo "prepared archive is not shallow" >&2; exit 1; }
+  [[ -z "$(git -C "$extracted" remote)" ]] || { echo "prepared archive must be remote-free" >&2; exit 1; }
+  [[ -z "$(git -C "$extracted" status --porcelain --untracked-files=all)" ]] || { echo "prepared archive source is not clean" >&2; exit 1; }
+}
+
+if [[ -n "$ARCHIVE_INPUT" ]]; then
+  archive_path="$ARCHIVE_INPUT"
+  validate_archive "$archive_path" "$SOURCE_COMMIT_SHA"
+  archive_reused=true
+else
+  clone_dir="$work_dir/source"
+  archive_tmp="$work_dir/source-${SOURCE_COMMIT_SHA}.tar.gz"
+  git clone --quiet --no-checkout --depth 1 "file://$REPOSITORY_ROOT" "$clone_dir"
+  git -C "$clone_dir" fetch --quiet --depth 1 origin "$SOURCE_COMMIT_SHA"
+  git -C "$clone_dir" checkout --quiet --detach "$SOURCE_COMMIT_SHA"
+  actual_source_sha="$(git -C "$clone_dir" rev-parse HEAD)"
+  [[ "$actual_source_sha" == "$SOURCE_COMMIT_SHA" ]] || { echo "temporary clone SHA mismatch" >&2; exit 1; }
+  [[ "$(git -C "$clone_dir" rev-parse --is-shallow-repository)" == "true" ]] || { echo "source clone is not shallow" >&2; exit 1; }
+  git -C "$clone_dir" remote remove origin
+  [[ -z "$(git -C "$clone_dir" remote)" ]] || { echo "source clone remote removal failed" >&2; exit 1; }
+  [[ -z "$(git -C "$clone_dir" status --porcelain --untracked-files=all)" ]] || { echo "temporary source clone is not clean" >&2; exit 1; }
+  # The clone has no ignored working-tree content. Keeping .git is intentional:
+  # the Runner's existing source-lineage checks use git rev-parse HEAD.
+  COPYFILE_DISABLE=1 tar -czf "$archive_tmp" -C "$clone_dir" .
+  archive_path="$archive_tmp"
+  validate_archive "$archive_path" "$SOURCE_COMMIT_SHA"
+fi
+
+archive_sha256="$(sha256sum "$archive_path" | awk '{print $1}')"
+archive_size="$(python3 - "$archive_path" <<'PY'
 import os
 import sys
 print(os.path.getsize(sys.argv[1]))
@@ -150,10 +205,8 @@ PY
 )"
 if [[ -n "$ARCHIVE_OUTPUT" ]]; then
   mkdir -p "$(dirname "$ARCHIVE_OUTPUT")"
-  cp "$archive_tmp" "$ARCHIVE_OUTPUT"
+  cp "$archive_path" "$ARCHIVE_OUTPUT"
   archive_path="$ARCHIVE_OUTPUT"
-else
-  archive_path="$archive_tmp"
 fi
 
 s3_key="${S3_PREFIX%/}/${RUN_ID}/bootstrap/source-${SOURCE_COMMIT_SHA}.tar.gz"
@@ -161,13 +214,13 @@ readiness_key="${S3_PREFIX%/}/${RUN_ID}/bootstrap/runner-readiness.json"
 archive_metadata="$EVIDENCE_ROOT/aws/runner-source-bootstrap.json"
 
 if [[ "$DRY_RUN" == "1" ]]; then
-  python3 - "$archive_metadata" "$RUN_ID" "$SOURCE_COMMIT_SHA" "$tree_sha" "$archive_path" "$archive_sha256" "$archive_size" <<'PY'
+  python3 - "$archive_metadata" "$RUN_ID" "$SOURCE_COMMIT_SHA" "$tree_sha" "$archive_path" "$archive_sha256" "$archive_size" "$archive_reused" <<'PY'
 import json
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-output, run_id, source_sha, tree_sha, archive, digest, size = sys.argv[1:]
+output, run_id, source_sha, tree_sha, archive, digest, size, reused = sys.argv[1:]
 Path(output).write_text(json.dumps({
     "schemaVersion": "scrum80-runner-source-bootstrap/v1",
     "status": "dry-run",
@@ -177,6 +230,7 @@ Path(output).write_text(json.dumps({
     "archivePath": archive,
     "archiveSha256": digest,
     "archiveSizeBytes": int(size),
+    "archiveReused": reused == "true",
     "remoteRemoved": True,
     "shallowClone": True,
     "trackedOnly": True,
@@ -184,7 +238,7 @@ Path(output).write_text(json.dumps({
 }, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 PY
   chmod 0600 "$archive_metadata"
-  echo "[runner-bootstrap] dry-run archive=$archive_path sha256=$archive_sha256 size=$archive_size"
+  echo "[runner-bootstrap] dry-run archive=$archive_path sha256=$archive_sha256 size=$archive_size reused=$archive_reused"
   exit 0
 fi
 
@@ -206,13 +260,13 @@ if metadata.get("archive-sha256") != expected_sha or metadata.get("source-commit
     raise SystemExit("S3 source archive metadata read-back mismatch")
 PY
 
-python3 - "$archive_metadata" "$RUN_ID" "$SOURCE_COMMIT_SHA" "$tree_sha" "$s3_key" "$archive_sha256" "$archive_size" <<'PY'
+python3 - "$archive_metadata" "$RUN_ID" "$SOURCE_COMMIT_SHA" "$tree_sha" "$s3_key" "$archive_sha256" "$archive_size" "$archive_reused" <<'PY'
 import json
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-output, run_id, source_sha, tree_sha, key, digest, size = sys.argv[1:]
+output, run_id, source_sha, tree_sha, key, digest, size, reused = sys.argv[1:]
 Path(output).write_text(json.dumps({
     "schemaVersion": "scrum80-runner-source-bootstrap/v1",
     "status": "archive-uploaded",
@@ -222,6 +276,7 @@ Path(output).write_text(json.dumps({
     "s3Key": key,
     "archiveSha256": digest,
     "archiveSizeBytes": int(size),
+    "archiveReused": reused == "true",
     "s3HeadReadBack": True,
     "recordedAtUtc": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
 }, indent=2, sort_keys=True) + "\n", encoding="utf-8")

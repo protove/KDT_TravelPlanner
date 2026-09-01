@@ -130,6 +130,17 @@ SSM으로 Runner에 전달한다.
 
 ```bash
 RUN_ID="aws-b01-eks-<utc>"
+PREPARED_ARCHIVE="evidence/aws-load-tests/$RUN_ID/bootstrap/source.tar.gz"
+# Prepare once and retain this exact archive for the live delivery.
+bash scripts/loadtest/aws/bootstrap-load-runner-source.sh \
+  --repository-root "$PWD" \
+  --source-commit "$(git rev-parse HEAD)" \
+  --run-id "$RUN_ID" --region ap-northeast-2 \
+  --evidence-root "evidence/aws-load-tests/$RUN_ID" \
+  --k6-image "$(terraform -chdir=infra/environments/dev-load-test output -raw load_runner_k6_image_reference)" \
+  --archive-output "$PREPARED_ARCHIVE" \
+  --dry-run
+
 bash scripts/loadtest/aws/bootstrap-load-runner-source.sh \
   --repository-root "$PWD" \
   --source-commit "$(git rev-parse HEAD)" \
@@ -138,7 +149,8 @@ bash scripts/loadtest/aws/bootstrap-load-runner-source.sh \
   --s3-bucket "$(terraform -chdir=infra/environments/dev-load-test output -raw load_test_evidence_bucket_name)" \
   --evidence-root "evidence/aws-load-tests/$RUN_ID" \
   --k6-image "$(terraform -chdir=infra/environments/dev-load-test output -raw load_runner_k6_image_reference)" \
-  --mock-image "$(terraform -chdir=infra/environments/dev-load-test output -raw load_runner_google_mock_image_reference)"
+  --mock-image "$(terraform -chdir=infra/environments/dev-load-test output -raw load_runner_google_mock_image_reference)" \
+  --archive-input "$PREPARED_ARCHIVE"
 ```
 
 Coordinator는 archive SHA/size와 S3 metadata를 read-back하고, SSM staged bootstrap이

@@ -5,11 +5,15 @@ set -euo pipefail
 # Google API mock arrive later through the operator's run-scoped S3 + SSM
 # bootstrap; this keeps an unauthenticated/public GitHub assumption out of
 # the instance lifecycle and makes full readiness an explicit evidence gate.
-dnf install -y docker git python3-pip curl tar gzip
+dnf install -y docker git python3-pip tar gzip
 systemctl enable --now docker
 
 command -v aws >/dev/null 2>&1 || {
   echo "AWS CLI is required on the Load Runner base image" >&2
+  exit 1
+}
+command -v curl >/dev/null 2>&1 || {
+  echo "curl (including the AL2023 curl-minimal capability) is required on the Load Runner base image" >&2
   exit 1
 }
 command -v docker >/dev/null 2>&1 || {
@@ -17,6 +21,7 @@ command -v docker >/dev/null 2>&1 || {
   exit 1
 }
 aws --version >/dev/null 2>&1
+curl --version >/dev/null 2>&1
 docker info >/dev/null 2>&1
 
 install -d -m 0755 /opt
