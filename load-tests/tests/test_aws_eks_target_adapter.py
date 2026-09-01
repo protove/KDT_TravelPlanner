@@ -62,13 +62,15 @@ class EksTargetAdapterTests(unittest.TestCase):
             deployment="backend",
         )
         joined = "\n".join(commands)
-        for resource in ("hpa", "deployment", "pods", "nodes", "events"):
+        for resource in ("hpa", "deployment", "pods", "all_pods", "nodes", "events"):
             self.assertIn(f"__SCRUM53_{resource.upper()}_BEGIN__", joined)
             self.assertIn(f"kubectl", joined)
         self.assertNotIn("delete", joined.lower())
         self.assertNotIn("kubectl apply", joined.lower())
         self.assertNotIn("secret", joined.lower())
         self.assertIn("app.kubernetes.io/name=travel-planner-backend", joined)
+        self.assertIn("jq -c", joined)
+        self.assertLess(joined.index("__SCRUM53_NODES_BEGIN__"), joined.index("__SCRUM53_ALL_PODS_BEGIN__"))
 
     def test_evidence_contains_hpa_pod_node_scaling_and_alb_dimensions(self) -> None:
         node_group = MODULE.resolve_node_group(

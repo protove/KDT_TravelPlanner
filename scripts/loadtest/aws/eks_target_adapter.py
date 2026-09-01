@@ -151,12 +151,15 @@ def build_kubectl_commands(
         # same context instead of silently writing/reading different files.
         "export HOME=/root KUBECONFIG=/root/.kube/config",
         f"aws eks update-kubeconfig --name {cluster_name} --region {region} --alias scr43-eks",
-        f"printf '%s\\n' __SCRUM53_HPA_BEGIN__; kubectl --context scr43-eks --namespace {namespace} get hpa {deployment} -o json; printf '%s\\n' __SCRUM53_HPA_END__",
-        f"printf '%s\\n' __SCRUM53_DEPLOYMENT_BEGIN__; kubectl --context scr43-eks --namespace {namespace} get deployment {deployment} -o json; printf '%s\\n' __SCRUM53_DEPLOYMENT_END__",
-        f"printf '%s\\n' __SCRUM53_PODS_BEGIN__; kubectl --context scr43-eks --namespace {namespace} get pods -l app.kubernetes.io/name=travel-planner-backend -o json; printf '%s\\n' __SCRUM53_PODS_END__",
-        "printf '%s\\n' __SCRUM53_ALL_PODS_BEGIN__; kubectl --context scr43-eks get pods --all-namespaces -o json; printf '%s\\n' __SCRUM53_ALL_PODS_END__",
-        "printf '%s\\n' __SCRUM53_NODES_BEGIN__; kubectl --context scr43-eks get nodes -o json; printf '%s\\n' __SCRUM53_NODES_END__",
-        "printf '%s\\n' __SCRUM53_EVENTS_BEGIN__; kubectl --context scr43-eks get events --all-namespaces --sort-by=.lastTimestamp -o json; printf '%s\\n' __SCRUM53_EVENTS_END__",
+        # SSM Run Command returns at most 24,000 stdout characters. Emit only
+        # the fields consumed by build_evidence so a normal Deployment/Pod
+        # manifest cannot hide the later node snapshot behind that cap.
+        f"printf '%s\\n' __SCRUM53_HPA_BEGIN__; kubectl --context scr43-eks --namespace {namespace} get hpa {deployment} -o json | jq -c '{{spec:{{minReplicas:.spec.minReplicas,maxReplicas:.spec.maxReplicas}},status:{{desiredReplicas:.status.desiredReplicas,currentReplicas:.status.currentReplicas,conditions:(.status.conditions // [])}}}}'; printf '%s\\n' __SCRUM53_HPA_END__",
+        f"printf '%s\\n' __SCRUM53_DEPLOYMENT_BEGIN__; kubectl --context scr43-eks --namespace {namespace} get deployment {deployment} -o json | jq -c '{{spec:{{template:{{spec:{{containers:[.spec.template.spec.containers[] | {{name:.name,resources:{{requests:(.resources.requests // {{}})}}}}]}}}}}},status:{{replicas:.status.replicas,updatedReplicas:.status.updatedReplicas,availableReplicas:.status.availableReplicas,readyReplicas:.status.readyReplicas,unavailableReplicas:.status.unavailableReplicas}}}}'; printf '%s\\n' __SCRUM53_DEPLOYMENT_END__",
+        f"printf '%s\\n' __SCRUM53_PODS_BEGIN__; kubectl --context scr43-eks --namespace {namespace} get pods -l app.kubernetes.io/name=travel-planner-backend -o json | jq -c '{{items:[.items[] | {{metadata:{{name:.metadata.name}},spec:{{nodeName:.spec.nodeName}},status:{{phase:.status.phase,reason:.status.reason,conditions:(.status.conditions // []),containerStatuses:[.status.containerStatuses[]? | {{ready,restartCount,state,lastState,imageID}}]}}}}]}}'; printf '%s\\n' __SCRUM53_PODS_END__",
+        "printf '%s\\n' __SCRUM53_NODES_BEGIN__; kubectl --context scr43-eks get nodes -o json | jq -c '{items:[.items[] | {metadata:{name:.metadata.name},spec:{unschedulable:(.spec.unschedulable // false)},status:{allocatable:.status.allocatable,conditions:(.status.conditions // [])}}]}'; printf '%s\\n' __SCRUM53_NODES_END__",
+        "printf '%s\\n' __SCRUM53_ALL_PODS_BEGIN__; kubectl --context scr43-eks get pods --all-namespaces -o json | jq -c '{items:[.items[] | {metadata:{namespace:.metadata.namespace,name:.metadata.name},spec:{nodeName:.spec.nodeName,containers:[.spec.containers[]? | {resources:{requests:(.resources.requests // {})}}]},status:{phase:.status.phase}}]}'; printf '%s\\n' __SCRUM53_ALL_PODS_END__",
+        "printf '%s\\n' __SCRUM53_EVENTS_BEGIN__; kubectl --context scr43-eks get events --all-namespaces --sort-by=.lastTimestamp -o json | jq -c '{items:(.items | map(null))}'; printf '%s\\n' __SCRUM53_EVENTS_END__",
     ]
 
 
