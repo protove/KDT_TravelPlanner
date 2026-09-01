@@ -302,6 +302,11 @@ class AwsOrchestrationContractTests(unittest.TestCase):
         self.assertIn('kill -TERM "$slo_producer_pid"', runner_source)
         self.assertIn('"$slo_producer_status" -eq 143', runner_source)
 
+    def test_eks_baseline_creates_phase_directory_before_observer_redirect(self) -> None:
+        phase_source = AWS_PHASE_RUNNER.read_text(encoding="utf-8")
+        self.assertIn('mkdir -p "$run_dir"', phase_source)
+        self.assertLess(phase_source.index('mkdir -p "$run_dir"'), phase_source.index('> "$run_dir/observer.log"'))
+
     def test_k6_runner_keeps_custom_host_and_allows_operator_ip_resolution(self) -> None:
         runner_source = AWS_PHASE_RUNNER.parent.joinpath("run-k6-aws-scenario.sh").read_text(encoding="utf-8")
         self.assertIn("AWS_TARGET_HOST_IPS", runner_source)

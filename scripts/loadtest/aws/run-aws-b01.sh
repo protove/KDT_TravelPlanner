@@ -131,6 +131,10 @@ case "$PHASE" in
       : "${EKS_NODE_GROUP_NAME:?EKS_NODE_GROUP_NAME is required for EKS baseline observation}"
       : "${EKS_BASTION_ID:?EKS_BASTION_ID is required for EKS baseline observation}"
       : "${TARGET_GROUP_ARN:?TARGET_GROUP_ARN is required for EKS baseline observation}"
+      # The observer starts before the k6 runner creates its own evidence
+      # directory. Create the shared phase directory here so the redirection
+      # and the observer's first snapshot cannot fail on a clean baseline.
+      mkdir -p "$run_dir"
       observer_pid=""
       python3 "$REPOSITORY_ROOT/scripts/loadtest/aws/observe-aws-capacity-stress.py" \
         --run-dir "$run_dir" --metadata-file "$run_dir/metadata.json" \
