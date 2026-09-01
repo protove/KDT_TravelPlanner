@@ -214,6 +214,17 @@ class AwsOrchestrationContractTests(unittest.TestCase):
         self.assertIn("run_stage_once mock-restore restore_eks_google_api_binding", source)
         self.assertIn("run_stage_once capacity-stress k6_phase_stage capacity-stress", source)
 
+    def test_eks_mock_binding_receipt_limits_ssm_stdout(self) -> None:
+        source = SCRIPT.read_text(encoding="utf-8")
+        start = source.index("apply_eks_google_mock_binding()")
+        end = source.index("\napply_eks_run_scoped_hpa()", start)
+        helper = source[start:end]
+        self.assertIn("get configmap backend-config -o json | jq -c", helper)
+        self.assertIn("get deployment {q(deployment)} -o json | jq -c", helper)
+        self.assertIn("SSM RunShellScript stdout limit", helper)
+        self.assertNotIn("get configmap backend-config -o json;", helper)
+        self.assertNotIn("get deployment {q(deployment)} -o json;", helper)
+
     def test_eks_breakpoint_profile_is_referenced_by_the_runner_contract(self) -> None:
         profile = REPOSITORY_ROOT / "load-tests/aws/profiles/eks-monolith-breakpoint-v1.0.json"
         self.assertTrue(profile.is_file())

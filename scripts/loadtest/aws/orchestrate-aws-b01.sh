@@ -1150,9 +1150,11 @@ print(
     f"kubectl --context {q(context)} --namespace {q(namespace)} patch deployment {q(deployment)} --type strategic --patch {q(deployment_patch)} >/dev/null; "
     f"kubectl --context {q(context)} --namespace {q(namespace)} rollout status deployment/{q(deployment)} --timeout=300s >/dev/null; "
     "printf '%s\\n' __SCRUM80_MOCK_BINDING_BEGIN__; "
-    f"kubectl --context {q(context)} --namespace {q(namespace)} get configmap backend-config -o json; "
+    # Emit only the fields the receipt validator needs. A full Deployment JSON
+    # can exceed the SSM RunShellScript stdout limit and lose the end marker.
+    f"kubectl --context {q(context)} --namespace {q(namespace)} get configmap backend-config -o json | jq -c '{{data: {{GOOGLE_PLACES_BASE_URL: .data.GOOGLE_PLACES_BASE_URL, GOOGLE_ROUTES_BASE_URL: .data.GOOGLE_ROUTES_BASE_URL}}}}'; "
     "printf '%s\\n' __SCRUM80_MOCK_BINDING_CONFIG_END__; "
-    f"kubectl --context {q(context)} --namespace {q(namespace)} get deployment {q(deployment)} -o json; "
+    f"kubectl --context {q(context)} --namespace {q(namespace)} get deployment {q(deployment)} -o json | jq -c '{{spec: {{template: {{metadata: {{annotations: {{\\\"load-test.kdt.travelplanner/google-mock\\\": .spec.template.metadata.annotations[\\\"load-test.kdt.travelplanner/google-mock\\"]}}, spec: {{containers: [.spec.template.spec.containers[] | select(.name == \\\"backend\\\") | {{name: .name, env: [.env[] | select(.name == \\\"GOOGLE_MAPS_API_KEY\\\") | {{name: .name, value: .value, valueFrom: .valueFrom}}]}}]}}}}}}}}'; "
     "printf '%s\\n' __SCRUM80_MOCK_BINDING_END__"
 )
 PY
@@ -1377,9 +1379,9 @@ print(
     f"kubectl --context {q(context)} --namespace {q(namespace)} patch deployment {q(deployment)} --type strategic --patch {q(deployment_patch)} >/dev/null; "
     f"kubectl --context {q(context)} --namespace {q(namespace)} rollout status deployment/{q(deployment)} --timeout=300s >/dev/null; "
     "printf '%s\\n' __SCRUM80_MOCK_RESTORE_BEGIN__; "
-    f"kubectl --context {q(context)} --namespace {q(namespace)} get configmap backend-config -o json; "
+    f"kubectl --context {q(context)} --namespace {q(namespace)} get configmap backend-config -o json | jq -c '{{data: {{GOOGLE_PLACES_BASE_URL: .data.GOOGLE_PLACES_BASE_URL, GOOGLE_ROUTES_BASE_URL: .data.GOOGLE_ROUTES_BASE_URL}}}}'; "
     "printf '%s\\n' __SCRUM80_MOCK_RESTORE_CONFIG_END__; "
-    f"kubectl --context {q(context)} --namespace {q(namespace)} get deployment {q(deployment)} -o json; "
+    f"kubectl --context {q(context)} --namespace {q(namespace)} get deployment {q(deployment)} -o json | jq -c '{{spec: {{template: {{metadata: {{annotations: {{\\\"load-test.kdt.travelplanner/google-mock\\\": .spec.template.metadata.annotations[\\\"load-test.kdt.travelplanner/google-mock\\"]}}, spec: {{containers: [.spec.template.spec.containers[] | select(.name == \\\"backend\\\") | {{name: .name, env: [.env[] | select(.name == \\\"GOOGLE_MAPS_API_KEY\\\") | {{name: .name, value: .value, valueFrom: .valueFrom}}]}}]}}}}}}}}'; "
     "printf '%s\\n' __SCRUM80_MOCK_RESTORE_END__"
 )
 PY
