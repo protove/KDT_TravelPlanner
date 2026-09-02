@@ -132,8 +132,9 @@ class AwsOrchestrationContractTests(unittest.TestCase):
         self.assertIn('ssm send-command --instance-ids "$RUNNER_ID"', source)
         self.assertIn("__SCRUM80_RUNNER_READINESS_BEGIN__", source)
         self.assertIn("/var/lib/travel-planner/load-test-evidence/base-ready.json", source)
-        self.assertIn("for attempt in $(seq 1 60)", source)
+        self.assertIn('f"for _ in $(seq 1 60);', source)
         self.assertNotIn('[[ -s "$base_receipt" ]]', source)
+        self.assertIn('base.get("status") != "base-ready" or base.get("dockerActive") is not True', source)
 
     def test_help_exposes_approved_operator_inputs(self) -> None:
         result = subprocess.run(

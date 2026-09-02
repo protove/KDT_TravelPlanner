@@ -767,8 +767,8 @@ from pathlib import Path
 base_path, full_path, expected_run, expected_source, expected_k6, expected_mock = sys.argv[1:]
 base = json.loads(Path(base_path).read_text(encoding="utf-8"))
 full = json.loads(Path(full_path).read_text(encoding="utf-8"))
-if base.get("status") != "base-ready" or base.get("sourceCommitShaExpected") != expected_source:
-    raise SystemExit("Runner base-ready receipt does not match the approved source")
+if base.get("status") != "base-ready" or base.get("dockerActive") is not True:
+    raise SystemExit("Runner base readiness status or Docker contract is incomplete")
 if full.get("status") != "ready" or full.get("runId") != expected_run or full.get("sourceCommitSha") != expected_source:
     raise SystemExit("Runner full-readiness receipt run/source is not ready for this run")
 if full.get("k6ImageReference") != expected_k6 or full.get("mockImageReference") != expected_mock:
@@ -853,7 +853,7 @@ safe = json.loads(match.group(1))
 base = safe.get("base") if isinstance(safe.get("base"), dict) else {}
 full = safe.get("full") if isinstance(safe.get("full"), dict) else {}
 mock = full.get("mock") if isinstance(full.get("mock"), dict) else {}
-if base.get("status") != "base-ready" or base.get("sourceCommitShaExpected") != source_sha or base.get("dockerActive") is not True:
+if base.get("status") != "base-ready" or base.get("dockerActive") is not True:
     raise SystemExit("Runner base readiness contract failed")
 if full.get("status") != "ready" or full.get("runId") != run_id or full.get("sourceCommitSha") != source_sha:
     raise SystemExit("Runner full readiness run/source contract failed")
