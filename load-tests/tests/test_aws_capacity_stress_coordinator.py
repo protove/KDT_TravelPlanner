@@ -94,6 +94,8 @@ class CapacityStressCoordinatorTest(unittest.TestCase):
 
     def test_coordinator_stops_workload_without_operator_or_aws_actions(self) -> None:
         source = SCRIPT.read_text(encoding="utf-8")
+        self.assertIn("start_new_session=True", source)
+        self.assertIn("os.killpg(process.pid, signal.SIGINT)", source)
         for forbidden in (
             "cancel-refresh",
             "restore-image",

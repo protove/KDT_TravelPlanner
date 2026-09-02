@@ -197,15 +197,20 @@ def terminate_process(process: subprocess.Popen, event_handle, reason: str) -> N
         return
     append_event(event_handle, "WORKLOAD_STOP_REQUESTED", reason=reason, actor="capacity-coordinator")
     try:
-        process.send_signal(signal.SIGINT)
-        process.wait(timeout=30)
+        # The workload command is a shell that owns the Docker/k6 child.  A
+        # signal sent only to that shell can leave k6 running until the
+        # escalation timeout, producing exit 137 and no summary.json.  The
+        # child is launched in its own process group below, so signal the
+        # complete group and let k6 flush its summary/JSON output gracefully.
+        os.killpg(process.pid, signal.SIGINT)
+        process.wait(timeout=60)
     except subprocess.TimeoutExpired:
         append_event(event_handle, "WORKLOAD_TERM_ESCALATION", reason=reason, actor="capacity-coordinator")
-        process.terminate()
+        os.killpg(process.pid, signal.SIGTERM)
         try:
-            process.wait(timeout=15)
+            process.wait(timeout=30)
         except subprocess.TimeoutExpired:
-            process.kill()
+            os.killpg(process.pid, signal.SIGKILL)
             process.wait(timeout=10)
 
 
@@ -271,7 +276,12 @@ def main() -> int:
 
     with events_path.open("w", encoding="utf-8") as events:
         append_event(events, "CONTROLLER_START", command=command, snapshotFile=str(snapshot_file), campaignStage=args.campaign_stage)
-        process = subprocess.Popen(command, cwd=os.getcwd(), env=os.environ.copy())
+        process = subprocess.Popen(
+            command,
+            cwd=os.getcwd(),
+            env=os.environ.copy(),
+            start_new_session=True,
+        )
         append_event(events, "WORKLOAD_STARTED", pid=process.pid)
         reason: str | None = None
         extension_started = False
