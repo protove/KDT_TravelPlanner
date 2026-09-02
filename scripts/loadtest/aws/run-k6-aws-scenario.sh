@@ -97,7 +97,9 @@ case "$SCENARIO" in
   soak) SCENARIO_FILE="soak.js" ;;
   scale-step) SCENARIO_FILE="scale-step.js" ;;
   capacity-stress)
-    if [[ "$TARGET_PLATFORM" == "eks" || "$PROFILE_VERSION" == "aws-eks-monolith-breakpoint-v1.0" || "$PROFILE_VERSION" == "aws-eks-monolith-breakpoint-v2.0" || "$PROFILE_VERSION" == "aws-eks-monolith-breakpoint-v2.1" ]]; then
+    if [[ "$PROFILE_VERSION" == "aws-eks-monolith-msa-boundary-v1.0" ]]; then
+      SCENARIO_FILE="eks-msa-boundary.js"
+    elif [[ "$TARGET_PLATFORM" == "eks" || "$PROFILE_VERSION" == "aws-eks-monolith-breakpoint-v1.0" || "$PROFILE_VERSION" == "aws-eks-monolith-breakpoint-v2.0" || "$PROFILE_VERSION" == "aws-eks-monolith-breakpoint-v2.1" ]]; then
       SCENARIO_FILE="eks-scale-capacity.js"
     else
       SCENARIO_FILE="capacity-stress.js"
@@ -221,6 +223,11 @@ effective_inputs = {
 }
 if os.environ.get("CAPACITY_STAGE"):
     effective_inputs["campaignStage"] = os.environ["CAPACITY_STAGE"]
+if os.environ.get("MSA_HOTSPOT_ID"):
+    effective_inputs["hotspot"] = {
+        "candidate": os.environ["MSA_HOTSPOT_ID"],
+        "sharePercent": float(os.environ.get("MSA_HOTSPOT_SHARE") or 60),
+    }
 if scenario == "spike":
     baseline_rate = rate_value
     peak_multiplier = float(os.environ.get("SPIKE_PEAK_MULTIPLIER") or scenario_profile.get("peakRateMultiplier"))
@@ -373,6 +380,8 @@ docker run -i --name "$K6_CONTAINER_NAME" \
   -e CAPACITY_TARGET_RATE="${CAPACITY_TARGET_RATE:-}" \
   -e CAPACITY_STAGE_INDEX="${CAPACITY_STAGE_INDEX:-}" \
   -e CAPACITY_STAGE_DURATION="${CAPACITY_STAGE_DURATION:-}" \
+  -e MSA_HOTSPOT_ID="${MSA_HOTSPOT_ID:-}" \
+  -e MSA_HOTSPOT_SHARE="${MSA_HOTSPOT_SHARE:-}" \
   -e SPIKE_PEAK_MULTIPLIER="${SPIKE_PEAK_MULTIPLIER:-}" \
   -e SPIKE_HOLD="${SPIKE_HOLD:-}" \
   "$K6_IMAGE_DIGEST" run \

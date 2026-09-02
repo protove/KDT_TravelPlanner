@@ -224,12 +224,17 @@ esac
 COMPARISON_PROFILE=0
 BREAKPOINT_PROFILE=0
 ADAPTIVE_BREAKPOINT_PROFILE=0
+MSA_BOUNDARY_PROFILE=0
 if [[ "$PROFILE" == *eks-monolith-breakpoint-v1.0.json* ]]; then
   BREAKPOINT_PROFILE=1
 fi
-if [[ "$PROFILE" == *eks-monolith-breakpoint-v2.0.json* || "$PROFILE" == *eks-monolith-breakpoint-v2.1.json* ]]; then
+if [[ "$PROFILE" == *eks-monolith-breakpoint-v2.0.json* || "$PROFILE" == *eks-monolith-breakpoint-v2.1.json* || "$PROFILE" == *eks-monolith-msa-boundary-v1.0.json* ]]; then
   ADAPTIVE_BREAKPOINT_PROFILE=1
   BREAKPOINT_PROFILE=1
+fi
+if [[ "$PROFILE" == *eks-monolith-msa-boundary-v1.0.json* ]]; then
+  MSA_BOUNDARY_PROFILE=1
+  MSA_BOUNDARY_RATE_LIST="${MSA_BOUNDARY_RATE_LIST:-64,128,192,224,256}"
 fi
 if [[ "$PROFILE" == *ec2-eks-comparison-v1.1.json* || "$SLO_CONTRACT" == *slo-v1.1-* ]]; then
   COMPARISON_PROFILE=1
@@ -241,7 +246,7 @@ if [[ "$BREAKPOINT_PROFILE" == "1" && "$SLO_CONTRACT_EXPLICIT" == "0" ]]; then
   SLO_CONTRACT="$REPOSITORY_ROOT/load-tests/aws/contracts/eks-monolith-breakpoint-slo-v1.0.json"
 fi
 if [[ "$ADAPTIVE_BREAKPOINT_PROFILE" == "1" && "$SLO_CONTRACT_EXPLICIT" == "0" ]]; then
-  if [[ "$PROFILE" == *eks-monolith-breakpoint-v2.1.json* ]]; then
+  if [[ "$PROFILE" == *eks-monolith-breakpoint-v2.1.json* || "$PROFILE" == *eks-monolith-msa-boundary-v1.0.json* ]]; then
     SLO_CONTRACT="$REPOSITORY_ROOT/load-tests/aws/contracts/eks-monolith-breakpoint-slo-v2.1.json"
   else
     SLO_CONTRACT="$REPOSITORY_ROOT/load-tests/aws/contracts/eks-monolith-breakpoint-slo-v2.0.json"
@@ -257,6 +262,8 @@ if [[ "$ADAPTIVE_BREAKPOINT_PROFILE" == "1" && "$RUNNER_INSTANCE_TYPE_EXPLICIT" 
   RUNNER_INSTANCE_TYPE="c6i.2xlarge"
   # The historical t3.medium contract is not valid here: v2 deliberately
   # binds the EKS monolith breakpoint to the t3.small 2/2/4 node envelope.
+  # The v1.0 MSA-boundary profile supersedes that historical envelope with
+  # t3.medium while keeping this Runner separately sized as c6i.2xlarge.
 fi
 # The adaptive profile's first stress stage needs at least 512 unique users;
 # later stages top up the same ledger rather than resetting it. Apply this
@@ -398,8 +405,32 @@ stage_confirmed_rate() {
   local stage="$1"
   case "$stage" in
     capacity-stress)
-      if [[ "$ADAPTIVE_BREAKPOINT_PROFILE" == "1" && -n "$CAPACITY_TARGET_RATE" ]]; then
+      if [[ "$ADAPTIVE_BREAKPOINT_PROFILE" == "1" && -n "${CAPACITY_TARGET_RATE:-}" ]]; then
         printf '%s' "$CAPACITY_TARGET_RATE"
+      elif [[ "$MSA_BOUNDARY_PROFILE" == "1" ]]; then
+        printf '%s' "${MSA_BOUNDARY_RATE_LIST:-64,128,192,224,256}"
+      else
+        printf '%s' "${CONFIRMED_RATE:-}"
+      fi
+      ;;
+    balanced)
+      if [[ "$ADAPTIVE_BREAKPOINT_PROFILE" == "1" && -n "${MSA_BOUNDARY_RATE_LIST:-}" ]]; then
+        printf '%s' "$MSA_BOUNDARY_RATE_LIST"
+      else
+        printf '%s' "${CONFIRMED_RATE:-}"
+      fi
+      ;;
+    hotspot-1|hotspot-2)
+      printf '%s' "${MSA_HOTSPOT_RATE:-${CONFIRMED_RATE:-}}"
+      ;;
+    spike-256)
+      if [[ -n "${MSA_SPIKE_RATE:-}" ]]; then
+        printf '%s' "$MSA_SPIKE_RATE"
+      elif [[ "$MSA_BOUNDARY_PROFILE" == "1" ]]; then
+        python3 - "$PROFILE" <<'PY'
+import json, sys
+print(json.load(open(sys.argv[1]))["capacityStress"]["spikeRate"])
+PY
       else
         printf '%s' "${CONFIRMED_RATE:-}"
       fi
@@ -425,7 +456,8 @@ stage_input_digest() {
     "$SPIKE_PREALLOCATED_VUS" "$SPIKE_MAX_VUS" "$SPIKE_PEAK_MULTIPLIER" "$SPIKE_HOLD" \
     "${SOAK_PREALLOCATED_VUS:-}" "${SOAK_MAX_VUS:-}" "${SCALE_STEP_PREALLOCATED_VUS:-}" "${SCALE_STEP_MAX_VUS:-}" \
     "${CAPACITY_STRESS_PREALLOCATED_VUS:-}" "${CAPACITY_STRESS_MAX_VUS:-}" \
-    "$(stage_confirmed_rate "$stage")" <<'PY'
+    "$(stage_confirmed_rate "$stage")" "${MSA_HOTSPOT_ID:-}" "${MSA_HOTSPOT_SHARE:-}" \
+    "${MSA_HOTSPOT_RATE:-}" <<'PY'
 import hashlib
 import json
 import sys
@@ -445,7 +477,7 @@ import sys
     spike_preallocated_vus, spike_max_vus, spike_peak_multiplier, spike_hold,
     soak_preallocated_vus, soak_max_vus, scale_step_preallocated_vus, scale_step_max_vus,
     capacity_stress_preallocated_vus, capacity_stress_max_vus,
-    confirmed_rate,
+    confirmed_rate, msa_hotspot_id, msa_hotspot_share, msa_hotspot_rate,
 ) = sys.argv[1:]
 
 common = {
@@ -460,6 +492,9 @@ common = {
     "mockImage": mock_image if target_platform == "eks" else None,
     "maxRate": max_rate,
     "maxVus": max_vus,
+    "msaHotspotId": msa_hotspot_id or None,
+    "msaHotspotShare": msa_hotspot_share or None,
+    "msaHotspotRate": msa_hotspot_rate or None,
 }
 if target_platform == "eks":
     common["eks"] = {
@@ -1634,7 +1669,7 @@ output, run_id, target, reason, stage_dir, evaluator_status = sys.argv[1:]
 path = Path(output)
 payload = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {
     "schemaVersion": "scrum80-adaptive-campaign/v1", "runId": run_id,
-    "startRate": 256, "nextRateExpression": "R[n+1] = R[n] * 2",
+    "startRate": int(target), "nextRateExpression": None,
     "fixedRpsCeiling": None, "stages": [], "actualTerminal": None,
 }
 payload["stages"].append({
@@ -1683,11 +1718,55 @@ if not isinstance(value, int) or value <= 0: raise SystemExit("stabilitySeconds 
 print(value)
 PY
 )"
+  if [[ -n "${MSA_NOMINAL_HOLD_SECONDS:-}" ]]; then
+    nominal_hold="$MSA_NOMINAL_HOLD_SECONDS"
+  fi
+  if [[ -n "${MSA_CONDITIONAL_EXTENSION_SECONDS:-}" ]]; then
+    extension_seconds="$MSA_CONDITIONAL_EXTENSION_SECONDS"
+  fi
+  if [[ -n "${MSA_MAX_STAGE_SECONDS:-}" ]]; then
+    max_stage_seconds="$MSA_MAX_STAGE_SECONDS"
+  fi
+  if [[ -n "${MSA_STABILITY_SECONDS:-}" ]]; then
+    stability_seconds="$MSA_STABILITY_SECONDS"
+  fi
+  local msa_boundary=0
+  if [[ "$PROFILE" == *eks-monolith-msa-boundary-v1.0.json* ]]; then
+    msa_boundary=1
+  fi
+  local stage_prefix="${MSA_STAGE_PREFIX:-rate}"
+  local campaign_stage="${MSA_CAMPAIGN_STAGE:-capacity-stress}"
+  local -a configured_rates=()
+  if [[ "$msa_boundary" == "1" ]]; then
+    while IFS= read -r configured_rate; do
+      [[ -n "$configured_rate" ]] && configured_rates+=("$configured_rate")
+    done < <(python3 - "$PROFILE" "${MSA_BOUNDARY_RATE_LIST:-}" <<'PY'
+import json, sys
+profile_path, override = sys.argv[1:]
+if override.strip():
+    values = [int(item.strip()) for item in override.split(',') if item.strip()]
+else:
+    values = (json.load(open(profile_path)).get('capacityStress') or {}).get('balancedRates') or []
+if not values or any(value <= 0 for value in values):
+    raise SystemExit('MSA boundary requires one or more positive rates')
+if values != sorted(set(values)):
+    raise SystemExit('MSA boundary rates must be strictly increasing')
+print('\n'.join(str(value) for value in values))
+PY
+    )
+  fi
   if [[ "$DRY_RUN" == "1" ]]; then
-    echo "[dry-run] adaptive EKS stages: 256 -> 2R, hold=${nominal_hold}s (+${extension_seconds}s only during active transition), no RPS ceiling" >&2
+    if [[ "$msa_boundary" == "1" ]]; then
+      echo "[dry-run] MSA boundary stages: ${configured_rates[*]:-64 128 192 224 256}, hold=${nominal_hold}s (+${extension_seconds}s only during active transition), no RPS ceiling" >&2
+    else
+      echo "[dry-run] adaptive EKS stages: 256 -> 2R, hold=${nominal_hold}s (+${extension_seconds}s only during active transition), no RPS ceiling" >&2
+    fi
     return 0
   fi
   local target_rate=256
+  if [[ "$msa_boundary" == "1" ]]; then
+    target_rate="${configured_rates[0]}"
+  fi
   local stage_index=0
   local final_reason=""
   local operator_max_vus="$MAX_VUS"
@@ -1746,7 +1825,7 @@ import sys
 print(max(256, int(sys.argv[1])))
 PY
 )"
-    stage_dir="$EVIDENCE_ROOT/k6/rate-$target_rate"
+    stage_dir="$EVIDENCE_ROOT/k6/${stage_prefix}-$target_rate"
     snapshot_file="$stage_dir/snapshots.jsonl"
     mkdir -p "$stage_dir"
     USERS="$stage_max_vus"
@@ -1756,6 +1835,7 @@ PY
     CAPACITY_STAGE_INDEX="$stage_index"
     CAPACITY_STAGE_DURATION="${max_stage_seconds}s"
     export USERS CAPACITY_STRESS_MAX_VUS CAPACITY_STRESS_PREALLOCATED_VUS CAPACITY_TARGET_RATE CAPACITY_STAGE_INDEX CAPACITY_STAGE_DURATION
+    export CAPACITY_STAGE="$campaign_stage"
     seed_credentials "capacity-$target_rate" 1
     export CAPACITY_STAGE_DIR="$stage_dir"
     python3 "$REPOSITORY_ROOT/scripts/loadtest/record-rehearsal-event.py" "$stage_dir" STAGE_START "adaptive target ${target_rate} RPS" --actor automation
@@ -1777,7 +1857,7 @@ PY
     observer_pid=$!
     set +e
     python3 "$REPOSITORY_ROOT/scripts/loadtest/aws/coordinate-aws-capacity-stress.py" \
-      --run-dir "$stage_dir" --snapshot-file "$snapshot_file" --campaign-stage capacity-stress \
+      --run-dir "$stage_dir" --snapshot-file "$snapshot_file" --campaign-stage "$campaign_stage" \
       --adaptive --nominal-hold-seconds "$nominal_hold" \
       --conditional-extension-seconds "$extension_seconds" --max-stage-seconds "$max_stage_seconds" \
       --capacity-stability-seconds "$stability_seconds" --poll-seconds "${CAPACITY_COORDINATOR_POLL_SECONDS:-10}" -- \
@@ -1816,7 +1896,7 @@ PY
     else
       python3 "$REPOSITORY_ROOT/scripts/loadtest/record-rehearsal-event.py" "$stage_dir" TERMINAL "$controller_reason at ${target_rate} RPS" --actor automation
     fi
-    append_adaptive_stage_manifest "$target_rate" "$controller_reason" "k6/rate-$target_rate" "$evaluator_status"
+    append_adaptive_stage_manifest "$target_rate" "$controller_reason" "k6/${stage_prefix}-$target_rate" "$evaluator_status"
     if ! seal_adaptive_stage "$stage_dir"; then
       final_reason="INCOMPLETE_EVIDENCE_CAPACITY"
       return 2
@@ -1831,8 +1911,16 @@ PY
         return 0
         ;;
       STAGE_COMPLETE)
-        target_rate=$((target_rate * 2))
         stage_index=$((stage_index + 1))
+        if [[ "$msa_boundary" == "1" ]]; then
+          if [[ "$stage_index" -ge "${#configured_rates[@]}" ]]; then
+            final_reason="BOUNDARY_SCHEDULE_COMPLETE"
+            return 0
+          fi
+          target_rate="${configured_rates[$stage_index]}"
+        else
+          target_rate=$((target_rate * 2))
+        fi
         ;;
       *)
         final_reason="INCOMPLETE_OBSERVABILITY"
@@ -1840,6 +1928,219 @@ PY
         ;;
     esac
   done
+}
+
+select_msa_hotspots() {
+  [[ "$MSA_BOUNDARY_PROFILE" == "1" ]] || return 2
+  local selection="$EVIDENCE_ROOT/analysis/hotspot-selection.json"
+  mkdir -p "${selection%/*}"
+  python3 "$REPOSITORY_ROOT/scripts/loadtest/aws/analyze-msa-boundary-campaign.py" \
+    --evidence-root "$EVIDENCE_ROOT" --profile "$PROFILE" --stage-prefix balanced --output "$selection"
+  local selected_rate selected_candidates
+  selected_rate="$(python3 - "$selection" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+source = payload.get("source") if isinstance(payload.get("source"), dict) else {}
+selected = payload.get("selected") if isinstance(payload.get("selected"), list) else []
+if len(selected) != 2 or not all(isinstance(item, str) and item for item in selected):
+    raise SystemExit("hotspot selection must contain exactly two candidates")
+rate = source.get("highestStableRate")
+if not isinstance(rate, int) or rate < 1:
+    raise SystemExit("hotspot selection did not produce a valid total rate")
+print(rate)
+PY
+)"
+  selected_candidates="$(python3 - "$selection" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+selected = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8")).get("selected")
+if not isinstance(selected, list) or len(selected) != 2:
+    raise SystemExit("hotspot selection must contain exactly two candidates")
+for item in selected:
+    if not isinstance(item, str) or not item:
+        raise SystemExit("hotspot candidate is invalid")
+    print(item)
+PY
+)"
+  MSA_HOTSPOT_RATE="$selected_rate"
+  export MSA_HOTSPOT_RATE
+  MSA_HOTSPOT_SHARE="$(python3 - "$PROFILE" <<'PY'
+import json, sys
+print(int(json.load(open(sys.argv[1]))["capacityStress"]["hotspotSharePercent"]))
+PY
+)"
+  export MSA_HOTSPOT_SHARE
+  MSA_SELECTED_HOTSPOTS="$selected_candidates"
+  export MSA_SELECTED_HOTSPOTS
+  echo "[b01] MSA hotspot selection: rate=$MSA_HOTSPOT_RATE candidates=$(echo "$MSA_SELECTED_HOTSPOTS" | tr '\n' ',')"
+}
+
+run_msa_hotspot_stage() {
+  local stage_id="$1" candidate="$2" rate="$3"
+  [[ "$stage_id" == "hotspot-1" || "$stage_id" == "hotspot-2" ]] || return 2
+  [[ "$candidate" =~ ^[A-Za-z0-9._-]+$ ]] || { echo "invalid MSA hotspot candidate" >&2; return 2; }
+  [[ "$rate" =~ ^[1-9][0-9]*$ ]] || { echo "invalid MSA hotspot rate" >&2; return 2; }
+  MSA_HOTSPOT_RATE="$rate"
+  MSA_BOUNDARY_RATE_LIST="$rate"
+  MSA_STAGE_PREFIX="$stage_id"
+  MSA_CAMPAIGN_STAGE="$stage_id"
+  MSA_HOTSPOT_ID="$candidate"
+  MSA_HOTSPOT_SHARE="$(python3 - "$PROFILE" <<'PY'
+import json, sys
+print(int(json.load(open(sys.argv[1]))["capacityStress"]["hotspotSharePercent"]))
+PY
+)"
+  MSA_NOMINAL_HOLD_SECONDS="$(python3 - "$PROFILE" <<'PY'
+import json, sys
+print(int(json.load(open(sys.argv[1]))["capacityStress"]["hotspotHoldSeconds"]))
+PY
+)"
+  MSA_MAX_STAGE_SECONDS="$MSA_NOMINAL_HOLD_SECONDS"
+  export MSA_HOTSPOT_RATE MSA_BOUNDARY_RATE_LIST MSA_STAGE_PREFIX MSA_CAMPAIGN_STAGE MSA_HOTSPOT_ID MSA_HOTSPOT_SHARE MSA_NOMINAL_HOLD_SECONDS MSA_MAX_STAGE_SECONDS
+  adaptive_capacity_stress_stage
+}
+
+run_msa_spike_stage() {
+  [[ "$MSA_BOUNDARY_PROFILE" == "1" ]] || return 2
+  MSA_SPIKE_RATE="$(python3 - "$PROFILE" <<'PY'
+import json, sys
+value = json.load(open(sys.argv[1]))["capacityStress"]["spikeRate"]
+if not isinstance(value, int) or value <= 0:
+    raise SystemExit("MSA spike rate must be a positive integer")
+print(value)
+PY
+)"
+  MSA_BOUNDARY_RATE_LIST="$MSA_SPIKE_RATE"
+  MSA_STAGE_PREFIX="spike-256"
+  MSA_CAMPAIGN_STAGE="spike-256"
+  unset MSA_HOTSPOT_ID MSA_HOTSPOT_SHARE
+  export MSA_SPIKE_RATE MSA_BOUNDARY_RATE_LIST MSA_STAGE_PREFIX MSA_CAMPAIGN_STAGE
+  adaptive_capacity_stress_stage
+}
+
+run_msa_recovery_stage() {
+  [[ "$MSA_BOUNDARY_PROFILE" == "1" ]] || return 2
+  local recovery_rate recovery_seconds
+  recovery_rate="$(python3 - "$PROFILE" <<'PY'
+import json, sys
+value = json.load(open(sys.argv[1]))["capacityStress"]["recoveryRate"]
+if not isinstance(value, int) or value <= 0:
+    raise SystemExit("MSA recovery rate must be a positive integer")
+print(value)
+PY
+)"
+  recovery_seconds="$(python3 - "$PROFILE" <<'PY'
+import json, sys
+value = json.load(open(sys.argv[1]))["capacityStress"]["recoveryObservationSeconds"]
+if not isinstance(value, int) or value < 120:
+    raise SystemExit("MSA recovery observation must be at least 120 seconds")
+print(value)
+PY
+)"
+  MSA_BOUNDARY_RATE_LIST="$recovery_rate"
+  MSA_STAGE_PREFIX="recovery-16"
+  MSA_CAMPAIGN_STAGE="recovery-16"
+  MSA_NOMINAL_HOLD_SECONDS="$recovery_seconds"
+  MSA_MAX_STAGE_SECONDS="$recovery_seconds"
+  unset MSA_SPIKE_RATE MSA_HOTSPOT_ID MSA_HOTSPOT_SHARE
+  export MSA_BOUNDARY_RATE_LIST MSA_STAGE_PREFIX MSA_CAMPAIGN_STAGE MSA_NOMINAL_HOLD_SECONDS MSA_MAX_STAGE_SECONDS
+  adaptive_capacity_stress_stage
+}
+
+wait_eks_canonical_capacity() {
+  [[ "$TARGET_PLATFORM" == "eks" && "$MSA_BOUNDARY_PROFILE" == "1" ]] || return 0
+  local receipt="$EVIDENCE_ROOT/aws/eks-canonical-start.json"
+  mkdir -p "$EVIDENCE_ROOT/aws"
+  if [[ "$DRY_RUN" == "1" ]]; then
+    cat >"$receipt" <<EOF
+{"schemaVersion":"scrum80-canonical-start/v1","status":"DryRun","nodeGroupDesired":2,"readyNodes":2,"readyBackendPods":2,"pendingBackendPods":0,"rawOutputStored":false}
+EOF
+    return 0
+  fi
+  local attempt nodegroup_json desired invocation_file command
+  for attempt in $(seq 1 60); do
+    nodegroup_json="$(run_aws_json eks describe-nodegroup --cluster-name "$EKS_CLUSTER_NAME" --node-group-name "$EKS_NODE_GROUP_NAME" --region "$REGION")"
+    desired="$(python3 - "$nodegroup_json" <<'PY'
+import json, sys
+try:
+    print(int(json.loads(sys.argv[1])["nodegroup"]["scalingConfig"]["desiredSize"]))
+except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+    print(-1)
+PY
+)"
+    if [[ "$desired" != "2" ]]; then
+      sleep 10
+      continue
+    fi
+    invocation_file="$(mktemp "${TMPDIR:-/tmp}/scrum80-canonical-start.XXXXXX")"
+    command="$(python3 - "$EKS_CLUSTER_NAME" "$REGION" "$BACKEND_NAMESPACE" <<'PY'
+import shlex, sys
+cluster, region, namespace = sys.argv[1:]
+q = shlex.quote
+context = "scrum80-eks"
+print(
+    "set -euo pipefail; "
+    "export HOME=/root KUBECONFIG=/root/.kube/config; "
+    f"aws eks update-kubeconfig --name {q(cluster)} --region {q(region)} --alias {q(context)} >/dev/null; "
+    "printf '%s\\n' __SCRUM80_CANONICAL_START_BEGIN__; "
+    "kubectl --context " + q(context) + " get nodes -o json | jq -c '[.items[] | select([.status.conditions[]? | select(.type==\"Ready\" and .status==\"True\")] | length > 0)] | length'; "
+    "kubectl --context " + q(context) + " --namespace " + q(namespace) + " get pods -l app.kubernetes.io/name=travel-planner-backend -o json | jq -c '{ready: ([.items[] | select([.status.conditions[]? | select(.type==\"Ready\" and .status==\"True\")] | length > 0)] | length), pending: ([.items[] | select(.status.phase==\"Pending\")] | length)}'; "
+    "printf '%s\\n' __SCRUM80_CANONICAL_START_END__"
+)
+PY
+)"
+    if run_eks_bastion_command "$command" "SCRUM-80 verify canonical 2-node/2-pod spike start" "$invocation_file"; then
+      if python3 - "$invocation_file" "$receipt" <<'PY'
+import hashlib, json, re, sys
+from pathlib import Path
+invocation = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+stdout = str(invocation.get("StandardOutputContent", ""))
+match = re.search(r"__SCRUM80_CANONICAL_START_BEGIN__\s*(.*?)\s*__SCRUM80_CANONICAL_START_END__", stdout, re.DOTALL)
+if not match:
+    raise SystemExit(1)
+lines = [line.strip() for line in match.group(1).splitlines() if line.strip()]
+if len(lines) != 2:
+    raise SystemExit(1)
+ready_nodes = int(lines[0])
+pods = json.loads(lines[1])
+if ready_nodes != 2 or pods.get("ready") != 2 or pods.get("pending") != 0:
+    raise SystemExit(1)
+Path(sys.argv[2]).write_text(json.dumps({
+    "schemaVersion": "scrum80-canonical-start/v1",
+    "status": invocation.get("Status"),
+    "responseCode": invocation.get("ResponseCode"),
+    "nodeGroupDesired": 2,
+    "readyNodes": ready_nodes,
+    "readyBackendPods": pods.get("ready"),
+    "pendingBackendPods": pods.get("pending"),
+    "stdoutSha256": hashlib.sha256(stdout.encode()).hexdigest(),
+    "stderrSha256": hashlib.sha256(str(invocation.get("StandardErrorContent", "")).encode()).hexdigest(),
+    "rawOutputStored": False,
+}, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+PY
+      then
+        rm -f -- "$invocation_file"
+        return 0
+      fi
+    fi
+    rm -f -- "$invocation_file"
+    sleep 10
+  done
+  python3 - "$EVIDENCE_ROOT/incomplete-stop.json" <<'PY'
+import json, sys
+from datetime import datetime, timezone
+from pathlib import Path
+Path(sys.argv[1]).write_text(json.dumps({
+    "reason": "INCOMPLETE_CANONICAL_START",
+    "recordedAtUtc": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
+}, indent=2) + "\n", encoding="utf-8")
+PY
+  return 2
 }
 
 capacity_stress_stage() {
@@ -1945,7 +2246,9 @@ k6_phase_stage() {
     # The adaptive campaign owns its per-rate credential top-up and invokes
     # one coordinator/k6 process per stage.  Do not reset or reseed here.
     capacity_stress_stage "$phase"
-    return $?
+    local adaptive_status=$?
+    unset CAPACITY_TARGET_RATE
+    return "$adaptive_status"
   fi
   validate_phase_credential_capacity "$phase"
   if [[ "$phase" == "spike" ]]; then
@@ -2565,8 +2868,19 @@ case "$MODE" in
       run_stage_once hpa-override apply_eks_run_scoped_hpa
       run_stage_once baseline k6_phase_stage baseline 1
       run_stage_once capacity-stress k6_phase_stage capacity-stress
+      select_msa_hotspots
+      hotspot_one="$(printf '%s\n' "$MSA_SELECTED_HOTSPOTS" | sed -n '1p')"
+      hotspot_two="$(printf '%s\n' "$MSA_SELECTED_HOTSPOTS" | sed -n '2p')"
+      MSA_HOTSPOT_ID="$hotspot_one"
+      export MSA_HOTSPOT_ID
+      run_stage_once hotspot-1 run_msa_hotspot_stage hotspot-1 "$hotspot_one" "$MSA_HOTSPOT_RATE"
+      MSA_HOTSPOT_ID="$hotspot_two"
+      export MSA_HOTSPOT_ID
+      run_stage_once hotspot-2 run_msa_hotspot_stage hotspot-2 "$hotspot_two" "$MSA_HOTSPOT_RATE"
       run_stage_once hpa-restore restore_eks_canonical_hpa
-      run_stage_once recovery k6_phase_stage recovery
+      wait_eks_canonical_capacity
+      run_stage_once spike-256 run_msa_spike_stage
+      run_stage_once recovery run_msa_recovery_stage
       run_stage_once mock-restore restore_eks_google_api_binding
       run_stage_once evidence evidence_stage
       run_stage_once cleanup cleanup_stage

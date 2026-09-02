@@ -6,7 +6,7 @@
 import {
   ENVIRONMENT, REGION, REQUEST_MIX_VERSION, SEED_VERSION, SLO_CONTRACT_VERSION, SLO_VERSION,
 } from './config.js';
-import { operationMixSummary } from './flows/current-feature-operations.js';
+import { buildHotspotMix, operationMixSummary } from './flows/current-feature-operations.js';
 
 export function makeAwsSummaryHandler(scenarioName) {
   return function handleSummary(data) {
@@ -26,11 +26,20 @@ export function makeAwsSummaryHandler(scenarioName) {
       operationMix: operationMixSummary(metrics, (() => {
         try {
           const profilePath = __ENV.AWS_PROFILE_FILE || '../../aws/profiles/ec2-b01.json';
-          return JSON.parse(open(profilePath)).requestMix?.baseline || {};
+          const profile = JSON.parse(open(profilePath));
+          const baseMix = profile.requestMix?.normal || profile.requestMix?.baseline || {};
+          const candidate = __ENV.MSA_HOTSPOT_ID || '';
+          return candidate
+            ? buildHotspotMix(baseMix, candidate, Number(__ENV.MSA_HOTSPOT_SHARE || 60))
+            : baseMix;
         } catch (_) {
           return {};
         }
       })()),
+      hotspot: __ENV.MSA_HOTSPOT_ID ? {
+        candidate: __ENV.MSA_HOTSPOT_ID,
+        sharePercent: Number(__ENV.MSA_HOTSPOT_SHARE || 60),
+      } : null,
       metrics: {
         http_reqs: metricValues('http_reqs'),
         http_req_duration: metricValues('http_req_duration'),

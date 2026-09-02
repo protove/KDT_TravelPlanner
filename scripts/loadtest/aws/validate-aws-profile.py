@@ -41,6 +41,7 @@ EKS_ADAPTIVE_BREAKPOINT_PROFILE_VERSIONS = {
     EKS_ADAPTIVE_BREAKPOINT_PROFILE_VERSION,
     "aws-eks-monolith-breakpoint-v2.1",
 }
+EKS_MSA_BOUNDARY_PROFILE_VERSION = "aws-eks-monolith-msa-boundary-v1.0"
 CURRENT_FEATURE_REQUEST_MIX_VERSION = "aws-eks-current-feature-coverage-v2"
 CURRENT_FEATURE_OPERATION_IDS = {
     "refresh", "profileRead", "travelList", "travelDetail", "travelUpdate",
@@ -98,7 +99,7 @@ def validate(profile):
     limits = profile["limits"]
     max_rate = limits.get("maxRate")
     max_vus = limits.get("maxVUs")
-    if profile.get("profileVersion") in EKS_ADAPTIVE_BREAKPOINT_PROFILE_VERSIONS:
+    if profile.get("profileVersion") in EKS_ADAPTIVE_BREAKPOINT_PROFILE_VERSIONS or profile.get("profileVersion") == EKS_MSA_BOUNDARY_PROFILE_VERSION:
         _require(max_rate is None or (isinstance(max_rate, (int, float)) and max_rate > 0), "adaptive EKS limits.maxRate must be null or a positive number")
     else:
         _require(isinstance(max_rate, (int, float)) and max_rate > 0, "limits.maxRate must be a positive number")
@@ -133,6 +134,8 @@ def validate(profile):
         _validate_eks_breakpoint(profile)
     if profile.get("profileVersion") in EKS_ADAPTIVE_BREAKPOINT_PROFILE_VERSIONS:
         _validate_eks_adaptive_breakpoint(profile)
+    if profile.get("profileVersion") == EKS_MSA_BOUNDARY_PROFILE_VERSION:
+        _validate_eks_msa_boundary(profile)
 
     return True
 
@@ -366,6 +369,58 @@ def _validate_eks_adaptive_breakpoint(profile):
     _require("normal" in profile.get("requestMix", {}), "requestMix.normal is missing for adaptive EKS breakpoint")
     _validate_mix_sums_to_100(profile["requestMix"]["normal"], "requestMix.normal")
     _require(set(profile["requestMix"]["normal"]) == CURRENT_FEATURE_OPERATION_IDS, "adaptive EKS request mix must contain the exact current-feature operation set")
+    for name in ("baseline", "spike", "soak"):
+        _require(profile.get("requestMix", {}).get(name) == profile["requestMix"]["normal"], f"requestMix.{name} must use the frozen current-feature mix")
+
+
+def _validate_eks_msa_boundary(profile):
+    """Validate the SCRUM-80 MSA-boundary campaign contract.
+
+    This is intentionally a finite *stage input* list, not a capacity ceiling:
+    a valid terminal from the observer still ends the campaign early, while a
+    clean 256-RPS stage proceeds to hotspot, spike and recovery phases.
+    """
+    target = profile.get("target") or {}
+    _require(target.get("platform") == "eks", "MSA boundary target.platform must be eks")
+    eks = profile.get("eks")
+    _require(isinstance(eks, dict), "eks settings are missing")
+    _require(eks.get("instanceType") == "t3.medium", "MSA boundary must use t3.medium nodes")
+    _require(eks.get("nodeGroup") == {"min": 2, "desired": 2, "max": 4}, "EKS node group must remain 2/2/4")
+    _require(eks.get("baseHpa") == {"minReplicas": 2, "maxReplicas": 4}, "base HPA must remain 2-4")
+    _require(profile.get("limits", {}).get("maxRate") is None, "MSA boundary limits.maxRate must be null")
+    _require(profile.get("sloVersion") == "v2.1-breakpoint", "MSA boundary must consume v2.1-breakpoint")
+    _require(profile.get("requestMixVersion") == CURRENT_FEATURE_REQUEST_MIX_VERSION, "MSA boundary must use the current-feature request mix")
+    stress = profile.get("capacityStress")
+    _require(isinstance(stress, dict) and stress.get("adaptive") is True, "MSA boundary capacityStress must be adaptive")
+    _require(stress.get("fixedRpsCeiling") is None, "MSA boundary cannot define an RPS ceiling")
+    _require(stress.get("balancedRates") == [64, 128, 192, 224, 256], "MSA boundary rates must be 64,128,192,224,256")
+    _require(stress.get("nominalHoldSeconds") == 180, "MSA boundary nominal hold must be 180 seconds")
+    _require(stress.get("stabilitySeconds") == 120, "MSA boundary stability window must be 120 seconds")
+    _require(stress.get("conditionalExtensionSeconds") == 120, "MSA boundary extension must be 120 seconds")
+    _require(stress.get("maxExtensionsPerStage") == 1, "MSA boundary allows one extension per stage")
+    _require(stress.get("maxSingleStageSeconds") == 300, "MSA boundary max stage must be 300 seconds")
+    _require(stress.get("hotspotSharePercent") == 60, "MSA boundary hotspot share must be 60 percent")
+    _require(stress.get("hotspotHoldSeconds") == 300, "MSA boundary hotspot hold must be 300 seconds")
+    _require(stress.get("spikeRate") == 256 and stress.get("recoveryRate") == 16, "MSA boundary spike/recovery rates are invalid")
+    _require(stress.get("recoveryObservationSeconds") == 1200, "MSA boundary recovery observation must be 1200 seconds")
+    _require(stress.get("recoveryHealthyStabilitySeconds") == 120, "MSA boundary recovery stability must be 120 seconds")
+    _require(stress.get("runnerDefaultInstanceType") == "c6i.2xlarge", "MSA boundary must use c6i.2xlarge Runner")
+    _require(stress.get("runnerRepairInstanceType") == "c6i.4xlarge", "MSA boundary repair Runner must be c6i.4xlarge")
+    _require(stress.get("runnerRepairLimit") == 1, "MSA boundary Runner repair limit must be one")
+    _require(stress.get("requiresCompleteSloWindows") is True, "MSA boundary must require complete SLO windows")
+    candidates = stress.get("hotspotCandidateOrder")
+    _require(isinstance(candidates, list) and len(candidates) >= 2 and all(isinstance(item, str) and item for item in candidates), "MSA boundary hotspot candidates are missing")
+    terminals = stress.get("terminalConditions")
+    _require(isinstance(terminals, list) and terminals and "HARD_CEILING" not in terminals and "PROFILE_COMPLETE" not in terminals, "MSA boundary terminal conditions are invalid")
+    baseline = profile.get("scenarios", {}).get("baseline", {})
+    _require(baseline.get("rate") == 16 and baseline.get("repeat") == 1, "MSA boundary baseline must run once at 16 RPS")
+    scenario = profile.get("scenarios", {}).get("capacity-stress")
+    _require(isinstance(scenario, dict) and scenario.get("adaptive") is True, "MSA boundary capacity-stress must be adaptive")
+    _require(scenario.get("rate") is None and scenario.get("duration") == "180s", "MSA boundary capacity-stress timing is invalid")
+    _require(scenario.get("preAllocatedVUs") == 256 and scenario.get("maxVUs") == 512, "MSA boundary capacity-stress defaults must be 256/512 VUs")
+    _require("normal" in profile.get("requestMix", {}), "MSA boundary requestMix.normal is missing")
+    _validate_mix_sums_to_100(profile["requestMix"]["normal"], "requestMix.normal")
+    _require(set(profile["requestMix"]["normal"]) == CURRENT_FEATURE_OPERATION_IDS, "MSA boundary request mix must contain the exact current-feature operation set")
     for name in ("baseline", "spike", "soak"):
         _require(profile.get("requestMix", {}).get(name) == profile["requestMix"]["normal"], f"requestMix.{name} must use the frozen current-feature mix")
 

@@ -228,7 +228,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--poll-seconds", type=float, default=10.0)
     parser.add_argument(
         "--campaign-stage",
-        choices=("capacity-stress", "pod-scale-out", "node-scale-out-breakpoint", "recovery"),
+        choices=(
+            "capacity-stress", "pod-scale-out", "node-scale-out-breakpoint", "recovery",
+            "hotspot-1", "hotspot-2", "spike-256", "recovery-16",
+        ),
         default="capacity-stress",
     )
     parser.add_argument("--", dest="separator", nargs="?")

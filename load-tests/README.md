@@ -29,6 +29,38 @@ fixture, Smoke/Baseline raw·summary, private mock 및 cleanup/safety 결과로 
 이 게이트가 `LOCAL_PASS`가 아니면 AWS State를 만들지 않고 원인을 수정한 뒤 새
 로컬 stack에서 해당 검증을 다시 한다.
 
+## SCRUM-80 EKS MSA 경계 캠페인
+
+로컬 게이트 통과 후에만 다음 프로필을 사용한다. Backend는 검증된
+`d11e78…` digest를 그대로 재사용하고, EKS worker는 `t3.medium` 2/2/4,
+HPA는 2/4로 고정한다. `run-msa-boundary-campaign.py`는 AWS를 호출하지 않고
+실행 순서만 검증·출력한다.
+
+```bash
+python3 scripts/loadtest/aws/run-msa-boundary-campaign.py \
+  --profile load-tests/aws/profiles/eks-monolith-msa-boundary-v1.0.json \
+  --operation-map load-tests/aws/contracts/msa-boundary-operation-map-v1.0.json \
+  --dry-run
+```
+
+실제 실행은 기존 AWS Runner/observer를 통해 Smoke → 16 RPS Baseline →
+`64 → 128 → 192 → 224 → 256` balanced stage 순서로 진행한다. 각 stage는
+180초를 기본으로 하고 HPA/Cluster Autoscaler 전환 중인 경우에만 한 번 120초를
+연장한다. 유효한 terminal(예: Node max에서 Pending 지속, SLO/오류 붕괴,
+HPA max, OOM/CrashLoop, ALB·RDS·Redis 포화, 처리량 plateau)이 관측되면 그
+시점에서 멈추며, 그렇지 않으면 256까지 완료한다. 고정 RPS ceiling은 두지
+않는다.
+
+balanced 결과가 완전하게 수집된 뒤 `analyze-msa-boundary-campaign.py`로
+증거가 가장 강한 두 후보를 선택하고, 최고 유효 RPS에서 후보 60% + 기존
+background 40% 혼합을 각각 300초 실행한다. 이후 HPA를 canonical 2/4로
+되돌리고 Node 2개·Ready Backend Pod 2개가 확인될 때까지 기다린 뒤 256 RPS
+즉시 spike를 300초 실행한다. 마지막으로 16 RPS Recovery를 총 1,200초
+관찰하며 HPA/mock 복구·Pod scale-in·Node 4→2를 확인한다.
+각 stage와 Grafana 고정 UTC 창은 `evidence/aws-load-tests/`에 봉인하며,
+실험 종료 후에는 run data, `dev-load-test`, `dev-eks`를 역순으로 정리하고
+`dev`만 남았는지 확인한다.
+
 ## 사전 조건
 
 - Docker Desktop 또는 Docker Engine과 Compose v2

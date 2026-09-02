@@ -3,13 +3,14 @@
 // This is one adaptive breakpoint stage. The controller launches it once per
 // target rate (256, then exactly 2R) and stops only on an observed terminal;
 // the k6 process itself never calls Kubernetes or AWS control-plane APIs.
-import { runMixedCurrentOperation } from '../flows/current-feature-operations.js';
+import { buildHotspotMix, runMixedCurrentOperation } from '../flows/current-feature-operations.js';
 import { b01SpikeThresholds } from '../thresholds.js';
 import { makeAwsSummaryHandler } from '../summary.js';
 import { PROFILE_VERSION, SCENARIOS, enforceRateLimit, enforceVuLimit, requestMixFor } from '../config.js';
 
 const STRESS = SCENARIOS['capacity-stress'];
 if (!STRESS) throw new Error('[aws/eks-scale-capacity] profile.scenarios.capacity-stress is missing');
+const MSA_BOUNDARY = PROFILE_VERSION === 'aws-eks-monolith-msa-boundary-v1.0';
 const RATE = Number(__ENV.CAPACITY_TARGET_RATE || __ENV.CONFIRMED_RATE || __ENV.RATE || STRESS.startRate);
 if (!Number.isFinite(RATE) || RATE <= 0) {
   throw new Error('[aws/eks-scale-capacity] target rate must be a positive rate');
@@ -18,7 +19,8 @@ if (!Number.isFinite(RATE) || RATE <= 0) {
 const CAMPAIGN_STAGE = __ENV.CAPACITY_STAGE || 'capacity-stress';
 const ADAPTIVE = STRESS.adaptive === true
   || PROFILE_VERSION === 'aws-eks-monolith-breakpoint-v2.0'
-  || PROFILE_VERSION === 'aws-eks-monolith-breakpoint-v2.1';
+  || PROFILE_VERSION === 'aws-eks-monolith-breakpoint-v2.1'
+  || MSA_BOUNDARY;
 const REGISTERED_MULTIPLIERS = STRESS.stageMultipliers || [];
 const REGISTERED_DURATIONS = STRESS.stageDurations || [];
 let MULTIPLIERS = REGISTERED_MULTIPLIERS;
@@ -70,7 +72,20 @@ if (ADAPTIVE) {
 }
 const PRE_ALLOCATED_VUS = enforceVuLimit(Number(__ENV.PREALLOCATED_VUS || STRESS.preAllocatedVUs));
 const MAX_VUS = enforceVuLimit(Number(__ENV.MAX_VUS || STRESS.maxVUs));
-const MIX = requestMixFor('normal');
+const NORMAL_MIX = requestMixFor('normal');
+const HOTSPOT_CANDIDATE = __ENV.MSA_HOTSPOT_ID || '';
+const MIX = HOTSPOT_CANDIDATE
+  ? buildHotspotMix(NORMAL_MIX, HOTSPOT_CANDIDATE, Number(__ENV.MSA_HOTSPOT_SHARE || STRESS.hotspotSharePercent || 60))
+  : NORMAL_MIX;
+const STAGE_TAGS = {
+  phase: CAMPAIGN_STAGE,
+  platform: 'eks',
+  adaptive: 'true',
+  targetRate: String(STAGE_RATES[0]),
+  stageIndex: String(__ENV.CAPACITY_STAGE_INDEX || 0),
+};
+if (MSA_BOUNDARY) STAGE_TAGS.boundary = 'msa-monolith';
+if (HOTSPOT_CANDIDATE) STAGE_TAGS.hotspot = HOTSPOT_CANDIDATE;
 
 export const options = {
   summaryTrendStats: ['avg', 'min', 'med', 'max', 'p(90)', 'p(95)', 'p(99)'],
@@ -84,13 +99,7 @@ export const options = {
         preAllocatedVUs: PRE_ALLOCATED_VUS,
         maxVUs: MAX_VUS,
         exec: 'mix',
-        tags: {
-          phase: CAMPAIGN_STAGE,
-          platform: 'eks',
-          adaptive: 'true',
-          targetRate: String(STAGE_RATES[0]),
-          stageIndex: String(__ENV.CAPACITY_STAGE_INDEX || 0),
-        },
+        tags: STAGE_TAGS,
       }
       : {
         executor: STRESS.executor || 'ramping-arrival-rate',
