@@ -39,15 +39,18 @@ uses ElastiCache RBAC with IAM authentication (--redis-iam-user +
 from __future__ import annotations
 
 import argparse
+import contextlib
+import ipaddress
 import json
 import os
 import re
+import socket
 import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlsplit
 from urllib.request import Request, urlopen
 
 SCRIPT_DIRECTORY = Path(__file__).resolve().parent
@@ -280,12 +283,57 @@ def delete_matching_rows(args: argparse.Namespace, username: str, password: str,
     psql(args, username, password, script)
 
 
+@contextlib.contextmanager
+def resolved_target_host(host: str):
+    """Resolve the approved HTTPS host to Runner-local ALB IPs when supplied.
+
+    Private Runner subnets cannot resolve the public custom hostname directly.
+    ``AWS_TARGET_HOST_IPS`` is populated by the orchestrator's ALB probe; the
+    mapping is process-scoped so TLS SNI and the HTTP Host header still use the
+    approved hostname and no host-file or system DNS change is made.
+    """
+    raw_ips = os.environ.get("AWS_TARGET_HOST_IPS", "")
+    ips = [value.strip() for value in raw_ips.split(",") if value.strip()]
+    if not ips:
+        yield
+        return
+    for value in ips:
+        try:
+            parsed = ipaddress.ip_address(value)
+        except ValueError as error:
+            raise CleanupError("AWS_TARGET_HOST_IPS contains an invalid IP address") from error
+        if parsed.version != 4:
+            raise CleanupError("AWS_TARGET_HOST_IPS must contain IPv4 addresses")
+
+    original_getaddrinfo = socket.getaddrinfo
+
+    def mapped_getaddrinfo(requested_host, port, family=0, type=0, proto=0, flags=0):
+        if requested_host != host:
+            return original_getaddrinfo(requested_host, port, family, type, proto, flags)
+        if family not in (0, socket.AF_INET):
+            return original_getaddrinfo(requested_host, port, family, type, proto, flags)
+        socket_type = type or socket.SOCK_STREAM
+        socket_proto = proto or socket.IPPROTO_TCP
+        return [
+            (socket.AF_INET, socket_type, socket_proto, "", (value, port))
+            for value in ips
+        ]
+
+    socket.getaddrinfo = mapped_getaddrinfo
+    try:
+        yield
+    finally:
+        socket.getaddrinfo = original_getaddrinfo
+
+
 def refresh_status(args: argparse.Namespace, refresh_token: str) -> int:
     request = Request(f"{args.base_url.rstrip('/')}/api/v1/auth/token/refresh", method="POST")
     request.add_header("Cookie", f"refresh_token={refresh_token}")
     try:
-        with urlopen(request, timeout=15) as response:
-            return response.status
+        host = urlsplit(request.full_url).hostname or ""
+        with resolved_target_host(host):
+            with urlopen(request, timeout=15) as response:
+                return response.status
     except HTTPError as error:
         return error.code
     except URLError as error:
