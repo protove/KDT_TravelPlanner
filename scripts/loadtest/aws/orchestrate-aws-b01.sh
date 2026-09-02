@@ -747,67 +747,154 @@ if len(items) != 1 or items[0].get("PingStatus") != "Online":
 PY
 }
 
+validate_runner_bootstrap_readiness_remote() {
+  local receipt="$EVIDENCE_ROOT/aws/runner-readiness-verification.json"
+  local invocation_file command_json command_id invocation_json invocation_status command
+  invocation_file="$(mktemp "${TMPDIR:-/tmp}/scrum80-runner-readiness.XXXXXX")"
+  command="$(python3 - "$RUN_ID" "$SOURCE_COMMIT_SHA" "$K6_IMAGE" "$GOOGLE_MOCK_IMAGE" <<'PY'
+import shlex
+import sys
+
+run_id, source_sha, k6_image, mock_image = sys.argv[1:]
+base = "/var/lib/travel-planner/load-test-evidence/base-ready.json"
+full = "/var/lib/travel-planner/load-test-evidence/runner-readiness.json"
+q = shlex.quote
+remote_python = r'''import hashlib
+import json
+import sys
+from pathlib import Path
+
+base_path, full_path, expected_run, expected_source, expected_k6, expected_mock = sys.argv[1:]
+base = json.loads(Path(base_path).read_text(encoding="utf-8"))
+full = json.loads(Path(full_path).read_text(encoding="utf-8"))
+if base.get("status") != "base-ready" or base.get("sourceCommitShaExpected") != expected_source:
+    raise SystemExit("Runner base-ready receipt does not match the approved source")
+if full.get("status") != "ready" or full.get("runId") != expected_run or full.get("sourceCommitSha") != expected_source:
+    raise SystemExit("Runner full-readiness receipt run/source is not ready for this run")
+if full.get("k6ImageReference") != expected_k6 or full.get("mockImageReference") != expected_mock:
+    raise SystemExit("Runner full-readiness image reference does not match this run")
+mock = full.get("mock") if isinstance(full.get("mock"), dict) else {}
+if mock.get("healthStatus") != "ok" or int(mock.get("contractRoutesVerified", 0)) < 4:
+    raise SystemExit("Runner private mock health/body contract is incomplete")
+def digest(path):
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+print("__SCRUM80_RUNNER_READINESS_BEGIN__")
+print(json.dumps({
+    "base": {
+        "status": base.get("status"),
+        "sourceCommitShaExpected": base.get("sourceCommitShaExpected"),
+        "dockerActive": base.get("dockerActive") is True,
+        "receiptSha256": digest(base_path),
+    },
+    "full": {
+        "status": full.get("status"),
+        "runId": full.get("runId"),
+        "sourceCommitSha": full.get("sourceCommitSha"),
+        "k6ImageReference": full.get("k6ImageReference"),
+        "mockImageReference": full.get("mockImageReference"),
+        "mock": {
+            "healthStatus": mock.get("healthStatus"),
+            "contractRoutesVerified": int(mock.get("contractRoutesVerified", 0)),
+        },
+        "receiptSha256": digest(full_path),
+    },
+}, sort_keys=True))
+print("__SCRUM80_RUNNER_READINESS_END__")
+'''
+print(
+    "set -euo pipefail; "
+    f"for _ in $(seq 1 60); do if [[ -s {q(base)} && -s {q(full)} ]]; then break; fi; sleep 2; done; "
+    f"python3 - {q(base)} {q(full)} {q(run_id)} {q(source_sha)} {q(k6_image)} {q(mock_image)} <<'PY\n"
+    + remote_python
+    + "\nPY\n"
+)
+PY
+)"
+  local ssm_parameters
+  ssm_parameters="$(jq -cn --arg command "$command" '{commands:[$command]}')"
+  command_json="$(run_aws_json ssm send-command --instance-ids "$RUNNER_ID"     --document-name AWS-RunShellScript --comment "SCRUM-80 verify Runner base/full readiness $RUN_ID"     --parameters "$ssm_parameters" --region "$REGION")"
+  command_id="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["Command"]["CommandId"])' <<<"$command_json")"
+  [[ "$command_id" =~ ^[A-Za-z0-9-]{36}$ ]] || {
+    rm -f -- "$invocation_file"
+    echo "Runner readiness SSM command id is invalid" >&2
+    return 1
+  }
+  invocation_json=""
+  invocation_status=""
+  for _ in $(seq 1 90); do
+    invocation_json="$(run_aws_json ssm get-command-invocation --command-id "$command_id" --instance-id "$RUNNER_ID" --region "$REGION")"
+    printf '%s\n' "$invocation_json" >"$invocation_file"
+    invocation_status="$(python3 -c 'import json,sys; print(json.load(sys.stdin).get("Status", ""))' <<<"$invocation_json")"
+    case "$invocation_status" in
+      Success|Failed|Cancelled|TimedOut|Cancelling) break ;;
+    esac
+    sleep 2
+  done
+  if [[ "$invocation_status" != "Success" ]]; then
+    rm -f -- "$invocation_file"
+    echo "Runner remote base/full readiness verification failed: $invocation_status" >&2
+    return 1
+  fi
+  python3 - "$invocation_file" "$receipt" "$RUN_ID" "$SOURCE_COMMIT_SHA" "$K6_IMAGE" "$GOOGLE_MOCK_IMAGE" "$command_id" <<'PY'
+import hashlib
+import json
+import re
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+invocation_path, output_path, run_id, source_sha, k6_image, mock_image, command_id = sys.argv[1:]
+invocation = json.loads(Path(invocation_path).read_text(encoding="utf-8"))
+stdout = str(invocation.get("StandardOutputContent", ""))
+match = re.search(r"__SCRUM80_RUNNER_READINESS_BEGIN__\s*(.*?)\s*__SCRUM80_RUNNER_READINESS_END__", stdout, re.DOTALL)
+if not match:
+    raise SystemExit("Runner readiness markers are missing")
+safe = json.loads(match.group(1))
+base = safe.get("base") if isinstance(safe.get("base"), dict) else {}
+full = safe.get("full") if isinstance(safe.get("full"), dict) else {}
+mock = full.get("mock") if isinstance(full.get("mock"), dict) else {}
+if base.get("status") != "base-ready" or base.get("sourceCommitShaExpected") != source_sha or base.get("dockerActive") is not True:
+    raise SystemExit("Runner base readiness contract failed")
+if full.get("status") != "ready" or full.get("runId") != run_id or full.get("sourceCommitSha") != source_sha:
+    raise SystemExit("Runner full readiness run/source contract failed")
+if full.get("k6ImageReference") != k6_image or full.get("mockImageReference") != mock_image:
+    raise SystemExit("Runner readiness image contract failed")
+if mock.get("healthStatus") != "ok" or int(mock.get("contractRoutesVerified", 0)) < 4:
+    raise SystemExit("Runner readiness mock contract failed")
+Path(output_path).write_text(json.dumps({
+    "schemaVersion": "dev-eks-runner-readiness-verification/v1",
+    "status": "ready",
+    "runId": run_id,
+    "sourceCommitSha": source_sha,
+    "k6ImageReference": full.get("k6ImageReference"),
+    "mockImageReference": full.get("mockImageReference"),
+    "mockHealthStatus": mock.get("healthStatus"),
+    "contractRoutesVerified": int(mock.get("contractRoutesVerified", 0)),
+    "baseReceiptSha256": safe.get("base", {}).get("receiptSha256"),
+    "fullReceiptSha256": safe.get("full", {}).get("receiptSha256"),
+    "ssmCommandId": command_id,
+    "ssmStatus": invocation.get("Status"),
+    "stdoutSha256": hashlib.sha256(stdout.encode("utf-8")).hexdigest(),
+    "stderrSha256": hashlib.sha256(str(invocation.get("StandardErrorContent", "")).encode("utf-8")).hexdigest(),
+    "rawOutputStored": False,
+    "recordedAtUtc": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
+}, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+PY
+  chmod 0600 "$receipt"
+  rm -f -- "$invocation_file"
+}
+
 validate_runner_bootstrap_readiness() {
   [[ "$TARGET_PLATFORM" == "eks" && "$ADAPTIVE_BREAKPOINT_PROFILE" == "1" ]] || return 0
   local receipt="$EVIDENCE_ROOT/aws/runner-readiness-verification.json"
-  local runner_receipt="/var/lib/travel-planner/load-test-evidence/runner-readiness.json"
   if [[ "$DRY_RUN" == "1" ]]; then
     cat >"$receipt" <<EOF
 {"schemaVersion":"scrum80-runner-readiness/v1","status":"dry-run","runId":"$RUN_ID","sourceCommitSha":"$SOURCE_COMMIT_SHA","rawOutputStored":false}
 EOF
     return 0
   fi
-  local base_receipt="/var/lib/travel-planner/load-test-evidence/base-ready.json"
-  [[ -s "$base_receipt" ]] || {
-    echo "Runner base-ready receipt is missing; cloud-init did not finish" >&2
-    return 1
-  }
-  python3 - "$base_receipt" "$SOURCE_COMMIT_SHA" <<'PY'
-import json
-import sys
-from pathlib import Path
-
-payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
-if payload.get("status") != "base-ready" or payload.get("sourceCommitShaExpected") != sys.argv[2]:
-    raise SystemExit("Runner base-ready receipt does not match the approved source")
-PY
-  [[ -s "$runner_receipt" ]] || {
-    echo "Runner full-readiness receipt is missing; run the private S3+SSM bootstrap before seed" >&2
-    return 1
-  }
-  python3 - "$runner_receipt" "$RUN_ID" "$SOURCE_COMMIT_SHA" "$K6_IMAGE" "$GOOGLE_MOCK_IMAGE" "$receipt" <<'PY'
-import hashlib
-import json
-import sys
-from pathlib import Path
-
-runner_path, run_id, source_sha, k6_image, mock_image, output = sys.argv[1:]
-payload = json.loads(Path(runner_path).read_text(encoding="utf-8"))
-if payload.get("status") != "ready":
-    raise SystemExit("Runner full-readiness receipt is not ready")
-if payload.get("runId") != run_id or payload.get("sourceCommitSha") != source_sha:
-    raise SystemExit("Runner full-readiness receipt run/source does not match this run")
-if k6_image and payload.get("k6ImageReference") != k6_image:
-    raise SystemExit("Runner full-readiness k6 image does not match this run")
-if payload.get("mockImageReference") != mock_image:
-    raise SystemExit("Runner full-readiness mock image does not match this run")
-mock = payload.get("mock") if isinstance(payload.get("mock"), dict) else {}
-if mock.get("healthStatus") != "ok" or int(mock.get("contractRoutesVerified", 0)) < 4:
-    raise SystemExit("Runner private mock health/body contract is incomplete")
-Path(output).write_text(json.dumps({
-    "schemaVersion": "scrum80-runner-readiness-verification/v1",
-    "status": "ready",
-    "runId": run_id,
-    "sourceCommitSha": source_sha,
-    "k6ImageReference": payload.get("k6ImageReference"),
-    "mockImageReference": payload.get("mockImageReference"),
-    "mockHealthStatus": mock.get("healthStatus"),
-    "contractRoutesVerified": mock.get("contractRoutesVerified"),
-    "receiptSha256": hashlib.sha256(Path(runner_path).read_bytes()).hexdigest(),
-    "rawOutputStored": False,
-}, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-PY
-  chmod 0600 "$receipt"
+  validate_runner_bootstrap_readiness_remote
+  return $?
 }
 
 eks_target_stage() {

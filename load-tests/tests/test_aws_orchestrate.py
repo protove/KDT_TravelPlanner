@@ -126,6 +126,15 @@ class AwsOrchestrationContractTests(unittest.TestCase):
         self.assertNotIn("docker pull", user_data)
         self.assertNotIn("source_repository_url", LOAD_RUNNER_TERRAFORM.read_text(encoding="utf-8"))
 
+    def test_eks_runner_readiness_is_verified_on_remote_runner_over_ssm(self) -> None:
+        source = SCRIPT.read_text(encoding="utf-8")
+        self.assertIn("validate_runner_bootstrap_readiness_remote", source)
+        self.assertIn('ssm send-command --instance-ids "$RUNNER_ID"', source)
+        self.assertIn("__SCRUM80_RUNNER_READINESS_BEGIN__", source)
+        self.assertIn("/var/lib/travel-planner/load-test-evidence/base-ready.json", source)
+        self.assertIn("for attempt in $(seq 1 60)", source)
+        self.assertNotIn('[[ -s "$base_receipt" ]]', source)
+
     def test_help_exposes_approved_operator_inputs(self) -> None:
         result = subprocess.run(
             ["bash", str(SCRIPT), "--help"],
