@@ -16,17 +16,11 @@ via Grafana's datasource proxy, CloudWatch via the AWS CLI directly) over the
 run's fixed startedAtUtc/endedAtUtc window — never the dashboard's live "now".
 
 D-003-R1 (see aws-load-test-handoff/decisions/DECISION_LOG.md) decided PNG
-capture is required and settled the method: no renderer sidecar/plugin, an
-operator opens an SSM port-forward tunnel to Grafana and captures each fixed
-Panel ID with a browser, per TEAM_MEMBER_B01_ACTION_REQUEST.md section 4.4.
-This script cannot drive that capture itself (no headless browser dependency,
-and there is no live Grafana to test against yet) — what it does instead is
-write the *capture contract* section 4.4 requires: for every panel, a
-grafana/panels/panel-<id>.capture.json with the runId/fromUtc/toUtc/dashboard
-UID+version/Panel ID/Query JSON path already resolved, plus the exact
-`?viewPanel=` URL to open for the screenshot. Once an operator saves
-panel-<id>.png next to it, build-evidence-manifest.py's determine_png_status()
-treats that pairing as this panel being captured.
+capture is required over an SSM loopback tunnel. This exporter writes the
+fixed-range capture contracts; capture-grafana-panels.py then downloads the
+Grafana render endpoint for the full dashboard and every fixed Panel ID. The
+contracts remain useful as provenance even when an operator chooses to inspect
+the rendered PNGs manually.
 
 Auth values (--password / GRAFANA_EVIDENCE_PASSWORD) are used only in an HTTP
 Basic Authorization header and are never written to any output file or
@@ -893,13 +887,13 @@ def main() -> int:
         json.dumps(dashboard_contract, indent=2) + "\n", encoding="utf-8",
     )
     (panels_dir / "status.json").write_text(json.dumps({
-        "status": "pending-manual-capture",
+        "status": "pending-capture",
         "reason": (
-            "D-003-R1 decided PNG capture is required, via SSM port-forward + browser screenshot "
-            "(no renderer sidecar). This script wrote one panel-<id>.capture.json per panel with the "
-            "exact URL, fixed UTC range, and Query JSON path to capture against — see download-aws-evidence.sh "
-            "for the SSM tunnel command. Query JSON under grafana/queries/ remains the evidence of record "
-            "until the corresponding panel-<id>.png is saved."
+            "D-003-R1 requires PNG capture over an SSM loopback. This script wrote one "
+            "panel-<id>.capture.json per panel with the exact URL, fixed UTC range, and Query JSON path; "
+            "run capture-grafana-panels.py against the same tunnel before verification. "
+            "Query JSON under grafana/queries/ remains the evidence of record until the corresponding "
+            "panel-<id>.png is saved."
         ),
         "panelCount": len(contracts),
         "dashboardCapture": dashboard_contract,

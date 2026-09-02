@@ -35,14 +35,12 @@ class EksLoadDashboardTest(unittest.TestCase):
         self.assertIn("http_server_requests_seconds_bucket", serialized)
         self.assertIn("hikaricp_connections_pending", serialized)
         cpu_panel = next(panel for panel in self.dashboard["panels"] if panel["id"] == 9)
-        self.assertEqual(
-            cpu_panel["targets"][0]["expr"],
-            '100 * avg(process_cpu_usage{app="travel-planner-backend",environment="$environment"})',
-        )
+        self.assertIn('app=~"$service"', cpu_panel["targets"][0]["expr"])
+        self.assertIn('pod=~"$pod"', cpu_panel["targets"][0]["expr"])
         self.assertNotIn("process_cpu_seconds_total{app=", serialized)
         self.assertNotIn("node_cpu_seconds_total", serialized)
         self.assertIn("environment", serialized)
-        for forbidden in ("userId", "user_id", "travelId", "travel_id", "requestId", "request_id", "flow_id"):
+        for forbidden in ("userId", "user_id", "travel_id", "requestId", "request_id", "flow_id"):
             self.assertNotIn(forbidden, serialized)
 
     def test_annotations_and_time_range_are_load_test_ready(self):
@@ -63,6 +61,34 @@ class EksLoadDashboardTest(unittest.TestCase):
             "Backend JVM heap",
             "Backend Hikari connections",
         }.issubset(titles))
+        self.assertTrue({
+            "Backend Pod CPU throttling",
+            "Backend Pod container memory",
+            "Backend Hikari pool saturation",
+            "Backend JVM GC / threads",
+            "Scale transition timeline",
+        }.issubset(titles))
+
+    def test_boundary_dashboard_has_safe_service_domain_and_operation_selectors(self):
+        variables = {item["name"]: item for item in self.dashboard["templating"]["list"]}
+        self.assertTrue({"service", "deployment", "domain", "subdomain", "operation", "pod", "dependency"} <= set(variables))
+        self.assertNotIn("user", json.dumps(variables["operation"]).lower())
+        self.assertNotIn("travelId", json.dumps(variables))
+        for panel_id in (16, 17, 18):
+            panel = next(item for item in self.dashboard["panels"] if item["id"] == panel_id)
+            self.assertEqual(len(panel["targets"]), 7)
+
+    def test_cadvisor_and_pool_queries_are_bounded_to_backend_pods(self):
+        serialized = json.dumps(self.dashboard)
+        self.assertIn("container_cpu_cfs_throttled_seconds_total", serialized)
+        self.assertIn("container_memory_working_set_bytes", serialized)
+        expressions = [
+            target.get("expr", "")
+            for panel in self.dashboard["panels"]
+            for target in panel.get("targets", [])
+        ]
+        self.assertTrue(any('container="backend"' in expr for expr in expressions))
+        self.assertIn("hikaricp_connections_max", serialized)
 
     def test_every_prometheus_target_has_required_query_policy(self):
         policy_keys = {item["key"] for item in self.query_contract["queries"]}
@@ -85,7 +111,7 @@ class EksLoadDashboardTest(unittest.TestCase):
                 self.assertNotIn("$__all", expr)
                 self.assertNotIn("$__interval", expr)
                 self.assertTrue(
-                    all(variable in {"namespace", "environment"} for variable in _custom_variables(expr)),
+                    all(variable in {"namespace", "environment", "service", "deployment", "pod"} for variable in _custom_variables(expr)),
                     f"unexpected dashboard variable in panel {panel['id']}: {expr}",
                 )
 

@@ -13,6 +13,10 @@ rules:
       - services
       - endpoints
     verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources:
+      - nodes/proxy
+    verbs: ["get"]
   - apiGroups: ["discovery.k8s.io"]
     resources:
       - endpointslices

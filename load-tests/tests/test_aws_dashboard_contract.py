@@ -56,7 +56,7 @@ class AwsDashboardContractTest(unittest.TestCase):
             if target.get("refId")
         }
         contract_keys = {item.get("key") for item in contract.get("queries", [])}
-        self.assertTrue(target_keys <= contract_keys)
+        self.assertEqual(target_keys, contract_keys)
 
 
 if __name__ == "__main__":

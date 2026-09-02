@@ -88,6 +88,25 @@ class EksMonitoringManifestContractTest(unittest.TestCase):
         ):
             self.assertNotIn(forbidden, self.config)
 
+    def test_cadvisor_collection_is_metric_filtered_and_uses_kubernetes_proxy(self) -> None:
+        for required in (
+            'discovery.kubernetes "nodes"',
+            'discovery.relabel "kubelet_cadvisor"',
+            'prometheus.relabel "kubelet_cadvisor_metrics"',
+            'container_cpu_cfs_throttled_seconds_total',
+            'container_memory_working_set_bytes',
+            'nodes/$1/proxy/metrics/cadvisor',
+            'bearer_token_file',
+        ):
+            self.assertIn(required, self.config)
+        self.assertNotIn('container_network_receive_bytes_total', self.config)
+        roles = [item for item in self.base if item["kind"] == "ClusterRole"]
+        self.assertTrue(roles)
+        self.assertTrue(any(
+            rule.get("resources") == ["nodes/proxy"] and rule.get("verbs") == ["get"]
+            for role in roles for rule in role.get("rules", [])
+        ))
+
     def test_alloy_daemonset_has_no_pod_filesystem_or_aws_identity(self) -> None:
         pod = self.daemonset["spec"]["template"]
         serialized = str(pod)
@@ -110,7 +129,10 @@ class EksMonitoringManifestContractTest(unittest.TestCase):
             if item["kind"] != "ClusterRole":
                 continue
             for rule in item.get("rules", []):
-                self.assertEqual(set(rule["verbs"]), {"get", "list", "watch"})
+                if "nodes/proxy" in rule.get("resources", []):
+                    self.assertEqual(set(rule["verbs"]), {"get"})
+                else:
+                    self.assertEqual(set(rule["verbs"]), {"get", "list", "watch"})
                 self.assertNotIn("pods/log", rule.get("resources", []))
 
     def test_images_are_pinned_and_config_source_matches_repository_file(self) -> None:
