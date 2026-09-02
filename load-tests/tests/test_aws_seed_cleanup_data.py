@@ -101,6 +101,20 @@ class RefreshCredentialLifecycleTest(unittest.TestCase):
 
 
 class SeedAwsLoadDataTest(unittest.TestCase):
+    def test_private_runner_target_resolution_is_scoped_and_restores_dns(self):
+        original_getaddrinfo = SEED.socket.getaddrinfo
+        with mock.patch.dict(SEED.os.environ, {"AWS_TARGET_HOST_IPS": "10.20.1.10,10.20.1.11"}, clear=False):
+            with SEED.resolved_target_host("api.example.com"):
+                mapped = SEED.socket.getaddrinfo("api.example.com", 443, 0, SEED.socket.SOCK_STREAM)
+                self.assertEqual([entry[4][0] for entry in mapped], ["10.20.1.10", "10.20.1.11"])
+        self.assertIs(SEED.socket.getaddrinfo, original_getaddrinfo)
+
+    def test_private_runner_target_resolution_rejects_non_ipv4_values(self):
+        with mock.patch.dict(SEED.os.environ, {"AWS_TARGET_HOST_IPS": "2001:db8::1"}, clear=False):
+            with self.assertRaisesRegex(SEED.SeedError, "IPv4"):
+                with SEED.resolved_target_host("api.example.com"):
+                    pass
+
     def test_seed_limit_covers_capacity_stress_fixture_contract(self):
         self.assertGreaterEqual(SEED.MAX_SYNTHETIC_USERS, 320)
 

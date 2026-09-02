@@ -51,11 +51,14 @@ from __future__ import annotations
 
 import argparse
 import base64
+import contextlib
 import hashlib
+import ipaddress
 import json
 import os
 import re
 import secrets
+import socket
 import subprocess
 import sys
 import tempfile
@@ -64,7 +67,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlsplit
 
 SCRIPT_DIRECTORY = Path(__file__).resolve().parent
 if str(SCRIPT_DIRECTORY) not in sys.path:
@@ -106,6 +109,50 @@ class SecretContractError(SeedError):
     password} test-credential contract. Distinguished from other SeedErrors
     with its own exit code (2) so an operator can tell "the wrong secret is
     wired in" apart from "the DB/Redis/API itself failed" (1) at a glance."""
+
+
+@contextlib.contextmanager
+def resolved_target_host(host: str):
+    """Temporarily resolve a private Runner's HTTPS target to ALB IPs.
+
+    The approved custom hostname stays in the URL so TLS SNI and the HTTP
+    Host header remain correct. ``AWS_TARGET_HOST_IPS`` is populated by the
+    Runner-side ALB verification; replacing only ``getaddrinfo`` avoids
+    persistent host-file changes and is scoped to this seed process. Without
+    the mapping, urllib keeps its normal DNS behavior.
+    """
+    raw_ips = os.environ.get("AWS_TARGET_HOST_IPS", "")
+    ips = [value.strip() for value in raw_ips.split(",") if value.strip()]
+    if not ips:
+        yield
+        return
+    for value in ips:
+        try:
+            parsed = ipaddress.ip_address(value)
+        except ValueError as error:
+            raise SeedError("AWS_TARGET_HOST_IPS contains an invalid IP address") from error
+        if parsed.version != 4:
+            raise SeedError("AWS_TARGET_HOST_IPS must contain IPv4 addresses")
+
+    original_getaddrinfo = socket.getaddrinfo
+
+    def mapped_getaddrinfo(requested_host, port, family=0, type=0, proto=0, flags=0):
+        if requested_host != host:
+            return original_getaddrinfo(requested_host, port, family, type, proto, flags)
+        if family not in (0, socket.AF_INET):
+            return original_getaddrinfo(requested_host, port, family, type, proto, flags)
+        socket_type = type or socket.SOCK_STREAM
+        socket_proto = proto or socket.IPPROTO_TCP
+        return [
+            (socket.AF_INET, socket_type, socket_proto, "", (value, port))
+            for value in ips
+        ]
+
+    socket.getaddrinfo = mapped_getaddrinfo
+    try:
+        yield
+    finally:
+        socket.getaddrinfo = original_getaddrinfo
 
 
 def sql_literal(value: str) -> str:
@@ -350,8 +397,10 @@ class AwsSeed:
             payload = json.dumps(body).encode("utf-8")
             request.add_header("Content-Type", "application/json")
         try:
-            with urlopen(request, payload, timeout=15) as response:
-                return response.status, json.loads(response.read() or b"{}"), response.headers.get_all("Set-Cookie") or []
+            host = urlsplit(request.full_url).hostname or ""
+            with resolved_target_host(host):
+                with urlopen(request, payload, timeout=15) as response:
+                    return response.status, json.loads(response.read() or b"{}"), response.headers.get_all("Set-Cookie") or []
         except HTTPError as error:
             return error.code, {}, error.headers.get_all("Set-Cookie") or []
         except URLError as error:
@@ -499,8 +548,10 @@ class AwsSeed:
         request = Request(f"{self.base_url}/api/v1/auth/token/refresh", method="POST")
         request.add_header("Cookie", f"refresh_token={token}")
         try:
-            with urlopen(request, timeout=15) as response:
-                return response.status
+            host = urlsplit(request.full_url).hostname or ""
+            with resolved_target_host(host):
+                with urlopen(request, timeout=15) as response:
+                    return response.status
         except HTTPError as error:
             return error.code
         except URLError as error:
