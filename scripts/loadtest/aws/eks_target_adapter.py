@@ -175,9 +175,9 @@ def build_kubectl_commands(
         # the fields consumed by build_evidence so a normal Deployment/Pod
         # manifest cannot hide the later node snapshot behind that cap.
         f"printf '%s\\n' __SCRUM53_HPA_BEGIN__; kubectl --context scr43-eks --namespace {namespace} get hpa {deployment} -o json | jq -c '{{spec:{{minReplicas:.spec.minReplicas,maxReplicas:.spec.maxReplicas}},status:{{desiredReplicas:.status.desiredReplicas,currentReplicas:.status.currentReplicas,conditions:(.status.conditions // [])}}}}'; printf '%s\\n' __SCRUM53_HPA_END__",
-        f"printf '%s\\n' __SCRUM53_DEPLOYMENT_BEGIN__; kubectl --context scr43-eks --namespace {namespace} get deployment {deployment} -o json | jq -c '{{spec:{{template:{{spec:{{containers:[.spec.template.spec.containers[] | {{name:.name,resources:{{requests:(.resources.requests // {{}})}}}}]}}}}}},status:{{replicas:.status.replicas,updatedReplicas:.status.updatedReplicas,availableReplicas:.status.availableReplicas,readyReplicas:.status.readyReplicas,unavailableReplicas:.status.unavailableReplicas}}}}'; printf '%s\\n' __SCRUM53_DEPLOYMENT_END__",
-        f"printf '%s\\n' __SCRUM53_PODS_BEGIN__; kubectl --context scr43-eks --namespace {namespace} get pods -l app.kubernetes.io/name=travel-planner-backend -o json | jq -c '{{items:[.items[] | {{metadata:{{name:.metadata.name}},spec:{{nodeName:.spec.nodeName}},status:{{phase:.status.phase,reason:.status.reason,conditions:(.status.conditions // []),containerStatuses:[.status.containerStatuses[]? | {{ready,restartCount,state,lastState,imageID}}]}}}}]}}'; printf '%s\\n' __SCRUM53_PODS_END__",
-        "printf '%s\\n' __SCRUM53_NODES_BEGIN__; kubectl --context scr43-eks get nodes -o json | jq -c '{items:[.items[] | {metadata:{name:.metadata.name},spec:{unschedulable:(.spec.unschedulable // false)},status:{allocatable:.status.allocatable,conditions:(.status.conditions // [])}}]}'; printf '%s\\n' __SCRUM53_NODES_END__",
+        f"printf '%s\\n' __SCRUM53_DEPLOYMENT_BEGIN__; kubectl --context scr43-eks --namespace {namespace} get deployment {deployment} -o json | jq -c '{{metadata:{{uid:.metadata.uid,creationTimestamp:.metadata.creationTimestamp,generation:.metadata.generation,deletionTimestamp:(.metadata.deletionTimestamp // null)}},spec:{{template:{{spec:{{containers:[.spec.template.spec.containers[] | {{name:.name,resources:{{requests:(.resources.requests // {{}})}}}}]}}}}}},status:{{replicas:.status.replicas,updatedReplicas:.status.updatedReplicas,availableReplicas:.status.availableReplicas,readyReplicas:.status.readyReplicas,unavailableReplicas:.status.unavailableReplicas}}}}'; printf '%s\\n' __SCRUM53_DEPLOYMENT_END__",
+        f"printf '%s\\n' __SCRUM53_PODS_BEGIN__; kubectl --context scr43-eks --namespace {namespace} get pods -l app.kubernetes.io/name=travel-planner-backend -o json | jq -c '{{items:[.items[] | {{metadata:{{name:.metadata.name,uid:.metadata.uid,creationTimestamp:.metadata.creationTimestamp,deletionTimestamp:(.metadata.deletionTimestamp // null)}},spec:{{nodeName:.spec.nodeName}},status:{{phase:.status.phase,reason:.status.reason,conditions:(.status.conditions // []),containerStatuses:[.status.containerStatuses[]? | {{ready,restartCount,state,lastState,imageID}}]}}}}]}}'; printf '%s\\n' __SCRUM53_PODS_END__",
+        "printf '%s\\n' __SCRUM53_NODES_BEGIN__; kubectl --context scr43-eks get nodes -o json | jq -c '{items:[.items[] | {metadata:{name:.metadata.name,uid:.metadata.uid,creationTimestamp:.metadata.creationTimestamp,deletionTimestamp:(.metadata.deletionTimestamp // null)},spec:{unschedulable:(.spec.unschedulable // false)},status:{allocatable:.status.allocatable,conditions:(.status.conditions // [])}}]}'; printf '%s\\n' __SCRUM53_NODES_END__",
         "printf '%s\\n' __SCRUM53_ALL_PODS_BEGIN__; kubectl --context scr43-eks get pods --all-namespaces -o json | jq -c '{items:[.items[] | {metadata:{namespace:.metadata.namespace,name:.metadata.name},spec:{nodeName:.spec.nodeName,containers:[.spec.containers[]? | {resources:{requests:(.resources.requests // {})}}]},status:{phase:.status.phase}}]}'; printf '%s\\n' __SCRUM53_ALL_PODS_END__",
         "printf '%s\\n' __SCRUM53_EVENTS_BEGIN__; kubectl --context scr43-eks get events --all-namespaces --sort-by=.lastTimestamp -o json | jq -c '{items:(.items | map(null))}'; printf '%s\\n' __SCRUM53_EVENTS_END__",
     ]
@@ -396,8 +396,17 @@ def build_evidence(
             and ((container.get("state") or {}).get("waiting") or {}).get("reason") == "CrashLoopBackOff"
             for container in containers
         )
+        ready_condition = next(
+            (condition for condition in status.get("conditions", [])
+             if isinstance(condition, dict) and condition.get("type") == "Ready"),
+            {},
+        )
         placement.append({
             "podName": metadata.get("name"),
+            "uid": metadata.get("uid"),
+            "creationTimestamp": metadata.get("creationTimestamp"),
+            "deletionTimestamp": metadata.get("deletionTimestamp"),
+            "readyTransitionAt": ready_condition.get("lastTransitionTime"),
             "nodeName": spec.get("nodeName"),
             "phase": status.get("phase") if isinstance(status, dict) else None,
             "readyContainers": ready_containers,
@@ -427,8 +436,20 @@ def build_evidence(
         status = node.get("status") if isinstance(node.get("status"), dict) else {}
         conditions = status.get("conditions") if isinstance(status.get("conditions"), list) else []
         ready = any(isinstance(condition, dict) and condition.get("type") == "Ready" and condition.get("status") == "True" for condition in conditions)
+        ready_condition = next(
+            (condition for condition in conditions
+             if isinstance(condition, dict) and condition.get("type") == "Ready"),
+            {},
+        )
         if ready:
-            ready_nodes.append({"nodeName": metadata.get("name"), "ready": True})
+            ready_nodes.append({
+                "nodeName": metadata.get("name"),
+                "uid": metadata.get("uid"),
+                "creationTimestamp": metadata.get("creationTimestamp"),
+                "deletionTimestamp": metadata.get("deletionTimestamp"),
+                "readyTransitionAt": ready_condition.get("lastTransitionTime"),
+                "ready": True,
+            })
         pressure = [
             condition.get("type")
             for condition in conditions

@@ -123,6 +123,9 @@ class EksTargetAdapterTests(unittest.TestCase):
         self.assertEqual(evidence["nodeCount"], 2)
         self.assertEqual(len(evidence["nodeGroupScalingActivities"]), 1)
         self.assertEqual(evidence["alb"]["healthyTargetCount"], 2)
+        self.assertIn("uid", evidence["backendPods"]["placement"][0])
+        self.assertIn("deletionTimestamp", evidence["backendPods"]["placement"][0])
+        self.assertIn("uid", evidence["readyNodes"][0])
         self.assertTrue(evidence["sanitization"]["rawKubectlOutputStored"] is False)
 
     def test_evidence_exposes_hpa_ceiling_and_backend_failure_signals(self) -> None:
