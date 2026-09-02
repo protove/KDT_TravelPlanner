@@ -938,19 +938,19 @@ eks_target_stage() {
     target_health_json="$(run_aws_json elbv2 describe-target-health --target-group-arn "$target_group_arn" --region "$REGION")"
     printf '%s\n' "$nodegroup_json" > "$validation_dir/nodegroup.json"
     printf '%s\n' "$target_health_json" > "$validation_dir/target-health.json"
-    local node_group_adapter_args=()
+    local node_group_adapter_args=(
+      --cluster-name "$EKS_CLUSTER_NAME" --node-group-name "$EKS_NODE_GROUP_NAME"
+      --target-group-arn "$target_group_arn"
+      --node-group-json "$validation_dir/nodegroup.json"
+      --target-health-json "$validation_dir/target-health.json"
+    )
     if [[ "$MODE" == "recovery" ]]; then
       # After a terminal the CA may still report desired=3/4.  Recovery must
       # observe that scale-in rather than rejecting the post-stress state as
       # a fresh 2/2/4 target preflight failure.
       node_group_adapter_args+=(--allow-current-desired)
     fi
-    python3 "$adapter" validate \
-      --cluster-name "$EKS_CLUSTER_NAME" --node-group-name "$EKS_NODE_GROUP_NAME" \
-      --target-group-arn "$target_group_arn" \
-      --node-group-json "$validation_dir/nodegroup.json" \
-      --target-health-json "$validation_dir/target-health.json" "${node_group_adapter_args[@]}" \
-      > "$validation_dir/validated.json"
+    python3 "$adapter" validate "${node_group_adapter_args[@]}" > "$validation_dir/validated.json"
     python3 - "$validation_dir/validated.json" "$validation_dir/node-summary.json" "$validation_dir/alb-summary.json" <<'PY'
 import json
 import sys
