@@ -71,6 +71,14 @@ class OperatorOrchestratorContractTest(unittest.TestCase):
         self.assertIn('elif [[ "$CREATE_RECEIPT_SCHEMA" == "dev-eks-autonomous-authorization/v1" ]]; then\n    bind_autonomous_receipt_render', self.source)
         self.assertIn("autonomous receipt render binding differs before reuse", self.source)
 
+    def test_cloud_smoke_uploads_operator_evidence_before_remote_helper(self) -> None:
+        self.assertIn('schema_version:"dev-eks-operator-cloud-smoke/v1"', self.source)
+        self.assertIn('OPERATOR_DATA_KEY="$MONITORING_PREFIX/runs/$RUN_ID/smoke/operator-data-evidence.json"', self.source)
+        self.assertIn('--operator-data-key %q --expected-operator-data-sha256 %q', self.source)
+        self.assertIn('OPERATOR_DATA_KEY="${OPERATOR_DATA_KEY:-offline/smoke/operator-data-evidence.json}"', self.source)
+        self.assertIn('OPERATOR_DATA_SHA256="${OPERATOR_DATA_SHA256:-0000000000000000000000000000000000000000000000000000000000000000}"', self.source)
+        self.assertIn('if [[ "$OFFLINE_TEST" == false ]]; then\n        run_operator_native_smoke\n      fi\n      run_remote_smoke', self.source)
+
     def test_state_and_plan_guards_are_fail_closed(self) -> None:
         self.assertIn("show -json", self.source)
         self.assertIn("dev-eks-post-apply", self.source)

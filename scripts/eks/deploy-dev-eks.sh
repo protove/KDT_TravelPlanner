@@ -77,6 +77,9 @@ SMOKE_VERIFIER="$SCRIPT_ROOT/monitoring/verify-eks-observability-smoke.py"
 MONITORING_DNS=""
 PROFILE_IMAGE_BUCKET=""
 PROFILE_IMAGE_PUBLIC_BASE_URL=""
+OPERATOR_DATA_KEY=""
+OPERATOR_DATA_SHA256=""
+OPERATOR_DATA_FILE=""
 INGRESS_CNAME_TARGET=""
 DEFER_CNAME_OUTPUT="${DEV_EKS_DEFER_CNAME_OUTPUT:-false}"
 VPC_ID=""
@@ -1448,8 +1451,18 @@ run_remote_smoke() {
   aws "${aws_args[@]}" s3 cp "$LIFECYCLE_REMOTE_HELPER" "s3://$MONITORING_BUCKET/$smoke_helper_key" --sse AES256 >>"$LOG_FILE" 2>&1 || die "smoke helper upload failed"
   aws "${aws_args[@]}" s3 cp "$SMOKE_VERIFIER" "s3://$MONITORING_BUCKET/$smoke_script_key" --sse AES256 >>"$LOG_FILE" 2>&1 || die "observability smoke verifier upload failed"
   remote_work_dir="/var/tmp/travel-planner-dev-eks-${REMOTE_RUN_ID}/smoke"
-  printf -v command 'set -eu; mkdir -p %q; chmod 700 %q; export AWS_REGION=%q AWS_DEFAULT_REGION=%q; aws s3 cp %q %q; test "$(sha256sum %q | awk '\''{print $1}'\'')" = %q; aws s3 cp %q %q; test "$(sha256sum %q | awk '\''{print $1}'\'')" = %q; chmod 700 %q %q; bash %q --stage smoke --cluster-name %q --region %q --bucket %q --smoke-script-key %q --expected-smoke-script-sha256 %q --backend-hostname %q --monitoring-dns %q --ingress-group kdt-travelplanner-dev-eks --expected-helper-sha256 %q --database-identifier %q --redis-replication-group-id %q --redis-endpoint %q --redis-port %q --redis-secret-arn %q --profile-image-bucket %q --work-dir %q' \
-    "$remote_work_dir" "$remote_work_dir" "$REGION" "$REGION" "s3://$MONITORING_BUCKET/$smoke_helper_key" "$remote_work_dir/run-dev-eks-lifecycle-remote.sh" "$remote_work_dir/run-dev-eks-lifecycle-remote.sh" "$helper_sha" "s3://$MONITORING_BUCKET/$smoke_script_key" "$remote_work_dir/verify-eks-observability-smoke.py" "$remote_work_dir/verify-eks-observability-smoke.py" "$smoke_sha" "$remote_work_dir/run-dev-eks-lifecycle-remote.sh" "$remote_work_dir/verify-eks-observability-smoke.py" "$remote_work_dir/run-dev-eks-lifecycle-remote.sh" "$CLUSTER_NAME" "$REGION" "$MONITORING_BUCKET" "$smoke_script_key" "$smoke_sha" "$BACKEND_HOSTNAME" "$MONITORING_DNS" "$helper_sha" "$DATABASE_IDENTIFIER" "$REDIS_REPLICATION_GROUP_ID" "$REDIS_ENDPOINT" "$REDIS_PORT" "$REDIS_SECRET_ARN" "$PROFILE_IMAGE_BUCKET" "$remote_work_dir"
+  # Offline contract tests do not execute the SSM-side helper, but they still
+  # exercise the exact command serialization.  Supply a deterministic,
+  # non-sensitive placeholder so the production-only operator evidence guard
+  # remains fail-closed while the offline path can validate the transport.
+  if [[ "$OFFLINE_TEST" == true ]]; then
+    OPERATOR_DATA_KEY="${OPERATOR_DATA_KEY:-offline/smoke/operator-data-evidence.json}"
+    OPERATOR_DATA_SHA256="${OPERATOR_DATA_SHA256:-0000000000000000000000000000000000000000000000000000000000000000}"
+  fi
+  [[ "$OPERATOR_DATA_KEY" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]*[A-Za-z0-9]$ && "$OPERATOR_DATA_KEY" != *".."* && "$OPERATOR_DATA_KEY" != *"//"* ]] || die "operator smoke evidence key is invalid before remote smoke"
+  [[ "$OPERATOR_DATA_SHA256" =~ ^[0-9a-f]{64}$ ]] || die "operator smoke evidence checksum is invalid before remote smoke"
+  printf -v command 'set -eu; mkdir -p %q; chmod 700 %q; export AWS_REGION=%q AWS_DEFAULT_REGION=%q; aws s3 cp %q %q; test "$(sha256sum %q | awk '\''{print $1}'\'')" = %q; aws s3 cp %q %q; test "$(sha256sum %q | awk '\''{print $1}'\'')" = %q; chmod 700 %q %q; bash %q --stage smoke --cluster-name %q --region %q --bucket %q --smoke-script-key %q --expected-smoke-script-sha256 %q --operator-data-key %q --expected-operator-data-sha256 %q --backend-hostname %q --monitoring-dns %q --ingress-group kdt-travelplanner-dev-eks --expected-helper-sha256 %q --database-identifier %q --redis-replication-group-id %q --redis-endpoint %q --redis-port %q --redis-secret-arn %q --profile-image-bucket %q --work-dir %q' \
+    "$remote_work_dir" "$remote_work_dir" "$REGION" "$REGION" "s3://$MONITORING_BUCKET/$smoke_helper_key" "$remote_work_dir/run-dev-eks-lifecycle-remote.sh" "$remote_work_dir/run-dev-eks-lifecycle-remote.sh" "$helper_sha" "s3://$MONITORING_BUCKET/$smoke_script_key" "$remote_work_dir/verify-eks-observability-smoke.py" "$remote_work_dir/verify-eks-observability-smoke.py" "$smoke_sha" "$remote_work_dir/run-dev-eks-lifecycle-remote.sh" "$remote_work_dir/verify-eks-observability-smoke.py" "$remote_work_dir/run-dev-eks-lifecycle-remote.sh" "$CLUSTER_NAME" "$REGION" "$MONITORING_BUCKET" "$smoke_script_key" "$smoke_sha" "$OPERATOR_DATA_KEY" "$OPERATOR_DATA_SHA256" "$BACKEND_HOSTNAME" "$MONITORING_DNS" "$helper_sha" "$DATABASE_IDENTIFIER" "$REDIS_REPLICATION_GROUP_ID" "$REDIS_ENDPOINT" "$REDIS_PORT" "$REDIS_SECRET_ARN" "$PROFILE_IMAGE_BUCKET" "$remote_work_dir"
   if ! ssm_parameters="$(jq -cn --arg command "$command" '{commands: [$command]}')"; then
     die "smoke SSM command parameters could not be serialized"
   fi
@@ -1530,7 +1543,14 @@ run_operator_native_smoke() {
   [[ "$redis_status" == "available" ]] || die "native Redis is not available"
   profile_bucket="$PROFILE_IMAGE_BUCKET"
   aws "${aws_args[@]}" s3api head-bucket --bucket "$profile_bucket" >/dev/null 2>>"$LOG_FILE" || die "native profile-image bucket lookup failed"
-  jq -n --arg cname "$INGRESS_CNAME_TARGET" --arg alb "$lb_arn" --arg rds "$rds_status" --arg redis "$redis_status" --arg bucket "$profile_bucket" '{schema_version:"dev-eks-operator-smoke/v1",status:"success",cloudflare_cname_target:$cname,alb_arn:$alb,rds_status:$rds,redis_status:$redis,profile_image_bucket:$bucket,target_health:"healthy"}' >"$REPORT_ROOT/operator-native-smoke.redacted.json" || die "native smoke evidence write failed"
+  OPERATOR_DATA_FILE="$REPORT_ROOT/operator-data-evidence.private.json"
+  OPERATOR_DATA_KEY="$MONITORING_PREFIX/runs/$RUN_ID/smoke/operator-data-evidence.json"
+  jq -n --arg cname "$INGRESS_CNAME_TARGET" --arg alb "$lb_arn" --arg rds "$rds_status" --arg redis "$redis_status" --arg bucket "$profile_bucket" '{schema_version:"dev-eks-operator-cloud-smoke/v1",status:"success",cname_target:$cname,alb_arn:$alb,target_health:"healthy",rds_status:$rds,rds_available:true,redis_status:$redis,redis_available:true,profile_image_bucket:$bucket,profile_image_identity:true}' >"$OPERATOR_DATA_FILE" || die "native smoke evidence write failed"
+  chmod 0600 "$OPERATOR_DATA_FILE"
+  OPERATOR_DATA_SHA256="$(sha256sum "$OPERATOR_DATA_FILE" | awk '{print $1}')"
+  [[ "$OPERATOR_DATA_SHA256" =~ ^[0-9a-f]{64}$ ]] || die "native smoke evidence checksum is invalid"
+  aws "${aws_args[@]}" s3 cp "$OPERATOR_DATA_FILE" "s3://$MONITORING_BUCKET/$OPERATOR_DATA_KEY" --sse AES256 >>"$LOG_FILE" 2>&1 || die "native smoke evidence upload failed"
+  cp "$OPERATOR_DATA_FILE" "$REPORT_ROOT/operator-native-smoke.redacted.json"
   chmod 0600 "$REPORT_ROOT/operator-native-smoke.redacted.json"
 }
 
@@ -1661,6 +1681,9 @@ main() {
       compare_dev_eks_state_identity
       finalize_repair_success
     else
+      if [[ "$OFFLINE_TEST" == false ]]; then
+        run_operator_native_smoke
+      fi
       run_remote_smoke
       capture_protected_state_fingerprints
       compare_protected_state_fingerprints
