@@ -66,6 +66,32 @@ class RefreshCredentialLifecycleTest(unittest.TestCase):
             ],
         )
 
+    def test_active_token_reuse_retries_an_immediate_rotation_race(self):
+        statuses = iter((200, 200, 401))
+        refresh_tokens = []
+        with mock.patch.object(LIFECYCLE.time, "sleep") as sleep:
+            result = LIFECYCLE.revoke_refresh_credentials(
+                [self.credential()],
+                lambda token: refresh_tokens.append(token) or next(statuses),
+                lambda keys: 3,
+            )
+
+        self.assertEqual(result.refresh_request_count, 3)
+        self.assertEqual(len(refresh_tokens), 3)
+        sleep.assert_called_once_with(LIFECYCLE.REFRESH_REVOCATION_RETRY_SECONDS)
+
+    def test_transient_revocation_status_is_retried(self):
+        statuses = iter((503, 401))
+        with mock.patch.object(LIFECYCLE.time, "sleep") as sleep:
+            result = LIFECYCLE.revoke_refresh_credentials(
+                [self.credential()],
+                lambda token: next(statuses),
+                lambda keys: 0,
+            )
+
+        self.assertEqual(result.refresh_request_count, 2)
+        sleep.assert_called_once_with(LIFECYCLE.REFRESH_REVOCATION_RETRY_SECONDS)
+
     def test_already_rotated_token_revokes_family_on_first_reuse(self):
         refresh_tokens = []
         result = LIFECYCLE.revoke_refresh_credentials(

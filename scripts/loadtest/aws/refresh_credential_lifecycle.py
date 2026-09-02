@@ -11,12 +11,15 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Sequence
 
 TOKEN_PATTERN = re.compile(r"^[A-Za-z0-9_-]{43}$")
 TOKEN_HASH_PATTERN = re.compile(r"^[a-f0-9]{64}$")
+MAX_REFRESH_REVOCATION_ATTEMPTS = 4
+REFRESH_REVOCATION_RETRY_SECONDS = 0.25
 
 
 class CredentialLifecycleError(RuntimeError):
@@ -107,11 +110,29 @@ def revoke_refresh_credentials(
     refresh_request_count = 0
     redis_keys: list[str] = []
     for credential in credentials:
-        first_status = refresh_status(credential.refresh_token)
-        refresh_request_count += 1
+        def request_status() -> int:
+            nonlocal refresh_request_count
+            last_status = 0
+            for attempt in range(MAX_REFRESH_REVOCATION_ATTEMPTS):
+                last_status = refresh_status(credential.refresh_token)
+                refresh_request_count += 1
+                if last_status in (200, 401):
+                    return last_status
+                if attempt + 1 < MAX_REFRESH_REVOCATION_ATTEMPTS:
+                    time.sleep(REFRESH_REVOCATION_RETRY_SECONDS * (2 ** attempt))
+            return last_status
+
+        first_status = request_status()
         if first_status == 200:
-            second_status = refresh_status(credential.refresh_token)
-            refresh_request_count += 1
+            second_status = None
+            for reuse_attempt in range(MAX_REFRESH_REVOCATION_ATTEMPTS):
+                second_status = request_status()
+                if second_status == 401:
+                    break
+                # A second 200 means the backend observed a rotation race;
+                # retry the exact original token until reuse is rejected.
+                if reuse_attempt + 1 < MAX_REFRESH_REVOCATION_ATTEMPTS:
+                    time.sleep(REFRESH_REVOCATION_RETRY_SECONDS)
             if second_status != 401:
                 raise CredentialLifecycleError(
                     "refresh-token reuse revocation failed with an unexpected status"
