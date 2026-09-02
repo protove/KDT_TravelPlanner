@@ -62,7 +62,9 @@ from refresh_credential_lifecycle import (  # noqa: E402
     revoke_credential_file,
 )
 
-RUN_ID_PATTERN = re.compile(r"^[A-Za-z0-9-]{1,40}$")
+# Match seed-aws-load-data.py so a valid timestamped run can always be
+# cleaned up after a failed or completed campaign.
+RUN_ID_PATTERN = re.compile(r"^[A-Za-z0-9-]{1,64}$")
 ACCOUNT_ID_PATTERN = re.compile(r"^\d{12}$")
 POSTGRES_CLIENT_IMAGE = "postgres:17-alpine"
 REDIS_CLIENT_IMAGE = "redis:7-alpine"
@@ -316,7 +318,7 @@ def cleanup_redis(args: argparse.Namespace, run_id: str) -> tuple[int, int, int]
 def main() -> int:
     args = parse_args()
     if not RUN_ID_PATTERN.fullmatch(args.run_id):
-        raise CleanupError("--run-id must be 1-40 chars of [A-Za-z0-9-]")
+        raise CleanupError("--run-id must be 1-64 chars of [A-Za-z0-9-]")
     if args.index_width < 3 or args.index_width > 6:
         raise CleanupError("--index-width must be between 3 and 6")
     if bool(args.redis_host) != bool(args.redis_iam_user) or bool(args.redis_host) != bool(args.redis_replication_group_id):

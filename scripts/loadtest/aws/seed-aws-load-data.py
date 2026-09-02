@@ -79,7 +79,11 @@ from refresh_credential_lifecycle import (  # noqa: E402
 )
 
 DEFAULT_REFRESH_TTL_MS = 4 * 60 * 60 * 1000  # 4h — short-lived by design; this is a shared, persistent store
-RUN_ID_PATTERN = re.compile(r"^[A-Za-z0-9-]{1,40}$")
+# Keep the run-id contract aligned with the lifecycle's timestamped IDs.  A
+# 40-character cap rejected otherwise safe SCRUM-80 IDs by one character
+# before any fixture mutation; 64 leaves room for the Jira/campaign prefix
+# while preserving the allow-list (letters, digits, hyphens only).
+RUN_ID_PATTERN = re.compile(r"^[A-Za-z0-9-]{1,64}$")
 FIXTURE_ID_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 ACCOUNT_ID_PATTERN = re.compile(r"^\d{12}$")
 TOKEN_PATTERN = re.compile(r"^[A-Za-z0-9_-]{43}$")
@@ -996,7 +1000,7 @@ def load_incremental_credentials(args: argparse.Namespace) -> list[dict]:
 def main() -> int:
     args = parse_args()
     if not RUN_ID_PATTERN.fullmatch(args.run_id):
-        raise SeedError("--run-id must be 1-40 chars of [A-Za-z0-9-]")
+        raise SeedError("--run-id must be 1-64 chars of [A-Za-z0-9-]")
     if args.users < 1 or args.users > MAX_SYNTHETIC_USERS:
         raise SeedError(f"--users must be between 1 and {MAX_SYNTHETIC_USERS}")
     if args.index_width < 3 or args.index_width > 6:

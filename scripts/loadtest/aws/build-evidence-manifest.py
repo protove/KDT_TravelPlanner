@@ -36,7 +36,9 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-RUN_ID_PATTERN = re.compile(r"^[A-Za-z0-9-]{1,40}$")
+# The local manifest must accept the same safe run-id range as seed, cleanup,
+# and upload; otherwise a valid long timestamp can never be finalized.
+RUN_ID_PATTERN = re.compile(r"^[A-Za-z0-9-]{1,64}$")
 MANIFEST_FILENAME = "manifest.json"
 SAFETY_REPORT_FILENAME = "evidence-safety.json"
 SKIP_FILENAMES = {MANIFEST_FILENAME}
@@ -375,7 +377,7 @@ def compare_with_s3(run_id: str, bucket: str, s3_prefix: str, region: str, s3_so
 def main() -> int:
     args = parse_args()
     if not RUN_ID_PATTERN.fullmatch(args.run_id):
-        raise ManifestError("--run-id must be 1-40 chars of [A-Za-z0-9-]")
+        raise ManifestError("--run-id must be 1-64 chars of [A-Za-z0-9-]")
     evidence_root = args.evidence_root.resolve()
     if not evidence_root.is_dir():
         raise ManifestError("--evidence-root does not exist or is not a directory")

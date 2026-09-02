@@ -20,6 +20,9 @@ MANIFEST = _load("build_evidence_manifest", "scripts/loadtest/aws/build-evidence
 
 
 class ChecksumHelpersTest(unittest.TestCase):
+    def test_timestamped_scrum80_run_id_is_accepted(self):
+        self.assertIsNotNone(MANIFEST.RUN_ID_PATTERN.fullmatch("scrum80-v12-msa-boundary-20260902T070417Z"))
+
     def test_sha256_of_file_matches_hashlib(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "sample.json"

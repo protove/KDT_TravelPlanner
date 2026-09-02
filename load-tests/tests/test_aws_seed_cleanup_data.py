@@ -818,6 +818,12 @@ class CleanupAwsLoadDataTest(unittest.TestCase):
         self.assertIsNone(CLEANUP.RUN_ID_PATTERN.fullmatch("evil%"))
         self.assertIsNone(CLEANUP.RUN_ID_PATTERN.fullmatch("evil_"))
 
+    def test_timestamped_scrum80_run_id_is_accepted_by_seed_and_cleanup(self):
+        run_id = "scrum80-v12-msa-boundary-20260902T070417Z"
+        self.assertEqual(len(run_id), 41)
+        self.assertIsNotNone(SEED.RUN_ID_PATTERN.fullmatch(run_id))
+        self.assertIsNotNone(CLEANUP.RUN_ID_PATTERN.fullmatch(run_id))
+
     def test_sql_literal_escapes_single_quotes(self):
         self.assertEqual(CLEANUP.sql_literal("o'brien"), "'o''brien'")
 

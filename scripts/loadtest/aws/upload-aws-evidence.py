@@ -43,7 +43,9 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-RUN_ID_PATTERN = re.compile(r"^[A-Za-z0-9-]{1,40}$")
+# Keep evidence export compatible with the same timestamped run IDs accepted
+# by the seed/cleanup lifecycle.
+RUN_ID_PATTERN = re.compile(r"^[A-Za-z0-9-]{1,64}$")
 ACCOUNT_ID_PATTERN = re.compile(r"^\d{12}$")
 MANIFEST_FILENAME = "manifest.json"
 SAFETY_REPORT_FILENAME = "evidence-safety.json"
@@ -231,7 +233,7 @@ def upload_bundle(evidence_root: Path, run_id: str, bucket: str, s3_prefix: str,
 def main() -> int:
     args = parse_args()
     if not RUN_ID_PATTERN.fullmatch(args.run_id):
-        raise UploadError("--run-id must be 1-40 chars of [A-Za-z0-9-]")
+        raise UploadError("--run-id must be 1-64 chars of [A-Za-z0-9-]")
     evidence_root = args.evidence_root.resolve()
     if not evidence_root.is_dir():
         raise UploadError("--evidence-root does not exist or is not a directory")

@@ -28,6 +28,9 @@ class FakeCompletedProcess:
 
 
 class VerifyAccountTest(unittest.TestCase):
+    def test_timestamped_scrum80_run_id_is_accepted(self):
+        self.assertIsNotNone(UPLOAD.RUN_ID_PATTERN.fullmatch("scrum80-v12-msa-boundary-20260902T070417Z"))
+
     def test_rejects_non_12_digit_expected_id(self):
         with self.assertRaises(UPLOAD.UploadError):
             UPLOAD.verify_account("12345", "ap-northeast-2")
