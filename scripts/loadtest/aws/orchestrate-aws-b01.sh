@@ -686,6 +686,21 @@ PY
 run_stage_once() {
   local stage="$1"
   shift
+  # A resumed EKS process starts with the derived target-group ARN unset even
+  # though the target stage already sealed it in its evidence. Restore that
+  # non-secret runtime identifier before validating any downstream marker
+  # digest (mock binding/HPA/phase stages include it in their inputs).
+  if [[ "${TARGET_PLATFORM:-}" == "eks" && -z "${TARGET_GROUP_ARN:-}" && -s "$EVIDENCE_ROOT/aws/eks-alb-target-health.json" ]]; then
+    TARGET_GROUP_ARN="$(python3 - "$EVIDENCE_ROOT/aws/eks-alb-target-health.json" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+print(payload.get("targetGroupArn", ""))
+PY
+    )"
+  fi
   if [[ -f "$STAGE_DIR/$stage.json" ]] && stage_is_complete "$stage"; then
     echo "[b01] stage=$stage already complete for this run/profile/rate; skipping"
     return 0

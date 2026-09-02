@@ -153,6 +153,17 @@ class AwsOrchestrationContractTests(unittest.TestCase):
         self.assertIn('target_group_digest = "" if stage == "target" else target_group_arn', source)
         self.assertIn('"targetGroupArnHash": hashlib.sha256(target_group_digest.encode()).hexdigest()', source)
 
+    def test_resumed_eks_stages_restore_target_group_from_sealed_target_evidence(self) -> None:
+        source = SCRIPT.read_text(encoding="utf-8")
+        self.assertIn(
+            'TARGET_GROUP_ARN="$(python3 - "$EVIDENCE_ROOT/aws/eks-alb-target-health.json"',
+            source,
+        )
+        self.assertIn(
+            'payload.get("targetGroupArn", "")',
+            source,
+        )
+
     def test_help_exposes_approved_operator_inputs(self) -> None:
         result = subprocess.run(
             ["bash", str(SCRIPT), "--help"],
