@@ -376,6 +376,8 @@ class AwsOrchestrationContractTests(unittest.TestCase):
         self.assertIn('trap handle_workload_signal INT TERM', runner_source)
         self.assertIn('docker inspect --format \'{{.State.Running}}\'', runner_source)
         self.assertIn('while :; do\n  wait "$k6_pid"', runner_source)
+        self.assertIn("trap '' INT TERM", runner_source)
+        self.assertIn('mock container inspect is unavailable', runner_source)
         self.assertIn('"workloadSignalReceived": signal_received == "1"', runner_source)
         self.assertIn('trap handle_phase_signal INT TERM', phase_source)
 

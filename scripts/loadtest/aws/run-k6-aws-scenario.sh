@@ -458,6 +458,13 @@ done
 set -e
 cat "$RUN_DIR/stdout.log"
 
+# The adaptive coordinator may signal the process group immediately after the
+# k6 child exits.  From this point on the workload is only sealing evidence;
+# ignore a late INT/TERM so the signal cannot kill the Python sealers before
+# mock/evidence.json and run-status.json are written.  signal_received was
+# already recorded by the forwarding trap while the workload was active.
+trap '' INT TERM
+
 oom_killed="false"
 restart_count="0"
 inspect_json="$(docker inspect "$K6_CONTAINER_NAME" 2>/dev/null || true)"
@@ -547,7 +554,7 @@ output.write_text(json.dumps({
 }, indent=2) + "\n", encoding="utf-8")
 PY
 else
-  printf '%s\n' '{"schemaVersion":"google-api-mock-evidence/v1","validity":"not-required","reason":"non-EKS target"}' > "$RUN_DIR/mock/evidence.json"
+  printf '%s\n' '{"schemaVersion":"google-api-mock-evidence/v1","validity":"INCOMPLETE_MOCK_DEPENDENCY","reason":"mock container inspect is unavailable"}' > "$RUN_DIR/mock/evidence.json"
 fi
 
 if [[ -n "$slo_producer_pid" ]]; then
