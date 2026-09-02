@@ -14,6 +14,7 @@ assert SPEC and SPEC.loader
 SPEC.loader.exec_module(VALIDATOR)
 
 PROFILE_PATH = ROOT / "load-tests/aws/profiles/eks-monolith-msa-boundary-v1.0.json"
+PROFILE_V11_PATH = ROOT / "load-tests/aws/profiles/eks-monolith-msa-boundary-v1.1.json"
 MAP_PATH = ROOT / "load-tests/aws/contracts/msa-boundary-operation-map-v1.0.json"
 
 
@@ -29,6 +30,15 @@ class AwsMsaBoundaryProfileTest(unittest.TestCase):
         self.assertEqual(stress["balancedRates"], [64, 128, 192, 224, 256])
         self.assertEqual(stress["hotspotHoldSeconds"], 300)
         self.assertEqual(stress["recoveryObservationSeconds"], 1200)
+
+    def test_v11_continues_beyond_balanced_rates_until_terminal(self) -> None:
+        profile = json.loads(PROFILE_V11_PATH.read_text(encoding="utf-8"))
+        self.assertTrue(VALIDATOR.validate(profile))
+        continuation = profile["capacityStress"]["continuation"]
+        self.assertEqual(continuation["firstRate"], 512)
+        self.assertEqual(continuation["nextRateExpression"], "R[n+1] = R[n] * 2")
+        self.assertEqual(continuation["stop"], "terminalConditions only")
+        self.assertIsNone(profile["limits"]["maxRate"])
 
     def test_node_and_hpa_envelopes_remain_canonical(self) -> None:
         self.assertEqual(self.profile["eks"]["instanceType"], "t3.medium")

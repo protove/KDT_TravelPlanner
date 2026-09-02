@@ -39,6 +39,17 @@ class AwsMsaBoundaryCampaignTest(unittest.TestCase):
         self.assertEqual(plan["stages"][-1]["totalObservationSeconds"], 1200)
         self.assertTrue(plan["noHiddenRpsCeiling"])
 
+    def test_v11_dry_run_exposes_terminal_only_continuation(self) -> None:
+        profile = json.loads((ROOT / "load-tests/aws/profiles/eks-monolith-msa-boundary-v1.1.json").read_text())
+        plan = CAMPAIGN.build_campaign_plan(profile, self.operation_map, ["maps", "community"])
+        self.assertEqual(plan["profileVersion"], "aws-eks-monolith-msa-boundary-v1.1")
+        self.assertEqual(plan["continuation"], {
+            "firstRate": 512,
+            "nextRateExpression": "R[n+1] = R[n] * 2",
+            "stop": "terminalConditions only",
+            "note": "balancedRates are initial observation points; a clean final point never ends the campaign",
+        })
+
     def test_invalid_candidate_or_duplicate_endpoint_fails_closed(self) -> None:
         with self.assertRaises(CAMPAIGN.CampaignError):
             CAMPAIGN.build_campaign_plan(self.profile, self.operation_map, ["unknown", "maps"])

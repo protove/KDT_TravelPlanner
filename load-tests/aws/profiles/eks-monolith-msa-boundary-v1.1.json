@@ -1,0 +1,309 @@
+{
+  "profileVersion": "aws-eks-monolith-msa-boundary-v1.1",
+  "scenarioId": "SCRUM-80-EKS-MSA-BOUNDARY",
+  "environment": "dev-eks",
+  "region": "ap-northeast-2",
+  "target": {
+    "platform": "eks",
+    "baseUrl": "https://REPLACE_WITH_APPROVED_EKS_ALB_HOSTNAME",
+    "note": "실행 직전 승인된 EKS ALB HTTPS 주소를 입력한다."
+  },
+  "googleApi": {
+    "enabled": false,
+    "mode": "private-runner-mock"
+  },
+  "sloVersion": "v2.1-breakpoint",
+  "seedVersion": "aws-s3-adaptive",
+  "requestMixVersion": "aws-eks-current-feature-coverage-v2",
+  "operationMap": "load-tests/aws/contracts/msa-boundary-operation-map-v1.0.json",
+  "k6Image": "REPLACE_WITH_DIGEST_PINNED_K6_IMAGE",
+  "limits": {
+    "maxRate": null,
+    "maxVUs": 16384,
+    "maxDurationSeconds": null
+  },
+  "eks": {
+    "instanceType": "t3.medium",
+    "nodeGroup": {
+      "min": 2,
+      "desired": 2,
+      "max": 4
+    },
+    "baseHpa": {
+      "minReplicas": 2,
+      "maxReplicas": 4
+    },
+    "capacityMethod": "allocatable-request-conservative"
+  },
+  "capacityStress": {
+    "bindsTo": {
+      "baselineRate": 16,
+      "balancedRates": [
+        64,
+        128,
+        192,
+        224,
+        256
+      ],
+      "sloContract": "load-tests/aws/contracts/eks-monolith-breakpoint-slo-v2.1.json",
+      "requestMix": "aws-eks-current-feature-coverage-v2",
+      "lineage": "frozen-d11e78-backend-and-private-mock"
+    },
+    "adaptive": true,
+    "fixedRpsCeiling": null,
+    "balancedRates": [
+      64,
+      128,
+      192,
+      224,
+      256
+    ],
+    "nominalHoldSeconds": 180,
+    "stabilitySeconds": 120,
+    "conditionalExtensionSeconds": 120,
+    "maxExtensionsPerStage": 1,
+    "maxSingleStageSeconds": 300,
+    "hotspotSharePercent": 60,
+    "hotspotHoldSeconds": 300,
+    "hotspotCandidateDimensions": [
+      "service",
+      "domain",
+      "subdomain",
+      "operation"
+    ],
+    "hotspotCandidateOrder": [
+      "travel-timeline",
+      "travel-membership",
+      "community-write",
+      "maps-routes",
+      "maps-places",
+      "community-read",
+      "travel-core",
+      "identity-auth",
+      "identity-profile",
+      "travel-location",
+      "maps-cache-orchestration"
+    ],
+    "spikeRate": 256,
+    "recoveryRate": 16,
+    "recoveryObservationSeconds": 1200,
+    "recoveryHealthyStabilitySeconds": 120,
+    "preAllocatedVUsFormula": "max(256,targetRps)",
+    "maxVUsFormula": "max(512,targetRps*2)",
+    "seededUsersFormula": "maxVUs",
+    "runnerDefaultInstanceType": "c6i.2xlarge",
+    "runnerRepairInstanceType": "c6i.4xlarge",
+    "runnerRepairLimit": 1,
+    "requiresCompleteSloWindows": true,
+    "terminalConditions": [
+      "NODE_MAX_PENDING",
+      "NODE_SCALE_NOT_TRIGGERED",
+      "NODE_SCALE_FAILED",
+      "NODE_COMPUTE_SATURATION",
+      "SLO_COLLAPSE",
+      "THROUGHPUT_PLATEAU",
+      "HPA_CAPACITY_EXHAUSTED",
+      "BACKEND_OOM",
+      "BACKEND_UNHEALTHY",
+      "ALB_SATURATION",
+      "DATA_TIER_SATURATION"
+    ],
+    "incompleteStops": [
+      "INCOMPLETE_PRELOAD_READINESS",
+      "INCOMPLETE_BASELINE_INVALID",
+      "INCOMPLETE_RUNNER_LIMIT",
+      "INCOMPLETE_MOCK_DEPENDENCY",
+      "INCOMPLETE_WORKLOAD_MIX",
+      "INCOMPLETE_OBSERVABILITY",
+      "INCOMPLETE_CREDENTIAL_CAPACITY",
+      "INCOMPLETE_EVIDENCE_CAPACITY",
+      "INCOMPLETE_BUDGET_TTL",
+      "INCOMPLETE_SECURITY_OR_IDENTITY",
+      "INCOMPLETE_OPERATOR_INTERRUPTION"
+    ],
+    "continuation": {
+      "firstRate": 512,
+      "nextRateExpression": "R[n+1] = R[n] * 2",
+      "stop": "terminalConditions only",
+      "note": "balancedRates are initial observation points; a clean final point never ends the campaign"
+    }
+  },
+  "scenarios": {
+    "smoke": {
+      "vus": 2,
+      "iterations": 1,
+      "maxDuration": "2m"
+    },
+    "ramp": {
+      "executor": "ramping-arrival-rate",
+      "startRate": 1,
+      "timeUnit": "1s",
+      "preAllocatedVUs": 20,
+      "maxVUs": 80,
+      "stages": [
+        {
+          "targetRate": 4,
+          "duration": "30s"
+        },
+        {
+          "targetRate": 8,
+          "duration": "30s"
+        },
+        {
+          "targetRate": 16,
+          "duration": "30s"
+        }
+      ]
+    },
+    "baseline": {
+      "executor": "constant-arrival-rate",
+      "rate": 16,
+      "timeUnit": "1s",
+      "warmup": "30s",
+      "duration": "180s",
+      "preAllocatedVUs": 256,
+      "maxVUs": 512,
+      "repeat": 1
+    },
+    "spike": {
+      "executor": "ramping-arrival-rate",
+      "startRate": 16,
+      "peakRateMultiplier": 16,
+      "hold": "60s",
+      "preAllocatedVUs": 256,
+      "maxVUs": 512
+    },
+    "soak": {
+      "executor": "constant-arrival-rate",
+      "rate": null,
+      "timeUnit": "1s",
+      "warmup": "30s",
+      "duration": "300s",
+      "preAllocatedVUs": 256,
+      "maxVUs": 512
+    },
+    "capacity-stress": {
+      "executor": "constant-arrival-rate",
+      "rate": null,
+      "timeUnit": "1s",
+      "duration": "180s",
+      "preAllocatedVUs": 256,
+      "maxVUs": 512,
+      "adaptive": true
+    }
+  },
+  "requestMix": {
+    "normal": {
+      "refresh": 5,
+      "profileRead": 3,
+      "travelList": 8,
+      "travelDetail": 8,
+      "travelUpdate": 4,
+      "countryList": 1,
+      "cityList": 1,
+      "placeSearch": 4,
+      "nearbySearch": 2,
+      "mapPoints": 4,
+      "routeGet": 3,
+      "routePreview": 3,
+      "timelineCreate": 8,
+      "orderChange": 6,
+      "memberList": 3,
+      "invitationList": 3,
+      "communityCategoryList": 2,
+      "communityPostList": 8,
+      "communityPostDetail": 5,
+      "communityCommentList": 4,
+      "communityMyPosts": 2,
+      "communityMyComments": 1,
+      "communityPostUpdate": 3,
+      "communityCommentUpdate": 3,
+      "communityPostReaction": 3,
+      "communityCommentReaction": 3
+    },
+    "baseline": {
+      "refresh": 5,
+      "profileRead": 3,
+      "travelList": 8,
+      "travelDetail": 8,
+      "travelUpdate": 4,
+      "countryList": 1,
+      "cityList": 1,
+      "placeSearch": 4,
+      "nearbySearch": 2,
+      "mapPoints": 4,
+      "routeGet": 3,
+      "routePreview": 3,
+      "timelineCreate": 8,
+      "orderChange": 6,
+      "memberList": 3,
+      "invitationList": 3,
+      "communityCategoryList": 2,
+      "communityPostList": 8,
+      "communityPostDetail": 5,
+      "communityCommentList": 4,
+      "communityMyPosts": 2,
+      "communityMyComments": 1,
+      "communityPostUpdate": 3,
+      "communityCommentUpdate": 3,
+      "communityPostReaction": 3,
+      "communityCommentReaction": 3
+    },
+    "spike": {
+      "refresh": 5,
+      "profileRead": 3,
+      "travelList": 8,
+      "travelDetail": 8,
+      "travelUpdate": 4,
+      "countryList": 1,
+      "cityList": 1,
+      "placeSearch": 4,
+      "nearbySearch": 2,
+      "mapPoints": 4,
+      "routeGet": 3,
+      "routePreview": 3,
+      "timelineCreate": 8,
+      "orderChange": 6,
+      "memberList": 3,
+      "invitationList": 3,
+      "communityCategoryList": 2,
+      "communityPostList": 8,
+      "communityPostDetail": 5,
+      "communityCommentList": 4,
+      "communityMyPosts": 2,
+      "communityMyComments": 1,
+      "communityPostUpdate": 3,
+      "communityCommentUpdate": 3,
+      "communityPostReaction": 3,
+      "communityCommentReaction": 3
+    },
+    "soak": {
+      "refresh": 5,
+      "profileRead": 3,
+      "travelList": 8,
+      "travelDetail": 8,
+      "travelUpdate": 4,
+      "countryList": 1,
+      "cityList": 1,
+      "placeSearch": 4,
+      "nearbySearch": 2,
+      "mapPoints": 4,
+      "routeGet": 3,
+      "routePreview": 3,
+      "timelineCreate": 8,
+      "orderChange": 6,
+      "memberList": 3,
+      "invitationList": 3,
+      "communityCategoryList": 2,
+      "communityPostList": 8,
+      "communityPostDetail": 5,
+      "communityCommentList": 4,
+      "communityMyPosts": 2,
+      "communityMyComments": 1,
+      "communityPostUpdate": 3,
+      "communityCommentUpdate": 3,
+      "communityPostReaction": 3,
+      "communityCommentReaction": 3
+    }
+  }
+}

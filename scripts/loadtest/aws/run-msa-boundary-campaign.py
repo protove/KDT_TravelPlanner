@@ -24,6 +24,10 @@ EXPECTED_OPERATIONS = {
     "communityMyComments", "communityPostUpdate", "communityCommentUpdate",
     "communityPostReaction", "communityCommentReaction",
 }
+MSA_BOUNDARY_PROFILE_VERSIONS = {
+    "aws-eks-monolith-msa-boundary-v1.0",
+    "aws-eks-monolith-msa-boundary-v1.1",
+}
 
 
 class CampaignError(ValueError):
@@ -62,7 +66,8 @@ def validate_operation_map(profile: dict, operation_map: dict) -> list[dict]:
 
 
 def validate_profile(profile: dict) -> dict:
-    if profile.get("profileVersion") != "aws-eks-monolith-msa-boundary-v1.0":
+    profile_version = profile.get("profileVersion")
+    if profile_version not in MSA_BOUNDARY_PROFILE_VERSIONS:
         raise CampaignError("unexpected MSA boundary profile version")
     stress = profile.get("capacityStress") or {}
     if stress.get("balancedRates") != [64, 128, 192, 224, 256]:
@@ -77,11 +82,26 @@ def validate_profile(profile: dict) -> dict:
         raise CampaignError("EKS node group must remain 2/2/4")
     if (profile.get("eks") or {}).get("baseHpa") != {"minReplicas": 2, "maxReplicas": 4}:
         raise CampaignError("base HPA must remain 2-4")
+    if profile_version == "aws-eks-monolith-msa-boundary-v1.1":
+        continuation = stress.get("continuation")
+        if not isinstance(continuation, dict):
+            raise CampaignError("MSA boundary v1.1 continuation is missing")
+        if continuation.get("firstRate") != 512:
+            raise CampaignError("MSA boundary v1.1 continuation must start at 512 RPS")
+        if continuation.get("nextRateExpression") != "R[n+1] = R[n] * 2":
+            raise CampaignError("MSA boundary v1.1 continuation must double the prior rate")
+        if continuation.get("stop") != "terminalConditions only":
+            raise CampaignError("MSA boundary v1.1 must stop only on terminal conditions")
     return stress
 
 
 def build_campaign_plan(profile: dict, operations: list[dict], candidates: list[str] | None = None) -> dict:
     stress = validate_profile(profile)
+    continuation = stress.get("continuation") or {
+        "firstRate": stress["balancedRates"][-1] * 2,
+        "nextRateExpression": "R[n+1] = R[n] * 2",
+        "stop": "terminalConditions only",
+    }
     if isinstance(operations, dict):
         operations = validate_operation_map(profile, operations)
     if not isinstance(operations, list):
@@ -118,6 +138,7 @@ def build_campaign_plan(profile: dict, operations: list[dict], candidates: list[
         "profileVersion": profile["profileVersion"],
         "operationMapVersion": "aws-msa-boundary-operation-map-v1.0",
         "balancedRates": stress["balancedRates"],
+        "continuation": continuation,
         "selectedHotspots": selected,
         "noHiddenRpsCeiling": stress["fixedRpsCeiling"] is None,
         "stages": stages,

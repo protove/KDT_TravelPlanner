@@ -228,11 +228,11 @@ MSA_BOUNDARY_PROFILE=0
 if [[ "$PROFILE" == *eks-monolith-breakpoint-v1.0.json* ]]; then
   BREAKPOINT_PROFILE=1
 fi
-if [[ "$PROFILE" == *eks-monolith-breakpoint-v2.0.json* || "$PROFILE" == *eks-monolith-breakpoint-v2.1.json* || "$PROFILE" == *eks-monolith-msa-boundary-v1.0.json* ]]; then
+if [[ "$PROFILE" == *eks-monolith-breakpoint-v2.0.json* || "$PROFILE" == *eks-monolith-breakpoint-v2.1.json* || "$PROFILE" == *eks-monolith-msa-boundary-v1.0.json* || "$PROFILE" == *eks-monolith-msa-boundary-v1.1.json* ]]; then
   ADAPTIVE_BREAKPOINT_PROFILE=1
   BREAKPOINT_PROFILE=1
 fi
-if [[ "$PROFILE" == *eks-monolith-msa-boundary-v1.0.json* ]]; then
+if [[ "$PROFILE" == *eks-monolith-msa-boundary-v1.0.json* || "$PROFILE" == *eks-monolith-msa-boundary-v1.1.json* ]]; then
   MSA_BOUNDARY_PROFILE=1
   MSA_BOUNDARY_RATE_LIST="${MSA_BOUNDARY_RATE_LIST:-64,128,192,224,256}"
 fi
@@ -246,7 +246,7 @@ if [[ "$BREAKPOINT_PROFILE" == "1" && "$SLO_CONTRACT_EXPLICIT" == "0" ]]; then
   SLO_CONTRACT="$REPOSITORY_ROOT/load-tests/aws/contracts/eks-monolith-breakpoint-slo-v1.0.json"
 fi
 if [[ "$ADAPTIVE_BREAKPOINT_PROFILE" == "1" && "$SLO_CONTRACT_EXPLICIT" == "0" ]]; then
-  if [[ "$PROFILE" == *eks-monolith-breakpoint-v2.1.json* || "$PROFILE" == *eks-monolith-msa-boundary-v1.0.json* ]]; then
+  if [[ "$PROFILE" == *eks-monolith-breakpoint-v2.1.json* || "$PROFILE" == *eks-monolith-msa-boundary-v1.0.json* || "$PROFILE" == *eks-monolith-msa-boundary-v1.1.json* ]]; then
     SLO_CONTRACT="$REPOSITORY_ROOT/load-tests/aws/contracts/eks-monolith-breakpoint-slo-v2.1.json"
   else
     SLO_CONTRACT="$REPOSITORY_ROOT/load-tests/aws/contracts/eks-monolith-breakpoint-slo-v2.0.json"
@@ -2090,7 +2090,7 @@ PY
     stability_seconds="$MSA_STABILITY_SECONDS"
   fi
   local msa_boundary=0
-  if [[ "$PROFILE" == *eks-monolith-msa-boundary-v1.0.json* ]]; then
+  if [[ "$PROFILE" == *eks-monolith-msa-boundary-v1.0.json* || "$PROFILE" == *eks-monolith-msa-boundary-v1.1.json* ]]; then
     msa_boundary=1
   fi
   local stage_prefix="${MSA_STAGE_PREFIX:-rate}"
@@ -2273,10 +2273,19 @@ PY
         stage_index=$((stage_index + 1))
         if [[ "$msa_boundary" == "1" ]]; then
           if [[ "$stage_index" -ge "${#configured_rates[@]}" ]]; then
-            final_reason="BOUNDARY_SCHEDULE_COMPLETE"
-            return 0
+            if [[ "$campaign_stage" == "capacity-stress" ]]; then
+              # The balanced rates are observation points, not a ceiling.
+              # Continue doubling until the observer records an actual
+              # terminal condition.  Hotspot/spike/recovery are intentionally
+              # bounded single-stage calls.
+              target_rate=$((target_rate * 2))
+            else
+              final_reason="STAGE_COMPLETE"
+              return 0
+            fi
+          else
+            target_rate="${configured_rates[$stage_index]}"
           fi
-          target_rate="${configured_rates[$stage_index]}"
         else
           target_rate=$((target_rate * 2))
         fi

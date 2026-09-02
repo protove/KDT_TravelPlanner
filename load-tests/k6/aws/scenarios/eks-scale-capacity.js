@@ -10,7 +10,8 @@ import { PROFILE_VERSION, SCENARIOS, enforceRateLimit, enforceVuLimit, requestMi
 
 const STRESS = SCENARIOS['capacity-stress'];
 if (!STRESS) throw new Error('[aws/eks-scale-capacity] profile.scenarios.capacity-stress is missing');
-const MSA_BOUNDARY = PROFILE_VERSION === 'aws-eks-monolith-msa-boundary-v1.0';
+const MSA_BOUNDARY = PROFILE_VERSION === 'aws-eks-monolith-msa-boundary-v1.0'
+  || PROFILE_VERSION === 'aws-eks-monolith-msa-boundary-v1.1';
 const RATE = Number(__ENV.CAPACITY_TARGET_RATE || __ENV.CONFIRMED_RATE || __ENV.RATE || STRESS.startRate);
 if (!Number.isFinite(RATE) || RATE <= 0) {
   throw new Error('[aws/eks-scale-capacity] target rate must be a positive rate');

@@ -38,18 +38,19 @@ HPA는 2/4로 고정한다. `run-msa-boundary-campaign.py`는 AWS를 호출하�
 
 ```bash
 python3 scripts/loadtest/aws/run-msa-boundary-campaign.py \
-  --profile load-tests/aws/profiles/eks-monolith-msa-boundary-v1.0.json \
+  --profile load-tests/aws/profiles/eks-monolith-msa-boundary-v1.1.json \
   --operation-map load-tests/aws/contracts/msa-boundary-operation-map-v1.0.json \
   --dry-run
 ```
 
 실제 실행은 기존 AWS Runner/observer를 통해 Smoke → 16 RPS Baseline →
-`64 → 128 → 192 → 224 → 256` balanced stage 순서로 진행한다. 각 stage는
-180초를 기본으로 하고 HPA/Cluster Autoscaler 전환 중인 경우에만 한 번 120초를
-연장한다. 유효한 terminal(예: Node max에서 Pending 지속, SLO/오류 붕괴,
-HPA max, OOM/CrashLoop, ALB·RDS·Redis 포화, 처리량 plateau)이 관측되면 그
-시점에서 멈추며, 그렇지 않으면 256까지 완료한다. 고정 RPS ceiling은 두지
-않는다.
+`64 → 128 → 192 → 224 → 256` balanced stage를 관찰점으로 진행한다. 각
+stage는 180초를 기본으로 하고 HPA/Cluster Autoscaler 전환 중인 경우에만 한 번
+120초를 연장한다. 256을 깨끗하게 완료하면 `512 → 1024 → 2048 → 2R …`로
+계속 증가시키며, Node max에서 Pending 지속·SLO/오류 붕괴·HPA max·OOM/CrashLoop·
+ALB/RDS/Redis 포화·처리량 plateau 같은 실제 terminal 조건이 일정 시간 유지될
+때만 멈춘다. 숫자 배열 끝이나 Node 4 도달만으로 종료하지 않으며 고정 RPS
+ceiling은 두지 않는다.
 
 balanced 결과가 완전하게 수집된 뒤 `analyze-msa-boundary-campaign.py`로
 증거가 가장 강한 두 후보를 선택하고, 최고 유효 RPS에서 후보 60% + 기존

@@ -337,6 +337,17 @@ class AwsOrchestrationContractTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertNotIn("--max_rate is required", result.stderr)
 
+    def test_msa_v11_capacity_path_continues_after_balanced_rates(self) -> None:
+        source = SCRIPT.read_text(encoding="utf-8")
+        runner_source = AWS_K6_RUNNER.read_text(encoding="utf-8")
+        scenario_source = (K6_ROOT / "aws/scenarios/eks-scale-capacity.js").read_text(encoding="utf-8")
+        self.assertIn("eks-monolith-msa-boundary-v1.1.json", source)
+        self.assertIn('if [[ "$campaign_stage" == "capacity-stress" ]]', source)
+        self.assertIn("target_rate=$((target_rate * 2))", source)
+        self.assertNotIn("BOUNDARY_SCHEDULE_COMPLETE", source)
+        self.assertIn('aws-eks-monolith-msa-boundary-v1.1', runner_source)
+        self.assertIn("aws-eks-monolith-msa-boundary-v1.1", scenario_source)
+
     def test_shared_k6_profile_gets_action_time_platform_environment(self) -> None:
         runner_source = AWS_PHASE_RUNNER.parent.joinpath("run-k6-aws-scenario.sh").read_text(encoding="utf-8")
         orchestrator_source = SCRIPT.read_text(encoding="utf-8")

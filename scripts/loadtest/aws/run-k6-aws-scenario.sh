@@ -97,7 +97,7 @@ case "$SCENARIO" in
   soak) SCENARIO_FILE="soak.js" ;;
   scale-step) SCENARIO_FILE="scale-step.js" ;;
   capacity-stress)
-    if [[ "$PROFILE_VERSION" == "aws-eks-monolith-msa-boundary-v1.0" ]]; then
+    if [[ "$PROFILE_VERSION" == "aws-eks-monolith-msa-boundary-v1.0" || "$PROFILE_VERSION" == "aws-eks-monolith-msa-boundary-v1.1" ]]; then
       SCENARIO_FILE="eks-msa-boundary.js"
     elif [[ "$TARGET_PLATFORM" == "eks" || "$PROFILE_VERSION" == "aws-eks-monolith-breakpoint-v1.0" || "$PROFILE_VERSION" == "aws-eks-monolith-breakpoint-v2.0" || "$PROFILE_VERSION" == "aws-eks-monolith-breakpoint-v2.1" ]]; then
       SCENARIO_FILE="eks-scale-capacity.js"

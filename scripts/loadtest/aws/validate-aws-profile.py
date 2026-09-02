@@ -42,6 +42,10 @@ EKS_ADAPTIVE_BREAKPOINT_PROFILE_VERSIONS = {
     "aws-eks-monolith-breakpoint-v2.1",
 }
 EKS_MSA_BOUNDARY_PROFILE_VERSION = "aws-eks-monolith-msa-boundary-v1.0"
+EKS_MSA_BOUNDARY_PROFILE_VERSIONS = {
+    EKS_MSA_BOUNDARY_PROFILE_VERSION,
+    "aws-eks-monolith-msa-boundary-v1.1",
+}
 CURRENT_FEATURE_REQUEST_MIX_VERSION = "aws-eks-current-feature-coverage-v2"
 CURRENT_FEATURE_OPERATION_IDS = {
     "refresh", "profileRead", "travelList", "travelDetail", "travelUpdate",
@@ -99,7 +103,7 @@ def validate(profile):
     limits = profile["limits"]
     max_rate = limits.get("maxRate")
     max_vus = limits.get("maxVUs")
-    if profile.get("profileVersion") in EKS_ADAPTIVE_BREAKPOINT_PROFILE_VERSIONS or profile.get("profileVersion") == EKS_MSA_BOUNDARY_PROFILE_VERSION:
+    if profile.get("profileVersion") in EKS_ADAPTIVE_BREAKPOINT_PROFILE_VERSIONS or profile.get("profileVersion") in EKS_MSA_BOUNDARY_PROFILE_VERSIONS:
         _require(max_rate is None or (isinstance(max_rate, (int, float)) and max_rate > 0), "adaptive EKS limits.maxRate must be null or a positive number")
     else:
         _require(isinstance(max_rate, (int, float)) and max_rate > 0, "limits.maxRate must be a positive number")
@@ -134,7 +138,7 @@ def validate(profile):
         _validate_eks_breakpoint(profile)
     if profile.get("profileVersion") in EKS_ADAPTIVE_BREAKPOINT_PROFILE_VERSIONS:
         _validate_eks_adaptive_breakpoint(profile)
-    if profile.get("profileVersion") == EKS_MSA_BOUNDARY_PROFILE_VERSION:
+    if profile.get("profileVersion") in EKS_MSA_BOUNDARY_PROFILE_VERSIONS:
         _validate_eks_msa_boundary(profile)
 
     return True
@@ -376,9 +380,9 @@ def _validate_eks_adaptive_breakpoint(profile):
 def _validate_eks_msa_boundary(profile):
     """Validate the SCRUM-80 MSA-boundary campaign contract.
 
-    This is intentionally a finite *stage input* list, not a capacity ceiling:
-    a valid terminal from the observer still ends the campaign early, while a
-    clean 256-RPS stage proceeds to hotspot, spike and recovery phases.
+    The balanced rates are initial observation points, not a capacity ceiling:
+    a valid terminal from the observer ends the campaign, while a clean final
+    point continues at 2R until a terminal condition is observed.
     """
     target = profile.get("target") or {}
     _require(target.get("platform") == "eks", "MSA boundary target.platform must be eks")
@@ -412,6 +416,12 @@ def _validate_eks_msa_boundary(profile):
     _require(isinstance(candidates, list) and len(candidates) >= 2 and all(isinstance(item, str) and item for item in candidates), "MSA boundary hotspot candidates are missing")
     terminals = stress.get("terminalConditions")
     _require(isinstance(terminals, list) and terminals and "HARD_CEILING" not in terminals and "PROFILE_COMPLETE" not in terminals, "MSA boundary terminal conditions are invalid")
+    if profile.get("profileVersion") == "aws-eks-monolith-msa-boundary-v1.1":
+        continuation = stress.get("continuation")
+        _require(isinstance(continuation, dict), "MSA boundary v1.1 continuation is missing")
+        _require(continuation.get("firstRate") == 512, "MSA boundary v1.1 continuation must start at 512 RPS")
+        _require(continuation.get("nextRateExpression") == "R[n+1] = R[n] * 2", "MSA boundary v1.1 continuation must double the prior rate")
+        _require(continuation.get("stop") == "terminalConditions only", "MSA boundary v1.1 must stop only on terminal conditions")
     baseline = profile.get("scenarios", {}).get("baseline", {})
     _require(baseline.get("rate") == 16 and baseline.get("repeat") == 1, "MSA boundary baseline must run once at 16 RPS")
     scenario = profile.get("scenarios", {}).get("capacity-stress")
