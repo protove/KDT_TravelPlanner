@@ -441,6 +441,22 @@ class SeedAwsLoadDataTest(unittest.TestCase):
             SEED.run = original_run
             SEED.generate_redis_iam_auth_token = original_token_fn
 
+    def test_psql_retries_transient_connection_slot_exhaustion(self):
+        runtime = object.__new__(SEED.AwsSeed)
+        runtime.args = type("Args", (), {
+            "database_host": "db.internal", "database_port": 5432,
+            "database_name": "travel_diary_dev",
+        })()
+        runtime.database_username = "loadtest-db-user"
+        runtime.database_password = "super-secret-db-password"
+        transient = SEED.SeedError(
+            'command failed (2): docker run --rm; FATAL: remaining connection slots are reserved'
+        )
+        with mock.patch.object(SEED, "run", side_effect=[transient, "ok"]):
+            with mock.patch.object(SEED.time, "sleep") as sleep:
+                self.assertEqual(runtime.psql("SELECT 1"), "ok")
+        sleep.assert_called_once_with(SEED.PSQL_TRANSIENT_RETRY_BASE_SECONDS)
+
     def test_insert_user_does_not_include_psql_command_tag_in_user_id(self):
         runtime = object.__new__(SEED.AwsSeed)
         fixed_uuid = SEED.uuid.UUID("12345678-1234-5678-1234-567812345678")

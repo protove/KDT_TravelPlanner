@@ -62,6 +62,7 @@ import socket
 import subprocess
 import sys
 import tempfile
+import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -102,6 +103,17 @@ CURRENT_FEATURE_PLACE_IDS_PER_TRAVEL = EXPECTED_TIMELINE_ITEMS_PER_PLANNER
 # Keep a generous operational bound; the lifecycle capsule still supplies a
 # lower accepted fixture/data guard at action time.
 MAX_SYNTHETIC_USERS = 100000
+# A preceding adaptive stage can leave several Backend/HPA connection pools
+# draining while the next fixture top-up begins.  PostgreSQL reports this as
+# a transient reserved-slot failure; retry only that bounded, sanitized class
+# rather than turning a recoverable hand-off into an incomplete campaign.
+PSQL_TRANSIENT_RETRY_ATTEMPTS = 8
+PSQL_TRANSIENT_RETRY_BASE_SECONDS = 2.0
+PSQL_TRANSIENT_RETRY_MAX_SECONDS = 10.0
+PSQL_TRANSIENT_ERROR_MARKERS = (
+    "remaining connection slots are reserved",
+    "too many clients already",
+)
 
 
 class SeedError(RuntimeError):
@@ -357,17 +369,33 @@ class AwsSeed:
 
     def psql(self, sql: str) -> str:
         env = {**os.environ, "PGPASSWORD": self.database_password, "PGSSLMODE": "require"}
-        return run(
-            [
-                "docker", "run", "--rm", "--network", "host",
-                "-e", "PGPASSWORD", "-e", "PGSSLMODE",
-                POSTGRES_CLIENT_IMAGE, "psql",
-                "-h", self.args.database_host, "-p", str(self.args.database_port),
-                "-U", self.database_username, "-d", self.args.database_name,
-                "-v", "ON_ERROR_STOP=1", "-tA", "-c", sql,
-            ],
-            env=env,
-        )
+        command = [
+            "docker", "run", "--rm", "--network", "host",
+            "-e", "PGPASSWORD", "-e", "PGSSLMODE",
+            POSTGRES_CLIENT_IMAGE, "psql",
+            "-h", self.args.database_host, "-p", str(self.args.database_port),
+            "-U", self.database_username, "-d", self.args.database_name,
+            "-v", "ON_ERROR_STOP=1", "-tA", "-c", sql,
+        ]
+        for attempt in range(PSQL_TRANSIENT_RETRY_ATTEMPTS):
+            try:
+                return run(command, env=env)
+            except SeedError as error:
+                message = str(error)
+                transient = any(marker in message for marker in PSQL_TRANSIENT_ERROR_MARKERS)
+                if not transient or attempt == PSQL_TRANSIENT_RETRY_ATTEMPTS - 1:
+                    raise
+                delay = min(
+                    PSQL_TRANSIENT_RETRY_BASE_SECONDS * (2**attempt),
+                    PSQL_TRANSIENT_RETRY_MAX_SECONDS,
+                )
+                print(
+                    f"[seed] transient PostgreSQL connection exhaustion; retry {attempt + 1}/"
+                    f"{PSQL_TRANSIENT_RETRY_ATTEMPTS} in {delay:g}s",
+                    file=sys.stderr,
+                )
+                time.sleep(delay)
+        raise AssertionError("unreachable")
 
     def redis(self, *arguments: str) -> str:
         # Freshly signed per call (tokens are valid 15 minutes): seed runs are
