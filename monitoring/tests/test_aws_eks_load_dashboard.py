@@ -115,6 +115,17 @@ class EksLoadDashboardTest(unittest.TestCase):
                     f"unexpected dashboard variable in panel {panel['id']}: {expr}",
                 )
 
+    def test_uri_template_braces_use_valid_promql_escapes(self):
+        expressions = [
+            target.get("expr", "")
+            for panel in self.dashboard["panels"]
+            for target in panel.get("targets", [])
+        ]
+        for expr in expressions:
+            # PromQL string literals need two backslashes for a literal
+            # regexp brace; a single ``\{`` is rejected by Prometheus.
+            self.assertNotIn(r"\{", expr.replace(r"\\{", ""))
+
 
 def _custom_variables(expr: str) -> set[str]:
     import re
