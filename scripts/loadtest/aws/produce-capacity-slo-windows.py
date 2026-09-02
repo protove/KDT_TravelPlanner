@@ -130,6 +130,62 @@ def read_points(path: Path) -> list[dict[str, Any]]:
     return points
 
 
+class IncrementalPointReader:
+    """Read an append-only k6 stream once per appended byte range.
+
+    The previous implementation reparsed the entire raw file every poll,
+    which made a long 512/1024 RPS stage compete with the workload for CPU and
+    memory.  This cursor keeps only the current incomplete window after it has
+    emitted older windows.  A truncation/rotation resets the cursor and is
+    explicit to the caller rather than silently stitching two segments.
+    """
+
+    def __init__(self) -> None:
+        self.offset = 0
+        self.buffer = b""
+        self.points: list[dict[str, Any]] = []
+
+    def read(self, path: Path) -> list[dict[str, Any]]:
+        if not path.is_file():
+            return self.points
+        size = path.stat().st_size
+        if size < self.offset:
+            self.offset = 0
+            self.buffer = b""
+            self.points = []
+        with path.open("rb") as source:
+            source.seek(self.offset)
+            chunk = source.read()
+        self.offset += len(chunk)
+        if not chunk:
+            return self.points
+        data = self.buffer + chunk
+        lines = data.split(b"\n")
+        self.buffer = lines.pop()  # keep a partial JSON line for the next poll
+        for raw_line in lines:
+            try:
+                item = json.loads(raw_line.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                continue
+            if not isinstance(item, dict) or item.get("type") != "Point":
+                continue
+            point_data = item.get("data")
+            point_ts = timestamp(point_data.get("time")) if isinstance(point_data, dict) else None
+            if point_ts is None or not isinstance(item.get("metric"), str):
+                continue
+            try:
+                value = float(point_data.get("value")) if isinstance(point_data, dict) else None
+            except (TypeError, ValueError):
+                value = None
+            if value is None or not math.isfinite(value):
+                continue
+            self.points.append({"metric": item["metric"], "ts": point_ts, "value": value})
+        return self.points
+
+    def prune_before(self, timestamp_value: float) -> None:
+        self.points = [point for point in self.points if point["ts"] >= timestamp_value]
+
+
 def _comparison(actual: float | int | None, operator: str, expected: float | int) -> bool:
     if actual is None or isinstance(actual, bool):
         return False
@@ -251,8 +307,9 @@ def produce(input_path: Path, output_path: Path, metadata_path: Path, contract_p
             if isinstance(item, dict) and isinstance(item.get("sloWindowId"), str):
                 emitted.add(item["sloWindowId"])
 
+    reader = IncrementalPointReader()
     while True:
-        points = read_points(input_path)
+        points = reader.read(input_path)
         latest = max((item["ts"] for item in points), default=None)
         if latest is not None:
             completed_until = int((latest - started) // 60)
@@ -264,6 +321,11 @@ def produce(input_path: Path, output_path: Path, metadata_path: Path, contract_p
                     output.write(json.dumps(window, sort_keys=True) + "\n")
                     output.flush()
                 emitted.add(window["sloWindowId"])
+            # All windows before this boundary are immutable.  Drop their raw
+            # points so a high-rate stage does not grow producer memory with
+            # the full JSON stream.
+            if completed_until > 0:
+                reader.prune_before(started + completed_until * 60)
         if finalize:
             return 0
         # Stop only when the producer is explicitly told to finalize; the

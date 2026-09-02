@@ -348,6 +348,15 @@ class AwsOrchestrationContractTests(unittest.TestCase):
         self.assertIn('aws-eks-monolith-msa-boundary-v1.1', runner_source)
         self.assertIn("aws-eks-monolith-msa-boundary-v1.1", scenario_source)
 
+    def test_adaptive_handoff_checks_continuity_before_high_rate_dispatch(self) -> None:
+        source = SCRIPT.read_text(encoding="utf-8")
+        helper_source = (REPOSITORY_ROOT / "scripts/loadtest/aws/check-stage-continuity.py").read_text(encoding="utf-8")
+        self.assertIn("check-stage-continuity.py", source)
+        self.assertIn("--max-observation-age-seconds 60", source)
+        self.assertIn("requalification-", source)
+        self.assertIn("CAPACITY_DROPPED", helper_source)
+        self.assertIn("IDENTITY_CHANGED", helper_source)
+
     def test_shared_k6_profile_gets_action_time_platform_environment(self) -> None:
         runner_source = AWS_PHASE_RUNNER.parent.joinpath("run-k6-aws-scenario.sh").read_text(encoding="utf-8")
         orchestrator_source = SCRIPT.read_text(encoding="utf-8")

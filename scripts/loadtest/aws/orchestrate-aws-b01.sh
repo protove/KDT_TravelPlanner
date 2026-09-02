@@ -2129,6 +2129,13 @@ PY
   local stage_index=0
   local final_reason=""
   local operator_max_vus="$MAX_VUS"
+  local previous_stage_dir=""
+  local pending_high_rate=""
+  local requalifying=0
+  local baseline_stage_dir="$EVIDENCE_ROOT/k6/baseline-1"
+  if [[ -d "$baseline_stage_dir" ]]; then
+    previous_stage_dir="$baseline_stage_dir"
+  fi
   mkdir -p "$EVIDENCE_ROOT"
   export REPOSITORY_ROOT EVIDENCE_ROOT BASE_URL REGION ENVIRONMENT TARGET_PLATFORM SOURCE_COMMIT_SHA RUNNER_BOOTSTRAP_RUN_ID="$RUN_ID"
   export RUNNER_READINESS_FILE="${RUNNER_READINESS_FILE:-/var/lib/travel-planner/load-test-evidence/runner-readiness.json}"
@@ -2154,7 +2161,50 @@ print(json.loads(path.read_text(encoding="utf-8")).get("targetGroupDimension", "
 PY
 )"
   while :; do
-    local stage_max_vus stage_preallocated_vus stage_dir snapshot_file observer_pid coordinator_status observer_status evaluator_status controller_reason
+    local stage_max_vus stage_preallocated_vus stage_dir snapshot_file observer_pid coordinator_status observer_status evaluator_status controller_reason stage_dir_prefix
+    if [[ "$requalifying" == "1" ]]; then
+      stage_dir_prefix="requalification-${stage_index}"
+    else
+      stage_dir_prefix="$stage_prefix"
+    fi
+    if [[ "$campaign_stage" == "capacity-stress" && "$requalifying" == "0" && -n "$previous_stage_dir" ]]; then
+      local continuity_dir continuity_verdict continuity_status
+      continuity_dir="$EVIDENCE_ROOT/continuity"
+      mkdir -p "$continuity_dir"
+      continuity_verdict="$continuity_dir/resume-verdict-${stage_index}-${target_rate}.json"
+      set +e
+      python3 "$REPOSITORY_ROOT/scripts/loadtest/aws/check-stage-continuity.py" \
+        --previous-stage "$previous_stage_dir" --next-rate "$target_rate" \
+        --output "$continuity_verdict" \
+        --stable-window-seconds 60 --required-windows 2 \
+        --max-observation-age-seconds 60 --max-observation-gap-seconds 60 \
+        --fast-handoff-gap-seconds 10
+      continuity_status=$?
+      set -e
+      python3 "$REPOSITORY_ROOT/scripts/loadtest/record-rehearsal-event.py" "$continuity_dir" CONTINUITY_CHECK \
+        "next=${target_rate} previous=${previous_stage_dir} decision=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("decision", "BLOCK"))' "$continuity_verdict" 2>/dev/null || echo BLOCK)" --actor automation || true
+      if [[ "$continuity_status" -eq 10 ]]; then
+        pending_high_rate="$target_rate"
+        target_rate="$(python3 - "$continuity_verdict" "${CONFIRMED_RATE:-}" <<'PY'
+import json, sys
+value = sys.argv[2] or json.load(open(sys.argv[1])).get("restoreRate")
+try:
+    value = int(value)
+except (TypeError, ValueError):
+    value = 0
+if not isinstance(value, int) or value <= 0:
+    raise SystemExit("continuity verdict has no safe restore rate")
+print(value)
+PY
+)"
+        requalifying=1
+        stage_index=$((stage_index + 1))
+        continue
+      elif [[ "$continuity_status" -ne 0 ]]; then
+        final_reason="INCOMPLETE_CONTINUITY"
+        return 2
+      fi
+    fi
     stage_max_vus="$(python3 - "$target_rate" "$operator_max_vus" "$PROFILE" <<'PY'
 import json, math, sys
 target, operator, profile_path = sys.argv[1:]
@@ -2184,7 +2234,20 @@ import sys
 print(max(256, int(sys.argv[1])))
 PY
 )"
-    stage_dir="$EVIDENCE_ROOT/k6/${stage_prefix}-$target_rate"
+    stage_dir="$EVIDENCE_ROOT/k6/${stage_dir_prefix}-$target_rate"
+    # A resumed campaign must never truncate a prior segment.  Preserve the
+    # old directory and give this attempt a deterministic, collision-free
+    # suffix only when a prior metadata/raw marker is present.
+    if [[ -f "$stage_dir/metadata.json" || -f "$stage_dir/raw.json" || -f "$stage_dir/controller-result.json" ]]; then
+      local segment_suffix segment_number=0
+      segment_suffix="segment-$(date -u +%Y%m%dT%H%M%SZ)"
+      stage_dir_prefix="${stage_dir_prefix}-${segment_suffix}"
+      stage_dir="$EVIDENCE_ROOT/k6/${stage_dir_prefix}-$target_rate"
+      while [[ -e "$stage_dir" ]]; do
+        segment_number=$((segment_number + 1))
+        stage_dir="$EVIDENCE_ROOT/k6/${stage_dir_prefix}-${segment_number}-$target_rate"
+      done
+    fi
     snapshot_file="$stage_dir/snapshots.jsonl"
     mkdir -p "$stage_dir"
     USERS="$stage_max_vus"
@@ -2194,7 +2257,11 @@ PY
     CAPACITY_STAGE_INDEX="$stage_index"
     CAPACITY_STAGE_DURATION="${max_stage_seconds}s"
     export USERS CAPACITY_STRESS_MAX_VUS CAPACITY_STRESS_PREALLOCATED_VUS CAPACITY_TARGET_RATE CAPACITY_STAGE_INDEX CAPACITY_STAGE_DURATION
-    export CAPACITY_STAGE="$campaign_stage"
+    if [[ "$requalifying" == "1" ]]; then
+      export CAPACITY_STAGE="requalification"
+    else
+      export CAPACITY_STAGE="$campaign_stage"
+    fi
     seed_credentials "capacity-$target_rate" 1
     export CAPACITY_STAGE_DIR="$stage_dir"
     python3 "$REPOSITORY_ROOT/scripts/loadtest/record-rehearsal-event.py" "$stage_dir" STAGE_START "adaptive target ${target_rate} RPS" --actor automation
@@ -2255,7 +2322,7 @@ PY
     else
       python3 "$REPOSITORY_ROOT/scripts/loadtest/record-rehearsal-event.py" "$stage_dir" TERMINAL "$controller_reason at ${target_rate} RPS" --actor automation
     fi
-    append_adaptive_stage_manifest "$target_rate" "$controller_reason" "k6/${stage_prefix}-$target_rate" "$evaluator_status"
+    append_adaptive_stage_manifest "$target_rate" "$controller_reason" "k6/${stage_dir_prefix}-$target_rate" "$evaluator_status"
     if ! seal_adaptive_stage "$stage_dir"; then
       final_reason="INCOMPLETE_EVIDENCE_CAPACITY"
       return 2
@@ -2270,6 +2337,13 @@ PY
         return 0
         ;;
       STAGE_COMPLETE)
+        previous_stage_dir="$stage_dir"
+        if [[ "$requalifying" == "1" ]]; then
+          requalifying=0
+          target_rate="$pending_high_rate"
+          pending_high_rate=""
+          continue
+        fi
         stage_index=$((stage_index + 1))
         if [[ "$msa_boundary" == "1" ]]; then
           if [[ "$stage_index" -ge "${#configured_rates[@]}" ]]; then

@@ -185,7 +185,8 @@ PY
     exit 3
   fi
 fi
-started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+dispatch_started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+started_at="$dispatch_started_at"
 git_sha="$(git -C "$REPOSITORY_ROOT" rev-parse HEAD)"
 warmup_seconds=0
 if [[ "$SCENARIO" == "baseline" ]]; then
@@ -201,7 +202,7 @@ if [[ "$SCENARIO" == "baseline" ]]; then
 fi
 python3 - "$RUN_DIR/metadata.json" "$RUN_ID" "$SCENARIO" "$started_at" "$BASE_URL" "$git_sha" \
   "$K6_IMAGE_DIGEST" "${RATE:-0}" "$REGION" "$ENVIRONMENT" "$TARGET_PLATFORM" "$warmup_seconds" "$AWS_PROFILE_FILE" \
-  "${AWS_TARGET_HOST_IPS:-}" <<'PY'
+  "${AWS_TARGET_HOST_IPS:-}" "$dispatch_started_at" <<'PY'
 import hashlib
 import json
 import os
@@ -210,7 +211,7 @@ from urllib.parse import urlparse
 from pathlib import Path
 
 (output, run_id, scenario, started_at, target, commit_sha, image, rate, region,
- environment, platform, warmup_seconds, profile_path, target_host_ips_raw) = sys.argv[1:]
+ environment, platform, warmup_seconds, profile_path, target_host_ips_raw, dispatch_started_at) = sys.argv[1:]
 profile = json.loads(Path(profile_path).read_text(encoding="utf-8"))
 profile_sha256 = hashlib.sha256(Path(profile_path).read_bytes()).hexdigest()
 rate_value = float(rate) if float(rate) else None
@@ -292,6 +293,8 @@ Path(output).write_text(json.dumps({
     "runId": run_id,
     "scenario": scenario,
     "startedAtUtc": started_at,
+    "dispatchStartedAtUtc": dispatch_started_at,
+    "actualOperationStartAtUtc": None,
     "target": target,
     "platform": platform,
     "region": region,
@@ -588,17 +591,65 @@ if [[ -n "$slo_producer_pid" ]]; then
   set -e
 fi
 
-python3 - "$RUN_DIR/run-status.json" "$k6_status" "$oom_killed" "$restart_count" "$slo_producer_status" "$signal_received" <<'PY'
+actual_operation_start=""
+if [[ -s "$RUN_DIR/raw.json" ]]; then
+  # The k6 custom counter is incremented immediately before a flow's first
+  # HTTP call.  Prefer that point over shell/container start or an HTTP
+  # completion timestamp; a missing point remains explicit evidence of an
+  # incomplete segment.
+  actual_operation_start="$(python3 - "$RUN_DIR/raw.json" <<'PY'
 import json
 import sys
 from pathlib import Path
-output, k6_status, oom_killed, restart_count, slo_producer_status, signal_received = sys.argv[1:]
+
+path = Path(sys.argv[1])
+try:
+    handle = path.open(encoding="utf-8")
+except OSError:
+    raise SystemExit(0)
+for line in handle:
+    try:
+        point = json.loads(line)
+    except json.JSONDecodeError:
+        continue
+    if point.get("metric") != "aws_operation_started_total" or point.get("type") != "Point":
+        continue
+    data = point.get("data")
+    value = data.get("time") if isinstance(data, dict) else None
+    if isinstance(value, str) and value:
+        print(value)
+        break
+PY
+  )"
+fi
+python3 - "$RUN_DIR/metadata.json" "$actual_operation_start" <<'PY'
+import json
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+metadata_path, actual = sys.argv[1:]
+metadata = json.loads(Path(metadata_path).read_text(encoding="utf-8"))
+if actual:
+    metadata["actualOperationStartAtUtc"] = actual
+metadata["operationStartMetric"] = "aws_operation_started_total"
+metadata["endedAtUtc"] = datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+Path(metadata_path).write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
+PY
+
+python3 - "$RUN_DIR/run-status.json" "$k6_status" "$oom_killed" "$restart_count" "$slo_producer_status" "$signal_received" "$actual_operation_start" <<'PY'
+import json
+import sys
+from pathlib import Path
+output, k6_status, oom_killed, restart_count, slo_producer_status, signal_received, actual_operation_start = sys.argv[1:]
 Path(output).write_text(json.dumps({
     "k6ExitCode": int(k6_status),
     "k6ContainerOomKilled": oom_killed == "true",
     "k6ContainerRestartCount": int(restart_count),
     "sloWindowProducerExitCode": int(slo_producer_status),
     "workloadSignalReceived": signal_received == "1",
+    "actualOperationStartAtUtc": actual_operation_start or None,
+    "operationStartMetric": "aws_operation_started_total",
 }, indent=2) + "\n", encoding="utf-8")
 PY
 python3 "$REPOSITORY_ROOT/scripts/loadtest/record-rehearsal-event.py" "$RUN_DIR" RUN_END "AWS k6 exit code $k6_status" --actor automation

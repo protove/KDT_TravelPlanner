@@ -67,6 +67,10 @@ if (TOTAL_WEIGHT !== 100) throw new Error(`current-feature operation weights mus
 // expected mix exportable without adding unbounded operation/request labels.
 export const operationSelectionCounters = {};
 export const operationContractFailureCounters = {};
+// Emitted before the first HTTP call in each selected operation.  The AWS
+// wrapper uses the first point from this counter as the actual workload
+// dispatch timestamp; shell/container start time is only a preparation time.
+export const operationStartedCounter = new Counter('aws_operation_started_total');
 for (const operation of CURRENT_FEATURE_OPERATIONS) {
   operationSelectionCounters[operation.id] = new Counter(`aws_operation_${operation.id}_selected_total`);
   operationContractFailureCounters[operation.id] = new Counter(`aws_operation_${operation.id}_contract_failures_total`);
@@ -395,6 +399,7 @@ function refresh() {
 function markSelection(operationId) {
   const operation = OPERATION_BY_ID[operationId];
   if (!operation) throw new Error(`unsupported current-feature operation: ${operationId}`);
+  operationStartedCounter.add(1, tags(operationId));
   operationSelectionCounters[operationId].add(1, tags(operationId));
 }
 

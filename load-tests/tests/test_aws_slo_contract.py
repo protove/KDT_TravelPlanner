@@ -83,6 +83,22 @@ class SloBoundaryTest(unittest.TestCase):
 
 
 class CapacitySloWindowProducerTest(unittest.TestCase):
+    def test_incremental_reader_does_not_reparse_or_retain_emitted_window(self):
+        with tempfile.TemporaryDirectory() as directory:
+            raw = Path(directory) / "raw.json"
+            first = {"type": "Point", "metric": "iterations", "data": {"time": "2026-08-31T00:00:10Z", "value": 1}}
+            second = {"type": "Point", "metric": "iterations", "data": {"time": "2026-08-31T00:01:10Z", "value": 1}}
+            raw.write_text(json.dumps(first), encoding="utf-8")
+            reader = SLO_WINDOWS.IncrementalPointReader()
+            self.assertEqual(reader.read(raw), [])
+            with raw.open("a", encoding="utf-8") as output:
+                output.write("\n" + json.dumps(second) + "\n")
+            points = reader.read(raw)
+            self.assertEqual(len(points), 2)
+            reader.prune_before(datetime(2026, 8, 31, 0, 1, tzinfo=timezone.utc).timestamp())
+            self.assertEqual(len(reader.points), 1)
+            self.assertEqual(reader.read(raw), reader.points)
+
     def test_emits_only_complete_non_overlapping_windows_and_stage_labels(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

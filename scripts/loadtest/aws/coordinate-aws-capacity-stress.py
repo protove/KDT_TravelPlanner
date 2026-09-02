@@ -316,12 +316,13 @@ def main() -> int:
     events_path = run_dir / "controller-events.jsonl"
     result_path = run_dir / "controller-result.json"
     started = time.monotonic()
+    controller_started_at = utc_now()
     command = list(args.command)
     if command and command[0] == "--":
         command = command[1:]
 
     with events_path.open("w", encoding="utf-8") as events:
-        append_event(events, "CONTROLLER_START", command=command, snapshotFile=str(snapshot_file), campaignStage=args.campaign_stage)
+        append_event(events, "CONTROLLER_START", command=command, snapshotFile=str(snapshot_file), campaignStage=args.campaign_stage, controllerStartedAtUtc=controller_started_at)
         process = subprocess.Popen(
             command,
             cwd=os.getcwd(),
@@ -378,9 +379,21 @@ def main() -> int:
                 )
         append_event(events, "CONTROLLER_END", terminalReason=reason, workloadExitCode=exit_code, elapsedSeconds=round(elapsed, 3))
 
+    workload_actual_start = None
+    status_path = run_dir / "run-status.json"
+    if status_path.is_file():
+        try:
+            status_payload = json.loads(status_path.read_text(encoding="utf-8"))
+            candidate = status_payload.get("actualOperationStartAtUtc") if isinstance(status_payload, dict) else None
+            workload_actual_start = candidate if isinstance(candidate, str) and candidate else None
+        except (OSError, json.JSONDecodeError):
+            workload_actual_start = None
     write_json(result_path, {
         "schemaVersion": "capacity-stress-controller/v2" if args.adaptive else "capacity-stress-controller/v1",
-        "startedAtUtc": utc_now(),
+        "startedAtUtc": controller_started_at,
+        "controllerStartedAtUtc": controller_started_at,
+        "workloadActualOperationStartAtUtc": workload_actual_start,
+        "endedAtUtc": utc_now(),
         "terminalReason": reason,
         "workloadExitCode": exit_code,
         "elapsedSeconds": round(elapsed, 3),
