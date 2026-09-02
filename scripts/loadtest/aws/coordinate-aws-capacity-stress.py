@@ -224,6 +224,24 @@ def terminate_process(process: subprocess.Popen, event_handle, reason: str) -> N
     if process.poll() is not None:
         return
     append_event(event_handle, "WORKLOAD_STOP_REQUESTED", reason=reason, actor="capacity-coordinator")
+    # A fixed-arrival k6 stage can finish naturally at the same instant that
+    # the observer records a sustained terminal condition.  Give the wrapper
+    # a short grace period first so k6 can run handleSummary and flush
+    # k6-native-summary.json/summary.json.  Without this race guard the group
+    # SIGINT below can turn an otherwise complete stage into exit 2 with no
+    # summary, making a valid terminal observation look incomplete.
+    try:
+        process.wait(timeout=5)
+        append_event(
+            event_handle,
+            "WORKLOAD_NATURAL_EXIT",
+            reason=reason,
+            workloadExitCode=process.returncode,
+            actor="capacity-coordinator",
+        )
+        return
+    except subprocess.TimeoutExpired:
+        pass
     try:
         # The workload command is a shell that owns the Docker/k6 child.  A
         # signal sent only to that shell can leave k6 running until the

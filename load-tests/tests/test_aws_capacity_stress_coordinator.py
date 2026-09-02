@@ -170,6 +170,47 @@ class CapacityStressCoordinatorTest(unittest.TestCase):
             self.assertFalse(controller["operatorRecoveryAutomated"])
             self.assertFalse(controller["autoscalingDesiredStateWritten"])
 
+    def test_coordinator_preserves_a_natural_exit_at_terminal_boundary(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            snapshots = root / "snapshots.jsonl"
+            snapshots.write_text(
+                "\n".join([
+                    json.dumps({"ts": utc(0), "maxCapacityReached": True}),
+                    json.dumps({"ts": utc(120), "maxCapacityReached": True}),
+                ])
+                + "\n",
+                encoding="utf-8",
+            )
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    "--run-dir",
+                    str(root),
+                    "--snapshot-file",
+                    str(snapshots),
+                    "--capacity-stability-seconds",
+                    "120",
+                    "--poll-seconds",
+                    "0.01",
+                    "--",
+                    sys.executable,
+                    "-c",
+                    "import time; time.sleep(0.05)",
+                ],
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            controller = json.loads((root / "controller-result.json").read_text(encoding="utf-8"))
+            self.assertEqual(controller["terminalReason"], "MAX_CAPACITY_REACHED")
+            events = (root / "controller-events.jsonl").read_text(encoding="utf-8")
+            self.assertIn("WORKLOAD_NATURAL_EXIT", events)
+            self.assertNotIn("WORKLOAD_TERM_ESCALATION", events)
+
 
 if __name__ == "__main__":
     unittest.main()
