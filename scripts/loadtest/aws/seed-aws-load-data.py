@@ -799,7 +799,28 @@ def seed_all(
     index_width = getattr(runtime, "index_width", 3)
     current_feature_enabled = bool(getattr(runtime, "_enable_current_feature_fixture", False))
     credentials = list(existing_credentials or [])
-    skipped = 0
+    # A recovery/capacity stage rotates every credential's refresh-token
+    # family in k6.  Reusing a verified ledger therefore requires minting a
+    # fresh token for each already-seeded user before the next workload
+    # starts; otherwise a stage marker skip would feed revoked 401 tokens to
+    # k6.  Keep the existing travel/timeline/current-feature IDs intact and
+    # only replace the credential pair.  The old families are revoked by
+    # main() before this function is called for --incremental.
+    skipped = len(credentials)
+    for index, existing in enumerate(list(credentials), start=1):
+        if not isinstance(existing, dict) or not isinstance(existing.get("userId"), str) or not existing.get("userId"):
+            raise SeedError(f"incremental credential entry {index} has no userId")
+        fresh_token = new_opaque_token()
+        fresh_family = new_opaque_token()
+        refreshed = dict(existing)
+        refreshed.update({"refreshToken": fresh_token, "refreshFamilyId": fresh_family})
+        credentials[index - 1] = refreshed
+        write_seed_checkpoint(runtime, args, credentials, skipped)
+        runtime.seed_redis_token(existing["userId"], args.refresh_ttl_ms, fresh_token, fresh_family)
+        _, rotated_token = runtime.refresh(fresh_token)
+        refreshed["refreshToken"] = rotated_token
+        credentials[index - 1] = refreshed
+        write_seed_checkpoint(runtime, args, credentials, skipped)
     start_index = len(credentials) + 1
     if start_index > args.users + 1:
         raise SeedError("existing credential file contains more users than requested target")
@@ -1019,10 +1040,12 @@ def main() -> int:
     # the legacy unit-test fakes and historical seed contract stay unchanged.
     runtime._enable_current_feature_fixture = True
     existing_credentials = load_incremental_credentials(args) if args.incremental else None
-    if not args.incremental:
-        revoke_previous_credentials(runtime, args)
-    elif args.reset_fixture:
+    # Revoke the prior ledger before replacing its tokens.  This is exact
+    # run-scoped cleanup (the same contract used by the normal seed path) and
+    # prevents the superseded Redis families from lingering until TTL expiry.
+    if args.incremental and args.reset_fixture:
         raise SeedError("--incremental cannot be combined with --reset-fixture")
+    revoke_previous_credentials(runtime, args)
     reset_deleted_planners = None
     if args.reset_fixture:
         reset_deleted_planners = runtime.reset_synthetic_planners(args.run_id)

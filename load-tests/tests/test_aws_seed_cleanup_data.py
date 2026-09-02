@@ -512,6 +512,47 @@ class SeedAwsLoadDataTest(unittest.TestCase):
         # genuinely-new users.
         self.assertEqual(calls["create_travel"], 2)
 
+    def test_incremental_seed_refreshes_existing_ledger_credentials(self):
+        # An earlier recovery stage can rotate every refresh-token family
+        # without changing the fixture IDs.  Incremental seeding must mint a
+        # fresh pair for that existing ledger instead of silently reusing the
+        # revoked token and making the next smoke fail with 401.
+        runtime = object.__new__(SEED.AwsSeed)
+        calls = {"insert": 0, "seed": [], "refresh": []}
+        existing = [{
+            "userId": "user-1",
+            "refreshToken": "o" * 43,
+            "refreshFamilyId": "f" * 43,
+            "travelId": "travel-1",
+            "timelineItemIds": ["item-1", "item-2", "item-3"],
+            "fixtureMarker": "marker-1",
+        }]
+
+        def unexpected_insert(*_args):
+            calls["insert"] += 1
+            raise AssertionError("incremental refresh must not insert a new user")
+
+        runtime.insert_user = unexpected_insert
+        runtime.seed_redis_token = lambda user_id, ttl_ms, token, family_id: calls["seed"].append((user_id, token, family_id)) or (token, family_id)
+        runtime.refresh = lambda token: calls["refresh"].append(token) or ("access-token", "r" * 43)
+        writes = []
+        runtime.write_credentials = lambda payload, path: writes.append(json.loads(json.dumps(payload)))
+
+        args = type("Args", (), {
+            "run_id": "aws-b01-incremental", "users": 1, "refresh_ttl_ms": 1000,
+            "data_file": Path("/tmp/unused.json"),
+        })()
+
+        SEED.seed_all(runtime, args, existing_credentials=existing)
+
+        self.assertEqual(calls["insert"], 0)
+        self.assertEqual([entry[0] for entry in calls["seed"]], ["user-1"])
+        self.assertEqual(len(calls["refresh"]), 1)
+        self.assertEqual(writes[-1]["seedState"], "complete")
+        self.assertEqual(writes[-1]["skippedAlreadySeeded"], 1)
+        self.assertEqual(writes[-1]["credentials"][0]["refreshToken"], "r" * 43)
+        self.assertNotEqual(writes[-1]["credentials"][0]["refreshToken"], existing[0]["refreshToken"])
+
     def test_verified_fixture_is_recorded_before_complete_seed_state(self):
         runtime = object.__new__(SEED.AwsSeed)
         writes = []
