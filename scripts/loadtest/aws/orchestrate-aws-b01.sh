@@ -804,7 +804,7 @@ print("__SCRUM80_RUNNER_READINESS_END__")
 print(
     "set -euo pipefail; "
     f"for _ in $(seq 1 60); do if [[ -s {q(base)} && -s {q(full)} ]]; then break; fi; sleep 2; done; "
-    f"python3 - {q(base)} {q(full)} {q(run_id)} {q(source_sha)} {q(k6_image)} {q(mock_image)} <<'PY\n"
+    f"python3 - {q(base)} {q(full)} {q(run_id)} {q(source_sha)} {q(k6_image)} {q(mock_image)} <<'PY'\n"
     + remote_python
     + "\nPY\n"
 )
