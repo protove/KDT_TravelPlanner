@@ -135,6 +135,10 @@ class AwsOrchestrationContractTests(unittest.TestCase):
         self.assertIn('f"for _ in $(seq 1 60);', source)
         self.assertIn("<<'PY'\\n", source)
         self.assertIn("local node_group_adapter_args=(\n", source)
+        self.assertIn("validate_runner_base_url_remote", source)
+        self.assertIn("runner-base-url-verification.json", source)
+        self.assertIn("AWS_TARGET_HOST_IPS", source)
+        self.assertIn("--connect-to", source)
         self.assertNotIn('[[ -s "$base_receipt" ]]', source)
         self.assertIn('base.get("status") != "base-ready" or base.get("dockerActive") is not True', source)
 

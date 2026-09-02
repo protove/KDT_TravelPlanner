@@ -747,6 +747,118 @@ if len(items) != 1 or items[0].get("PingStatus") != "Online":
 PY
 }
 
+validate_runner_base_url_remote() {
+  local alb_dns="$1"
+  local receipt="$EVIDENCE_ROOT/aws/runner-base-url-verification.json"
+  local invocation_file command_json command_id invocation_json invocation_status command
+  invocation_file="$(mktemp "${TMPDIR:-/tmp}/scrum80-runner-base-url.XXXXXX")"
+  command="$(python3 - "$BASE_URL" "$alb_dns" <<'PY'
+import shlex
+import sys
+from urllib.parse import urlparse
+
+base_url, alb_dns = sys.argv[1:]
+host = urlparse(base_url).hostname
+if not host or not alb_dns:
+    raise SystemExit("approved base URL or ALB DNS is missing")
+q = shlex.quote
+connect_to = f"{host}:443:{alb_dns}:443"
+probe_url = f"https://{host}/api/ping"
+print(
+    "set -euo pipefail; "
+    f"ips=$(getent ahostsv4 {q(alb_dns)} | awk '{{print $1}}' | sort -u | paste -sd, -); "
+    "if [[ -z \"$ips\" ]]; then echo 'ALB DNS has no IPv4 address' >&2; exit 1; fi; "
+    f"code=$(curl --silent --show-error --connect-timeout 10 --max-time 30 --connect-to {q(connect_to)} -o /dev/null -w '%{{http_code}}' {q(probe_url)}); "
+    "printf '%s\\n' __SCRUM80_RUNNER_BASE_URL_BEGIN__; "
+    "printf 'IPS=%s\\n' \"$ips\"; printf 'HTTP_CODE=%s\\n' \"$code\"; "
+    "printf '%s\\n' __SCRUM80_RUNNER_BASE_URL_END__; "
+    "[[ \"$code\" == 200 ]]"
+)
+PY
+)"
+  local ssm_parameters
+  ssm_parameters="$(jq -cn --arg command "$command" '{commands:[$command]}')"
+  command_json="$(run_aws_json ssm send-command --instance-ids "$RUNNER_ID" \
+    --document-name AWS-RunShellScript --comment "SCRUM-80 verify Runner custom HTTPS base URL $RUN_ID" \
+    --parameters "$ssm_parameters" --region "$REGION")"
+  command_id="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["Command"]["CommandId"])' <<<"$command_json")"
+  [[ "$command_id" =~ ^[A-Za-z0-9-]{36}$ ]] || {
+    rm -f -- "$invocation_file"
+    echo "Runner base URL SSM command id is invalid" >&2
+    return 1
+  }
+  invocation_json=""
+  invocation_status=""
+  for _ in $(seq 1 90); do
+    invocation_json="$(run_aws_json ssm get-command-invocation --command-id "$command_id" --instance-id "$RUNNER_ID" --region "$REGION")"
+    printf '%s\n' "$invocation_json" >"$invocation_file"
+    invocation_status="$(python3 -c 'import json,sys; print(json.load(sys.stdin).get("Status", ""))' <<<"$invocation_json")"
+    case "$invocation_status" in
+      Success|Failed|Cancelled|TimedOut|Cancelling) break ;;
+    esac
+    sleep 2
+  done
+  if [[ "$invocation_status" != "Success" ]]; then
+    rm -f -- "$invocation_file"
+    echo "Runner custom HTTPS base URL verification failed: $invocation_status" >&2
+    return 1
+  fi
+  python3 - "$invocation_file" "$receipt" "$RUN_ID" "$BASE_URL" "$alb_dns" "$command_id" <<'PY'
+import hashlib
+import ipaddress
+import json
+import re
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+invocation_path, output_path, run_id, base_url, alb_dns, command_id = sys.argv[1:]
+invocation = json.loads(Path(invocation_path).read_text(encoding="utf-8"))
+stdout = str(invocation.get("StandardOutputContent", ""))
+match = re.search(r"__SCRUM80_RUNNER_BASE_URL_BEGIN__\s*(.*?)\s*__SCRUM80_RUNNER_BASE_URL_END__", stdout, re.DOTALL)
+if not match:
+    raise SystemExit("Runner base URL markers are missing")
+fields = {}
+for line in match.group(1).splitlines():
+    if "=" in line:
+        key, value = line.split("=", 1)
+        fields[key.strip()] = value.strip()
+ips = [value for value in fields.get("IPS", "").split(",") if value]
+if not ips:
+    raise SystemExit("Runner base URL probe returned no ALB IPv4 addresses")
+for value in ips:
+    try:
+        ipaddress.IPv4Address(value)
+    except ipaddress.AddressValueError:
+        raise SystemExit("Runner base URL probe returned an invalid IPv4 address")
+if fields.get("HTTP_CODE") != "200":
+    raise SystemExit("Runner base URL probe did not return HTTP 200")
+Path(output_path).write_text(json.dumps({
+    "schemaVersion": "scrum80-runner-base-url-verification/v1",
+    "status": "ready",
+    "runId": run_id,
+    "baseUrl": base_url,
+    "albDnsName": alb_dns,
+    "targetHostIps": ips,
+    "httpCode": int(fields["HTTP_CODE"]),
+    "ssmCommandId": command_id,
+    "ssmStatus": invocation.get("Status"),
+    "stdoutSha256": hashlib.sha256(stdout.encode("utf-8")).hexdigest(),
+    "stderrSha256": hashlib.sha256(str(invocation.get("StandardErrorContent", "")).encode("utf-8")).hexdigest(),
+    "rawOutputStored": False,
+    "recordedAtUtc": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
+}, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+PY
+  AWS_TARGET_HOST_IPS="$(python3 - "$receipt" <<'PY'
+import json
+import sys
+print(",".join(json.load(open(sys.argv[1], encoding="utf-8")).get("targetHostIps", [])))
+PY
+)"
+  export AWS_TARGET_HOST_IPS
+  rm -f -- "$invocation_file"
+}
+
 validate_runner_bootstrap_readiness_remote() {
   local receipt="$EVIDENCE_ROOT/aws/runner-readiness-verification.json"
   local invocation_file command_json command_id invocation_json invocation_status command
@@ -971,7 +1083,14 @@ PY
   echo "$runner_validation_json" > "$EVIDENCE_ROOT/aws/runner-validation.json"
   echo "{\"approvedBaseUrl\":\"$BASE_URL\",\"albDnsName\":\"$dns_name\"}" > "$EVIDENCE_ROOT/aws/base-url-validation.json"
   if [[ "$DRY_RUN" != "1" ]]; then
-    curl --silent --show-error --max-time 10 --output /dev/null "$BASE_URL/"
+    if [[ "$TARGET_PLATFORM" == "eks" ]]; then
+      validate_runner_base_url_remote "$dns_name"
+    else
+      curl --silent --show-error --max-time 10 --output /dev/null "$BASE_URL/"
+    fi
+  else
+    AWS_TARGET_HOST_IPS=""
+    export AWS_TARGET_HOST_IPS
   fi
   echo "$asg_json" > "$EVIDENCE_ROOT/aws/asg-activities.json"
   if [[ "$DRY_RUN" == "1" ]]; then
