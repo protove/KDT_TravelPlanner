@@ -367,6 +367,18 @@ class AwsOrchestrationContractTests(unittest.TestCase):
         self.assertIn('kill -TERM "$slo_producer_pid"', runner_source)
         self.assertIn('"$slo_producer_status" -eq 143', runner_source)
 
+    def test_adaptive_k6_stage_owns_container_and_finishes_signal_cleanup(self) -> None:
+        runner_source = AWS_PHASE_RUNNER.parent.joinpath("run-k6-aws-scenario.sh").read_text(encoding="utf-8")
+        phase_source = AWS_PHASE_RUNNER.read_text(encoding="utf-8")
+        self.assertIn('container_name_suffix="${RUN_ID//[^A-Za-z0-9_.-]/-}"', runner_source)
+        self.assertIn('container_name_suffix="${container_name_suffix}-stage-${CAPACITY_STAGE_INDEX}"', runner_source)
+        self.assertIn('container_name_suffix="${container_name_suffix}-$(basename "$RUN_DIR")"', runner_source)
+        self.assertIn('trap handle_workload_signal INT TERM', runner_source)
+        self.assertIn('docker inspect --format \'{{.State.Running}}\'', runner_source)
+        self.assertIn('while :; do\n  wait "$k6_pid"', runner_source)
+        self.assertIn('"workloadSignalReceived": signal_received == "1"', runner_source)
+        self.assertIn('trap handle_phase_signal INT TERM', phase_source)
+
     def test_eks_baseline_creates_phase_directory_before_observer_redirect(self) -> None:
         phase_source = AWS_PHASE_RUNNER.read_text(encoding="utf-8")
         self.assertIn('mkdir -p "$run_dir"', phase_source)

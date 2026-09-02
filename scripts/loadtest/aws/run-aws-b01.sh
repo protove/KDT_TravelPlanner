@@ -15,6 +15,18 @@ set -euo pipefail
 PHASE="${1:?usage: run-aws-b01.sh <smoke|ramp|baseline|spike|soak|scale-step|capacity-stress|pod-scale-out|node-scale-out-breakpoint|recovery> [rep]}"
 REP="${2:-}"
 
+# The adaptive capacity coordinator sends SIGINT at a clean stage boundary.
+# Keep the phase wrapper alive while run-k6-aws-scenario.sh flushes and seals
+# its evidence; without this trap the wrapper exits with -SIGINT and the next
+# rate can collide with the prior stage's stopped Docker container.
+phase_signal_received=0
+handle_phase_signal() {
+  phase_signal_received=1
+}
+if [[ "$PHASE" == "capacity-stress" ]]; then
+  trap handle_phase_signal INT TERM
+fi
+
 : "${REPOSITORY_ROOT:?REPOSITORY_ROOT is required}"
 : "${EVIDENCE_ROOT:?EVIDENCE_ROOT is required}"
 : "${BASE_URL:?BASE_URL is required}"

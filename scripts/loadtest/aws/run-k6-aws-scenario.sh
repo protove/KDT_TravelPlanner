@@ -316,7 +316,48 @@ PY
 
 python3 "$REPOSITORY_ROOT/scripts/loadtest/record-rehearsal-event.py" "$RUN_DIR" RUN_START "AWS k6 scenario $SCENARIO started" --actor automation
 set +e
-K6_CONTAINER_NAME="loadtest-aws-k6-${RUN_ID//[^A-Za-z0-9_.-]/-}"
+# Adaptive capacity stages reuse one phase RUN_ID while changing the target
+# rate. Include the stage index and evidence-directory name so every stage
+# owns a distinct container. This also makes a resumed stage's stale stopped
+# container unambiguous and safe to remove below.
+container_name_suffix="${RUN_ID//[^A-Za-z0-9_.-]/-}"
+if [[ -n "${CAPACITY_STAGE_INDEX:-}" ]]; then
+  container_name_suffix="${container_name_suffix}-stage-${CAPACITY_STAGE_INDEX}"
+fi
+if [[ "$SCENARIO" == "capacity-stress" && -n "$(basename "$RUN_DIR")" ]]; then
+  container_name_suffix="${container_name_suffix}-$(basename "$RUN_DIR")"
+fi
+K6_CONTAINER_NAME="loadtest-aws-k6-${container_name_suffix}"
+
+# A coordinator intentionally sends SIGINT at a clean adaptive stage
+# boundary. Keep this shell alive long enough to wait for k6, seal
+# run-status.json, and remove its own container. The signal is also delivered
+# to the Docker child by the process-group coordinator; forwarding it here
+# covers direct/operator invocation where only this shell is signalled.
+signal_received=0
+k6_pid=""
+handle_workload_signal() {
+  signal_received=1
+  if [[ -n "$k6_pid" ]] && kill -0 "$k6_pid" 2>/dev/null; then
+    kill -INT "$k6_pid" 2>/dev/null || true
+  fi
+}
+trap handle_workload_signal INT TERM
+
+# A previous interrupted stage may have left its stopped container behind.
+# Remove only that exact, non-running name; never kill a live container that
+# could belong to a concurrent run.
+if docker inspect "$K6_CONTAINER_NAME" >/dev/null 2>&1; then
+  existing_running="$(docker inspect --format '{{.State.Running}}' "$K6_CONTAINER_NAME" 2>/dev/null || true)"
+  if [[ "$existing_running" == "true" ]]; then
+    echo "k6 container name is already running: $K6_CONTAINER_NAME" >&2
+    exit 4
+  fi
+  if ! docker rm "$K6_CONTAINER_NAME" >/dev/null 2>&1; then
+    echo "unable to remove stale k6 container: $K6_CONTAINER_NAME" >&2
+    exit 4
+  fi
+fi
 : > "$RUN_DIR/runner-stats.jsonl"
 : > "$RUN_DIR/mock-stats.jsonl"
 slo_producer_pid=""
@@ -404,8 +445,16 @@ while kill -0 "$k6_pid" 2>/dev/null; do
   fi
   sleep 5
 done
-wait "$k6_pid"
-k6_status=$?
+# A trapped signal can interrupt wait(2) before the Docker child has exited.
+# Continue waiting until the child is actually gone so inspect/cleanup cannot
+# race the k6 process that is flushing its JSON output.
+while :; do
+  wait "$k6_pid"
+  k6_status=$?
+  if ! kill -0 "$k6_pid" 2>/dev/null; then
+    break
+  fi
+done
 set -e
 cat "$RUN_DIR/stdout.log"
 
@@ -532,16 +581,17 @@ if [[ -n "$slo_producer_pid" ]]; then
   set -e
 fi
 
-python3 - "$RUN_DIR/run-status.json" "$k6_status" "$oom_killed" "$restart_count" "$slo_producer_status" <<'PY'
+python3 - "$RUN_DIR/run-status.json" "$k6_status" "$oom_killed" "$restart_count" "$slo_producer_status" "$signal_received" <<'PY'
 import json
 import sys
 from pathlib import Path
-output, k6_status, oom_killed, restart_count, slo_producer_status = sys.argv[1:]
+output, k6_status, oom_killed, restart_count, slo_producer_status, signal_received = sys.argv[1:]
 Path(output).write_text(json.dumps({
     "k6ExitCode": int(k6_status),
     "k6ContainerOomKilled": oom_killed == "true",
     "k6ContainerRestartCount": int(restart_count),
     "sloWindowProducerExitCode": int(slo_producer_status),
+    "workloadSignalReceived": signal_received == "1",
 }, indent=2) + "\n", encoding="utf-8")
 PY
 python3 "$REPOSITORY_ROOT/scripts/loadtest/record-rehearsal-event.py" "$RUN_DIR" RUN_END "AWS k6 exit code $k6_status" --actor automation
