@@ -128,13 +128,38 @@ def extension_allowed(snapshots: list[dict]) -> bool:
     return False
 
 
+def backend_unhealthy_terminal(item: dict) -> bool:
+    """Keep readiness lag separate from a real backend runtime failure.
+
+    During an adaptive EKS stage a Deployment can temporarily report
+    ``unavailableReplicas`` while HPA has increased the desired count and a
+    new Pod/Node is still becoming ready. Treating that transient gap as
+    ``BACKEND_UNHEALTHY`` ends the breakpoint before autoscaling converges.
+    Restarts or an observed CrashLoop remain a real backend terminal;
+    readiness-only gaps are left to the SLO/throughput and pending contracts.
+    """
+    if item.get("backendUnhealthy") is not True:
+        return False
+    restart_count = item.get("backendRestartCount")
+    try:
+        if float(restart_count) > 0:
+            return True
+    except (TypeError, ValueError):
+        pass
+    pods = item.get("backendPods") if isinstance(item.get("backendPods"), dict) else {}
+    placements = pods.get("placement") if isinstance(pods.get("placement"), list) else []
+    if any(isinstance(pod, dict) and pod.get("crashLoopBackOff") is True for pod in placements):
+        return True
+    # unavailableReplicas without a restart/CrashLoop is a readiness gap.
+    return False
+
+
 def terminal_reason(snapshots: list[dict], stability_seconds: int) -> str | None:
     # A desired/ready node count of four is only scale-out evidence. Maximum
     # capacity is terminal only when the observer explicitly proves a
     # max-node Pending/scheduling ceiling or emits maxCapacityReached.
     for reason, key in (
         ("BACKEND_OOM", "backendOom"),
-        ("BACKEND_UNHEALTHY", "backendUnhealthy"),
         ("ALB_SATURATION", "albSaturated"),
         ("NODE_SCALE_FAILED", "nodeScaleFailed"),
         ("NODE_SCALE_NOT_TRIGGERED", "nodeScaleNotTriggered"),
@@ -142,6 +167,9 @@ def terminal_reason(snapshots: list[dict], stability_seconds: int) -> str | None
     ):
         if true_for_seconds(snapshots, lambda item, field=key: item.get(field) is True, stability_seconds):
             return reason
+
+    if true_for_seconds(snapshots, backend_unhealthy_terminal, stability_seconds):
+        return "BACKEND_UNHEALTHY"
 
     if true_for_seconds(snapshots, lambda item: item.get("hpaCapacityExhausted") is True, stability_seconds):
         return "HPA_CAPACITY_EXHAUSTED"

@@ -83,6 +83,32 @@ class CapacityStressCoordinatorTest(unittest.TestCase):
         ]
         self.assertEqual(MODULE.terminal_reason(snapshots, 120), "NODE_SCALE_FAILED")
 
+    def test_readiness_gap_during_scale_out_is_not_backend_terminal(self) -> None:
+        snapshots = [
+            {
+                "ts": utc(0),
+                "backendUnhealthy": True,
+                "backendRestartCount": 0,
+                "newPodNotReady": True,
+                "backendPods": {"placement": [{"crashLoopBackOff": False}]},
+            },
+            {
+                "ts": utc(120),
+                "backendUnhealthy": True,
+                "backendRestartCount": 0,
+                "newPodNotReady": True,
+                "backendPods": {"placement": [{"crashLoopBackOff": False}]},
+            },
+        ]
+        self.assertIsNone(MODULE.terminal_reason(snapshots, 120))
+
+    def test_backend_restart_remains_a_terminal_failure(self) -> None:
+        snapshots = [
+            {"ts": utc(0), "backendUnhealthy": True, "backendRestartCount": 1},
+            {"ts": utc(120), "backendUnhealthy": True, "backendRestartCount": 1},
+        ]
+        self.assertEqual(MODULE.terminal_reason(snapshots, 120), "BACKEND_UNHEALTHY")
+
     def test_adaptive_parse_rejects_more_than_one_extension(self) -> None:
         with self.assertRaises(SystemExit):
             MODULE.parse_args([
