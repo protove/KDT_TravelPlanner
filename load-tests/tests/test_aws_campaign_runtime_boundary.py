@@ -14,12 +14,15 @@ PROFILE = ROOT / "load-tests/aws/profiles/eks-monolith-msa-boundary-v1.1.json"
 
 
 class AwsCampaignRuntimeBoundaryTest(unittest.TestCase):
-    def make_context(self, path: Path, *, minutes: int = 60) -> None:
-        path.write_text(json.dumps({
+    def make_context(self, path: Path, *, minutes: int = 60, policy: str | None = None) -> None:
+        payload = {
             "runId": "scrum80-runtime-boundary-test",
             "deadlineUtc": (datetime.now(timezone.utc) + timedelta(minutes=minutes)).isoformat(timespec="seconds").replace("+00:00", "Z"),
             "reserveMinutes": 10,
-        }) + "\n", encoding="utf-8")
+        }
+        if policy:
+            payload.update({"policy": policy, "deadlineUtc": None, "reserveMinutes": None})
+        path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
 
     def run_wrapper(self, context: Path, lock: Path, *args: str) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
@@ -65,6 +68,28 @@ class AwsCampaignRuntimeBoundaryTest(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("deadline/reserve", result.stderr)
             self.assertFalse(lock.exists())
+
+    def test_terminal_and_closure_policy_allows_long_run_without_deadline(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            context = root / "context.json"
+            lock = root / "scrum80-lifecycle.lock"
+            self.make_context(context, policy="until-validated-terminal-and-closure")
+            run = self.run_wrapper(context, lock, "--dry-run", "--", "true")
+            self.assertEqual(run.returncode, 0, run.stderr)
+            payload = json.loads(run.stdout)
+            self.assertEqual(payload["policy"], "until-validated-terminal-and-closure")
+            self.assertIsNone(payload["remainingSeconds"])
+            self.assertIsNone(payload["deadlineUtc"])
+
+            run = self.run_wrapper(context, lock, "--", "true")
+            self.assertEqual(run.returncode, 0, run.stderr)
+            metadata = json.loads((lock / "metadata.json").read_text(encoding="utf-8"))
+            self.assertEqual(metadata["policy"], "until-validated-terminal-and-closure")
+            self.assertIsInstance(metadata["pid"], int)
+            self.assertGreater(metadata["pid"], 0)
+            release = self.run_wrapper(context, lock, "--release-lock")
+            self.assertEqual(release.returncode, 0, release.stderr)
 
     def test_v11_profile_keeps_terminal_only_continuation_contract(self) -> None:
         profile = json.loads(PROFILE.read_text(encoding="utf-8"))

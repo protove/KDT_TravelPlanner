@@ -17,7 +17,7 @@ usage: run-scrum80-lifecycle.sh --context PATH --cleanup-lock PATH [options] -- 
        run-scrum80-lifecycle.sh --context PATH --cleanup-lock PATH --release-lock
 
 Required:
-  --context PATH       Secret-free JSON with runId, deadlineUtc and reserveMinutes
+  --context PATH       Secret-free JSON with runId and lifecycle policy. Legacy contexts also carry deadlineUtc/reserveMinutes.
   --cleanup-lock PATH  Exact absolute lock directory ending in scrum80-lifecycle.lock
 
 Options:
@@ -85,26 +85,37 @@ if not isinstance(payload, dict):
 run_id = payload.get("runId")
 if not isinstance(run_id, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}", run_id):
     raise SystemExit("context.runId is invalid")
-deadline_raw = payload.get("deadlineUtc")
-if not isinstance(deadline_raw, str) or not deadline_raw.endswith("Z"):
-    raise SystemExit("context.deadlineUtc must be an ISO-8601 UTC timestamp ending in Z")
-try:
-    deadline = datetime.fromisoformat(deadline_raw[:-1] + "+00:00")
-except ValueError as error:
-    raise SystemExit(f"context.deadlineUtc is invalid: {error}")
-if deadline.tzinfo != timezone.utc:
-    raise SystemExit("context.deadlineUtc must use UTC")
-reserve = payload.get("reserveMinutes")
-if not isinstance(reserve, int) or reserve < 0:
-    raise SystemExit("context.reserveMinutes must be a non-negative integer")
-remaining = (deadline - datetime.now(timezone.utc)).total_seconds()
+policy = payload.get("policy", "legacy-deadline-reserve")
+if policy == "until-validated-terminal-and-closure":
+    deadline_raw = None
+    reserve = None
+    remaining = None
+elif policy == "legacy-deadline-reserve":
+    deadline_raw = payload.get("deadlineUtc")
+    if not isinstance(deadline_raw, str) or not deadline_raw.endswith("Z"):
+        raise SystemExit("context.deadlineUtc must be an ISO-8601 UTC timestamp ending in Z")
+    try:
+        deadline = datetime.fromisoformat(deadline_raw[:-1] + "+00:00")
+    except ValueError as error:
+        raise SystemExit(f"context.deadlineUtc is invalid: {error}")
+    if deadline.tzinfo != timezone.utc:
+        raise SystemExit("context.deadlineUtc must use UTC")
+    reserve = payload.get("reserveMinutes")
+    if not isinstance(reserve, int) or reserve < 0:
+        raise SystemExit("context.reserveMinutes must be a non-negative integer")
+    remaining = (deadline - datetime.now(timezone.utc)).total_seconds()
+else:
+    raise SystemExit("context.policy is unsupported")
 digest = hashlib.sha256(path.read_bytes()).hexdigest()
-print("\t".join((run_id, deadline_raw, str(reserve), f"{remaining:.3f}", digest)))
+print("\t".join((policy, run_id, deadline_raw or "-", "-" if reserve is None else str(reserve), "-" if remaining is None else f"{remaining:.3f}", digest)))
 PY
 )"
-IFS=$'\t' read -r RUN_ID DEADLINE_UTC RESERVE_MINUTES REMAINING_SECONDS CONTEXT_SHA256 <<< "$context_line"
+IFS=$'\t' read -r LIFECYCLE_POLICY RUN_ID DEADLINE_UTC RESERVE_MINUTES REMAINING_SECONDS CONTEXT_SHA256 <<< "$context_line"
+[[ "$DEADLINE_UTC" == "-" ]] && DEADLINE_UTC=""
+[[ "$RESERVE_MINUTES" == "-" ]] && RESERVE_MINUTES=""
+[[ "$REMAINING_SECONDS" == "-" ]] && REMAINING_SECONDS=""
 
-if [[ "$RELEASE_LOCK" != "1" ]]; then
+if [[ "$RELEASE_LOCK" != "1" && "$LIFECYCLE_POLICY" == "legacy-deadline-reserve" ]]; then
   python3 - "$REMAINING_SECONDS" "$RESERVE_MINUTES" <<'PY'
 import sys
 if float(sys.argv[1]) <= int(sys.argv[2]) * 60:
@@ -134,17 +145,19 @@ PY
 fi
 
 if [[ "$DRY_RUN" == "1" ]]; then
-  python3 - "$RUN_ID" "$DEADLINE_UTC" "$RESERVE_MINUTES" "$REMAINING_SECONDS" "$CONTEXT_SHA256" "$COMMAND_COUNT" <<'PY'
+  python3 - "$LIFECYCLE_POLICY" "$RUN_ID" "$DEADLINE_UTC" "$RESERVE_MINUTES" "$REMAINING_SECONDS" "$CONTEXT_SHA256" "$COMMAND_COUNT" <<'PY'
 import json
 import sys
+policy, run_id, deadline, reserve, remaining, context_sha, command_count = sys.argv[1:]
 print(json.dumps({
-    "runId": sys.argv[1],
-    "deadlineUtc": sys.argv[2],
-    "reserveMinutes": int(sys.argv[3]),
-    "remainingSeconds": float(sys.argv[4]),
-    "contextSha256": sys.argv[5],
+    "policy": policy,
+    "runId": run_id,
+    "deadlineUtc": deadline or None,
+    "reserveMinutes": int(reserve) if reserve else None,
+    "remainingSeconds": float(remaining) if remaining else None,
+    "contextSha256": context_sha,
     "lockPathValidated": True,
-    "commandArgumentCount": int(sys.argv[6]),
+    "commandArgumentCount": int(command_count),
     "lockCreated": False,
 }, sort_keys=True))
 PY
@@ -156,20 +169,22 @@ if ! mkdir "$CLEANUP_LOCK" 2>/dev/null; then
   echo "cleanup lock is already held: $CLEANUP_LOCK" >&2
   exit 1
 fi
-python3 - "$CLEANUP_LOCK/metadata.json" "$RUN_ID" "$DEADLINE_UTC" "$RESERVE_MINUTES" "$CONTEXT_SHA256" <<'PY'
+python3 - "$CLEANUP_LOCK/metadata.json" "$LIFECYCLE_POLICY" "$RUN_ID" "$DEADLINE_UTC" "$RESERVE_MINUTES" "$CONTEXT_SHA256" <<'PY'
 import json
 import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-Path(sys.argv[1]).write_text(json.dumps({
+path, policy, run_id, deadline, reserve, context_sha = sys.argv[1:]
+Path(path).write_text(json.dumps({
     "schemaVersion": "scrum80-lifecycle-lock/v1",
-    "runId": sys.argv[2],
-    "deadlineUtc": sys.argv[3],
-    "reserveMinutes": int(sys.argv[4]),
-    "contextSha256": sys.argv[5],
-    "pid": os.getpid(),
+    "policy": policy,
+    "runId": run_id,
+    "deadlineUtc": deadline or None,
+    "reserveMinutes": int(reserve) if reserve else None,
+    "contextSha256": context_sha,
+    "pid": os.getppid(),
     "status": "running",
     "startedAtUtc": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
 }, indent=2) + "\n", encoding="utf-8")
