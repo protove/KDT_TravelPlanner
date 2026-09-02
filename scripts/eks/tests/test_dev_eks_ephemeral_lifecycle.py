@@ -96,6 +96,8 @@ class EphemeralLifecycleContractTest(unittest.TestCase):
             "RedisReactiveHealthIndicator",
             "operator-data-evidence",
             "operator cloud smoke evidence checksum",
+            "Backend per-Pod log freshness probe",
+            "127.0.0.1:8080/api/ping",
             'SMOKE_RAW_FILES=("$ingress_json")',
             "SMOKE_RAW_FILES",
             "cleanup_remote",

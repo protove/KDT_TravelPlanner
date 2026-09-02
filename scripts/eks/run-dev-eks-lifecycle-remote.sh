@@ -257,6 +257,17 @@ smoke() {
   getent hosts "$MONITORING_DNS" >/dev/null 2>>"$LOG_FILE" || die "Monitoring private DNS did not resolve"
   private_dns_verified=true
   curl --fail --silent --show-error --connect-timeout 10 --max-time 30 --connect-to "$BACKEND_HOSTNAME:443:$hostname:443" "https://$BACKEND_HOSTNAME/api/ping" >"$WORK_DIR/smoke/public-ping.json" 2>>"$LOG_FILE" || die "ALB HTTPS Backend ping failed"
+  # The public ALB ping intentionally validates the external path, but an ALB
+  # request can land on only one replica.  Probe every Ready Backend Pod on its
+  # loopback so the shared structured-file/Alloy pipeline produces a fresh
+  # event for each replica before the bounded Loki freshness query below.
+  local backend_pods pod_count pod
+  backend_pods="$(kubectl get pods --request-timeout=30s --namespace travel-planner --selector app.kubernetes.io/name=travel-planner-backend --field-selector=status.phase=Running --output jsonpath='{.items[*].metadata.name}')"
+  pod_count="$(wc -w <<<"$backend_pods" | tr -d ' ')"
+  [[ "$pod_count" == "2" ]] || die "Backend does not expose two Running Pods for log freshness"
+  for pod in $backend_pods; do
+    kubectl exec --request-timeout=30s "$pod" --namespace travel-planner --container backend -- sh -c 'if command -v wget >/dev/null 2>&1; then wget -qO /dev/null http://127.0.0.1:8080/api/ping; else exit 42; fi' >>"$LOG_FILE" 2>&1 || die "Backend per-Pod log freshness probe failed"
+  done
   backend_exec_http_with_retry "if command -v wget >/dev/null 2>&1; then wget -qO- 'http://$MONITORING_DNS:9090/api/v1/query?query=up%7Benvironment%3D%22dev-eks%22%2Cplatform%3D%22eks%22%7D'; else exit 42; fi" "$prometheus_json" "Prometheus query failed"
   # Query a bounded recent window after the public ping above has generated a
   # fresh Backend log entry.  The verifier still enforces its 180-second age
