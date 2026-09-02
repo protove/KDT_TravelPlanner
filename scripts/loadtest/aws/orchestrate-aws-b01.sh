@@ -497,13 +497,21 @@ common = {
     "msaHotspotRate": msa_hotspot_rate or None,
 }
 if target_platform == "eks":
+    # target_stage resolves the ALB target-group ARN from AWS immediately
+    # before writing its marker.  On a later invocation the preflight starts
+    # with that runtime value unset, so including it in the target marker's
+    # digest makes an otherwise identical resume look stale.  The target
+    # stage itself records the fresh ARN in its evidence; its idempotency
+    # contract should be bound to the approved ALB/cluster inputs instead of
+    # this derived value.
+    target_group_digest = "" if stage == "target" else target_group_arn
     common["eks"] = {
         "clusterName": eks_cluster_name,
         "nodeGroupName": eks_node_group_name,
         "bastionId": eks_bastion_id,
         "backendNamespace": backend_namespace,
         "backendDeployment": backend_deployment,
-        "targetGroupArnHash": hashlib.sha256(target_group_arn.encode()).hexdigest() if target_group_arn else None,
+        "targetGroupArnHash": hashlib.sha256(target_group_digest.encode()).hexdigest() if target_group_digest else None,
     }
 payload = {
     "stage": stage,

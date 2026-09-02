@@ -148,6 +148,11 @@ class AwsOrchestrationContractTests(unittest.TestCase):
         self.assertIn('"execution": "runner-local"', source)
         self.assertIn('ssmStatus": "local-runner"', source)
 
+    def test_target_resume_digest_does_not_bind_to_runtime_target_group_arn(self) -> None:
+        source = SCRIPT.read_text(encoding="utf-8")
+        self.assertIn('target_group_digest = "" if stage == "target" else target_group_arn', source)
+        self.assertIn('"targetGroupArnHash": hashlib.sha256(target_group_digest.encode()).hexdigest()', source)
+
     def test_help_exposes_approved_operator_inputs(self) -> None:
         result = subprocess.run(
             ["bash", str(SCRIPT), "--help"],
