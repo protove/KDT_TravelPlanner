@@ -751,6 +751,84 @@ validate_runner_base_url_remote() {
   local alb_dns="$1"
   local receipt="$EVIDENCE_ROOT/aws/runner-base-url-verification.json"
   local invocation_file command_json command_id invocation_json invocation_status command
+
+  # The normal operator path probes the private Runner through SSM.  When the
+  # orchestrator itself is dispatched to that Runner (the only host that can
+  # reach the private RDS/Redis endpoints), sending an SSM command back to the
+  # same instance is not permitted by the least-privilege role.  Keep the
+  # exact same HTTPS/SNI/ALB-DNS contract, but execute the probe locally on
+  # that host and emit the same sanitized receipt shape.
+  if [[ "${RUNNER_EXECUTION:-0}" == "1" ]]; then
+    python3 - "$BASE_URL" "$alb_dns" "$receipt" "$RUN_ID" <<'PY'
+import hashlib
+import ipaddress
+import json
+import subprocess
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+from urllib.parse import urlparse
+
+base_url, alb_dns, output_path, run_id = sys.argv[1:]
+host = urlparse(base_url).hostname
+if not host or not alb_dns:
+    raise SystemExit("approved base URL or ALB DNS is missing")
+try:
+    ips = sorted({
+        line.split()[0]
+        for line in subprocess.check_output(
+            ["getent", "ahostsv4", alb_dns], text=True, stderr=subprocess.DEVNULL
+        ).splitlines()
+        if line.split()
+    })
+except (OSError, subprocess.CalledProcessError):
+    raise SystemExit("ALB DNS has no IPv4 address")
+for value in ips:
+    try:
+        ipaddress.IPv4Address(value)
+    except ipaddress.AddressValueError as error:
+        raise SystemExit("Runner base URL probe returned an invalid IPv4 address") from error
+probe_url = f"https://{host}/api/ping"
+completed = subprocess.run(
+    [
+        "curl", "--silent", "--show-error", "--connect-timeout", "10",
+        "--max-time", "30", "--connect-to", f"{host}:443:{alb_dns}:443",
+        "-o", "/dev/null", "-w", "%{http_code}", probe_url,
+    ],
+    capture_output=True, text=True, check=False,
+)
+code = (completed.stdout or "").strip()
+if code != "200":
+    raise SystemExit("Runner base URL probe did not return HTTP 200")
+stdout = f"__SCRUM80_RUNNER_BASE_URL_BEGIN__\nIPS={','.join(ips)}\nHTTP_CODE={code}\n__SCRUM80_RUNNER_BASE_URL_END__\n"
+stderr = completed.stderr or ""
+Path(output_path).write_text(json.dumps({
+    "schemaVersion": "scrum80-runner-base-url-verification/v1",
+    "status": "ready",
+    "runId": run_id,
+    "baseUrl": base_url,
+    "albDnsName": alb_dns,
+    "targetHostIps": ips,
+    "httpCode": 200,
+    "ssmCommandId": None,
+    "ssmStatus": "local-runner",
+    "stdoutSha256": hashlib.sha256(stdout.encode()).hexdigest(),
+    "stderrSha256": hashlib.sha256(stderr.encode()).hexdigest(),
+    "rawOutputStored": False,
+    "execution": "runner-local",
+    "recordedAtUtc": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
+}, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+PY
+    AWS_TARGET_HOST_IPS="$(python3 - "$receipt" <<'PY'
+import json
+import sys
+print(",".join(json.load(open(sys.argv[1], encoding="utf-8")).get("targetHostIps", [])))
+PY
+)"
+    export AWS_TARGET_HOST_IPS
+    return 0
+  fi
+
   invocation_file="$(mktemp "${TMPDIR:-/tmp}/scrum80-runner-base-url.XXXXXX")"
   command="$(python3 - "$BASE_URL" "$alb_dns" <<'PY'
 import shlex
@@ -862,6 +940,58 @@ PY
 validate_runner_bootstrap_readiness_remote() {
   local receipt="$EVIDENCE_ROOT/aws/runner-readiness-verification.json"
   local invocation_file command_json command_id invocation_json invocation_status command
+
+  # In the operator workflow this helper uses SSM to validate the receipts on
+  # the private Runner.  A Runner-dispatched orchestrator already executes on
+  # that host; its IAM role intentionally cannot SendCommand to itself.  Read
+  # the same immutable receipts locally and keep the raw output out of the
+  # evidence bundle.
+  if [[ "${RUNNER_EXECUTION:-0}" == "1" ]]; then
+    python3 - "$receipt" "$RUN_ID" "$SOURCE_COMMIT_SHA" "$K6_IMAGE" "$GOOGLE_MOCK_IMAGE" <<'PY'
+import hashlib
+import json
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+output_path, expected_run, expected_source, expected_k6, expected_mock = sys.argv[1:]
+base_path = Path("/var/lib/travel-planner/load-test-evidence/base-ready.json")
+full_path = Path("/var/lib/travel-planner/load-test-evidence/runner-readiness.json")
+base = json.loads(base_path.read_text(encoding="utf-8"))
+full = json.loads(full_path.read_text(encoding="utf-8"))
+if base.get("status") != "base-ready" or base.get("dockerActive") is not True:
+    raise SystemExit("Runner base readiness status or Docker contract is incomplete")
+if full.get("status") != "ready" or full.get("runId") != expected_run or full.get("sourceCommitSha") != expected_source:
+    raise SystemExit("Runner full-readiness receipt run/source is not ready for this run")
+if full.get("k6ImageReference") != expected_k6 or full.get("mockImageReference") != expected_mock:
+    raise SystemExit("Runner full-readiness image reference does not match this run")
+mock = full.get("mock") if isinstance(full.get("mock"), dict) else {}
+if mock.get("healthStatus") != "ok" or int(mock.get("contractRoutesVerified", 0)) < 4:
+    raise SystemExit("Runner private mock health/body contract is incomplete")
+def digest(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+Path(output_path).write_text(json.dumps({
+    "schemaVersion": "dev-eks-runner-readiness-verification/v1",
+    "status": "ready",
+    "runId": expected_run,
+    "sourceCommitSha": expected_source,
+    "k6ImageReference": expected_k6,
+    "mockImageReference": expected_mock,
+    "mockHealthStatus": mock.get("healthStatus"),
+    "contractRoutesVerified": int(mock.get("contractRoutesVerified", 0)),
+    "baseReceiptSha256": digest(base_path),
+    "fullReceiptSha256": digest(full_path),
+    "ssmCommandId": None,
+    "ssmStatus": "local-runner",
+    "rawOutputStored": False,
+    "execution": "runner-local",
+    "recordedAtUtc": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
+}, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+PY
+    chmod 0600 "$receipt"
+    return 0
+  fi
+
   invocation_file="$(mktemp "${TMPDIR:-/tmp}/scrum80-runner-readiness.XXXXXX")"
   command="$(python3 - "$RUN_ID" "$SOURCE_COMMIT_SHA" "$K6_IMAGE" "$GOOGLE_MOCK_IMAGE" <<'PY'
 import shlex

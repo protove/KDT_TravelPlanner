@@ -142,6 +142,12 @@ class AwsOrchestrationContractTests(unittest.TestCase):
         self.assertNotIn('[[ -s "$base_receipt" ]]', source)
         self.assertIn('base.get("status") != "base-ready" or base.get("dockerActive") is not True', source)
 
+    def test_runner_dispatched_orchestrator_uses_local_receipts_without_self_ssm(self) -> None:
+        source = SCRIPT.read_text(encoding="utf-8")
+        self.assertIn('if [[ "${RUNNER_EXECUTION:-0}" == "1" ]]', source)
+        self.assertIn('"execution": "runner-local"', source)
+        self.assertIn('ssmStatus": "local-runner"', source)
+
     def test_help_exposes_approved_operator_inputs(self) -> None:
         result = subprocess.run(
             ["bash", str(SCRIPT), "--help"],
