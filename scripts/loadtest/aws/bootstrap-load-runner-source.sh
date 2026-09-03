@@ -255,7 +255,7 @@ lines = [
     'cat "$BASE_ROOT/runner-readiness.json"',
     'printf "%s\\n" __SCRUM80_RUNNER_READINESS_REFRESH_END__',
 ]
-print("\\n".join(lines))
+print("\n".join(lines))
 PY
   )"
   local ssm_parameters

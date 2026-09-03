@@ -155,6 +155,10 @@ class LoadRunnerBootstrapContractTests(unittest.TestCase):
         source = BOOTSTRAP.read_text(encoding="utf-8")
         self.assertIn("--refresh-readiness-only", source)
         self.assertIn('sourceDeliveryMode": "existing-runner-source"', source)
+        # The generated SSM payload must contain real line breaks. A literal
+        # backslash-n makes the whole script one shell command and fails before
+        # any readiness output is emitted.
+        self.assertIn('print("\\n".join(lines))', source)
         self.assertNotIn('s3api put-object --bucket "$ARCHIVE_BUCKET" --key "$READINESS_KEY"', source)
         self.assertNotIn("readinessS3HeadReadBack", source)
 
