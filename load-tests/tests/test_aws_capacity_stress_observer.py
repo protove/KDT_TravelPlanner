@@ -236,6 +236,33 @@ class ObserverContractTests(unittest.TestCase):
             self.assertEqual(snapshot["backendPods"], {})
             self.assertIn("eks:live-refresh-failed", snapshot["observationErrors"])
 
+    def test_stage_pointer_cannot_escape_campaign_run_directory(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw).resolve()
+            inside = root / "k6" / "rate-64" / "snapshots.jsonl"
+            outside = root.parent / "outside.jsonl"
+            self.assertEqual(MODULE._safe_pointer_path(root, str(inside)), inside)
+            self.assertIsNone(MODULE._safe_pointer_path(root, str(outside)))
+
+    def test_stage_pointer_updates_all_observer_inputs(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw).resolve()
+            pointer = root / "continuity" / "current-stage.json"
+            pointer.parent.mkdir(parents=True)
+            paths = {
+                "metadataFile": root / "k6/rate-64/metadata.json",
+                "runnerStatsFile": root / "k6/rate-64/runner-stats.jsonl",
+                "sloWindowFile": root / "k6/rate-64/slo-windows.jsonl",
+                "snapshotFile": root / "k6/rate-64/snapshots.jsonl",
+            }
+            pointer.write_text(json.dumps({key: str(value) for key, value in paths.items()}), encoding="utf-8")
+            args = argparse.Namespace(run_dir=root, stage_pointer_file=pointer)
+            MODULE.apply_stage_pointer(args)
+            self.assertEqual(args.metadata_file, paths["metadataFile"])
+            self.assertEqual(args.runner_stats_file, paths["runnerStatsFile"])
+            self.assertEqual(args.slo_window_file, paths["sloWindowFile"])
+            self.assertEqual(args.snapshot_file, paths["snapshotFile"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -153,6 +153,46 @@ def read_optional(path: Path | None) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
+def _safe_pointer_path(run_dir: Path, value: object) -> Path | None:
+    """Resolve a stage-pointer path without allowing it outside the run."""
+    if not isinstance(value, str) or not value:
+        return None
+    candidate = Path(value).expanduser().resolve()
+    root = run_dir.resolve()
+    try:
+        if os.path.commonpath((str(root), str(candidate))) != str(root):
+            return None
+    except ValueError:
+        return None
+    return candidate
+
+
+def apply_stage_pointer(args: argparse.Namespace) -> dict[str, Any]:
+    """Refresh the live stage paths used by one campaign observer.
+
+    The observer remains one process across rate handoffs.  The orchestrator
+    atomically updates this small pointer to the current stage (or a
+    transition file); snapshots are therefore written once to the active
+    segment while the read-only AWS polling continues through the gap.
+    """
+    pointer_path = getattr(args, "stage_pointer_file", None)
+    if pointer_path is None:
+        return {}
+    pointer = read_optional(pointer_path)
+    run_dir = args.run_dir.resolve()
+    for field in ("metadataFile", "runnerStatsFile", "sloWindowFile", "snapshotFile"):
+        key = {
+            "metadataFile": "metadata_file",
+            "runnerStatsFile": "runner_stats_file",
+            "sloWindowFile": "slo_window_file",
+            "snapshotFile": "snapshot_file",
+        }[field]
+        resolved = _safe_pointer_path(run_dir, pointer.get(field))
+        if resolved is not None:
+            setattr(args, key, resolved)
+    return pointer
+
+
 def last_jsonl(path: Path | None) -> dict[str, Any]:
     if path is None or not path.is_file():
         return {}
@@ -594,12 +634,23 @@ def collect_snapshot(args: argparse.Namespace, aws: AwsReadOnly) -> dict[str, An
     ready_pods = deployment_evidence.get("readyReplicas") if isinstance(deployment_evidence, Mapping) else None
     deployment_unavailable = deployment_evidence.get("unavailableReplicas") if isinstance(deployment_evidence, Mapping) else None
     restart_count = backend_pods.get("restartCount") if isinstance(backend_pods, Mapping) else None
+    previous_restart_count = previous.get("backendRestartCount")
+    if previous_restart_count is None and isinstance(previous.get("backendPods"), Mapping):
+        previous_restart_count = previous["backendPods"].get("restartCount")
+    reported_restart_delta = backend_pods.get("restartDelta") if isinstance(backend_pods, Mapping) else None
+    if isinstance(reported_restart_delta, (int, float)) and not isinstance(reported_restart_delta, bool):
+        restart_delta = float(reported_restart_delta)
+    elif isinstance(restart_count, (int, float)) and not isinstance(restart_count, bool) and isinstance(previous_restart_count, (int, float)) and not isinstance(previous_restart_count, bool):
+        restart_delta = float(restart_count) - float(previous_restart_count)
+    else:
+        restart_delta = None
+    restart_increased = restart_delta is not None and restart_delta > 0
     alb_healthy = platform_evidence.get("alb", {}).get("healthyTargetCount") if isinstance(platform_evidence.get("alb"), Mapping) else None
     alb_target_count = platform_evidence.get("alb", {}).get("targetCount") if isinstance(platform_evidence.get("alb"), Mapping) else None
     node_scale_in_progress = isinstance(capacity.get("desired"), int) and isinstance(evidence_ready_nodes, int) and capacity["desired"] > evidence_ready_nodes
     new_pod_not_ready = isinstance(hpa_desired, int) and isinstance(ready_pods, int) and hpa_desired > ready_pods
     backend_oom = any(item.get("oomKilled") is True for item in backend_pods.get("placement", []) if isinstance(item, Mapping)) if isinstance(backend_pods, Mapping) else False
-    backend_unhealthy = (isinstance(deployment_unavailable, int) and deployment_unavailable > 0) or (isinstance(restart_count, int) and restart_count > 0)
+    backend_unhealthy = (isinstance(deployment_unavailable, int) and deployment_unavailable > 0) or restart_increased
     alb_saturated = isinstance(alb_healthy, int) and isinstance(alb_target_count, int) and alb_target_count > 0 and alb_healthy == 0
     data_tier_signals = {
         "rdsCpu": isinstance(cloudwatch.get("rdsCpuPercent"), (int, float)) and cloudwatch["rdsCpuPercent"] >= 100,
@@ -652,6 +703,8 @@ def collect_snapshot(args: argparse.Namespace, aws: AwsReadOnly) -> dict[str, An
         "newPodNotReady": new_pod_not_ready,
         "albHealthy": alb_healthy is None or alb_healthy > 0,
         "backendRestartCount": restart_count,
+        "backendRestartDelta": restart_delta,
+        "backendRestartIncreased": restart_increased if restart_delta is not None else None,
         "backendOom": backend_oom,
         "backendUnhealthy": backend_unhealthy,
         "albSaturated": alb_saturated,
@@ -760,6 +813,12 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--sample-json", type=Path, default=None)
     parser.add_argument("--snapshot-file", type=Path, default=None)
+    parser.add_argument(
+        "--stage-pointer-file",
+        type=Path,
+        default=None,
+        help="Optional run-local JSON pointer updated by the orchestrator while one observer spans stages.",
+    )
     parser.add_argument("--poll-seconds", type=float, default=10.0)
     parser.add_argument("--once", action="store_true")
     args = parser.parse_args(argv)
@@ -779,8 +838,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     snapshot_path = (args.snapshot_file or run_dir / "snapshots.jsonl").resolve()
     aws = AwsReadOnly(region=args.region, profile=args.profile)
     while True:
+        pointer = apply_stage_pointer(args)
         snapshot = collect_snapshot(args, aws)
-        with snapshot_path.open("a", encoding="utf-8") as output:
+        output_path = _safe_pointer_path(run_dir, pointer.get("snapshotFile")) or snapshot_path
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        with output_path.open("a", encoding="utf-8") as output:
             output.write(json.dumps(snapshot, sort_keys=True) + "\n")
         print(json.dumps({"ts": snapshot["ts"], "platform": snapshot.get("platform"), "logicalCapacity": snapshot.get("logicalCapacity")}, sort_keys=True), flush=True)
         if args.once:
