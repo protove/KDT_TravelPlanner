@@ -165,10 +165,15 @@ def _valid_windows(stage: Path) -> list[dict[str, Any]]:
             or row.get("endUtc")
             or row.get("ts")
         )
+        start_ts = parse_time(
+            row.get("sloWindowStartUtc")
+            or row.get("windowStartUtc")
+            or row.get("startUtc")
+        )
         if not key or ts is None or key in seen:
             continue
         seen.add(key)
-        result.append({"id": key, "ts": ts})
+        result.append({"id": key, "ts": ts, "startTs": start_ts})
     return sorted(result, key=lambda row: row["ts"])
 
 
@@ -213,11 +218,26 @@ def evaluate(
         result["reasonCodes"].append("OBSERVATION_GAP")
     inputs = metadata.get("effectiveInputs") if isinstance(metadata.get("effectiveInputs"), Mapping) else {}
     metadata_rate = _number(metadata.get("rate") or inputs.get("baseRate"))
+    windows = _valid_windows(stage)
     stable = [row for row in snapshots if _stable_snapshot(row, metadata_rate)]
     if stable:
         stable_times = [parse_time(row.get("ts") or row.get("timestamp")) for row in stable]
         stable_times = [value for value in stable_times if value is not None]
-        if not stable_times or stable_times[-1] - stable_times[0] < stable_window_seconds * required_windows:
+        stable_span = stable_times[-1] - stable_times[0] if stable_times else 0
+        if len(windows) >= required_windows:
+            first_window = windows[-required_windows]
+            first_start = first_window.get("startTs")
+            if first_start is None:
+                first_start = first_window["ts"] - stable_window_seconds
+            window_span = windows[-1]["ts"] - first_start
+        else:
+            window_span = 0
+        # Observer polls can land just inside a complete SLO window boundary
+        # (for example 27-second EKS/SSM polling), making the raw snapshot span
+        # a few seconds shorter than the required 2x60s proof.  Complete SLO
+        # windows are the authoritative timing contract; accept that proof
+        # when the snapshots themselves are otherwise stable and fresh.
+        if not stable_times or max(stable_span, window_span) < stable_window_seconds * required_windows:
             result["reasonCodes"].append("STABLE_DURATION_SHORT")
     else:
         result["reasonCodes"].append("HEALTHY_WINDOW_MISSING")
@@ -230,7 +250,6 @@ def evaluate(
     }
     if len(fingerprints) > 1:
         result["reasonCodes"].append("IDENTITY_CHANGED")
-    windows = _valid_windows(stage)
     result["windowCount"] = len(windows)
     result["windowIds"] = [row["id"] for row in windows]
     if len(windows) < required_windows or (len(windows) >= required_windows and windows[-1]["ts"] - windows[-required_windows]["ts"] < stable_window_seconds):

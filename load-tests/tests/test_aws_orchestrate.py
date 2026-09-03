@@ -356,6 +356,7 @@ class AwsOrchestrationContractTests(unittest.TestCase):
         self.assertIn("requalification-", source)
         self.assertIn("CAPACITY_DROPPED", helper_source)
         self.assertIn("IDENTITY_CHANGED", helper_source)
+        self.assertNotIn("CONTINUITY_CHECK", source)
 
     def test_shared_k6_profile_gets_action_time_platform_environment(self) -> None:
         runner_source = AWS_PHASE_RUNNER.parent.joinpath("run-k6-aws-scenario.sh").read_text(encoding="utf-8")

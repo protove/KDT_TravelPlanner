@@ -2181,8 +2181,6 @@ PY
         --fast-handoff-gap-seconds 10
       continuity_status=$?
       set -e
-      python3 "$REPOSITORY_ROOT/scripts/loadtest/record-rehearsal-event.py" "$continuity_dir" CONTINUITY_CHECK \
-        "next=${target_rate} previous=${previous_stage_dir} decision=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("decision", "BLOCK"))' "$continuity_verdict" 2>/dev/null || echo BLOCK)" --actor automation || true
       if [[ "$continuity_status" -eq 10 ]]; then
         pending_high_rate="$target_rate"
         target_rate="$(python3 - "$continuity_verdict" "${CONFIRMED_RATE:-}" <<'PY'

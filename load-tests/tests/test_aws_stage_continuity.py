@@ -170,6 +170,29 @@ class StageContinuityTests(unittest.TestCase):
             self.assertEqual(verdict["decision"], "ALLOW")
             self.assertEqual(verdict["windowCount"], 2)
 
+    def test_complete_slo_windows_cover_short_polling_span(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "rate-16"
+            write_stage(root, [snapshot(0), snapshot(27), snapshot(54), snapshot(81), snapshot(108)], [
+                {
+                    "sloWindowId": "w-1",
+                    "sloWindowStartUtc": stamp(0),
+                    "sloWindowEndUtc": stamp(60),
+                    "sloWindowComplete": True,
+                    "sloBreached": False,
+                },
+                {
+                    "sloWindowId": "w-2",
+                    "sloWindowStartUtc": stamp(60),
+                    "sloWindowEndUtc": stamp(120),
+                    "sloWindowComplete": True,
+                    "sloBreached": False,
+                },
+            ])
+            verdict = MODULE.evaluate(root, next_rate=64, now=BASE.timestamp() + 120)
+            self.assertEqual(verdict["decision"], "ALLOW")
+            self.assertNotIn("STABLE_DURATION_SHORT", verdict["reasonCodes"])
+
     def test_unmarked_workload_signal_still_requires_low_restore(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "rate-16"
