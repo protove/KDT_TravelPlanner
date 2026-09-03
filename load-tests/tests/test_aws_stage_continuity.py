@@ -147,6 +147,29 @@ class StageContinuityTests(unittest.TestCase):
             self.assertEqual(verdict["decision"], "ALLOW")
             self.assertNotIn("INTERRUPTED_SEGMENT", verdict["reasonCodes"])
 
+    def test_canonical_slo_window_field_names_allow_handoff(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "rate-16"
+            write_stage(root, [snapshot(0), snapshot(60), snapshot(120)], [
+                {
+                    "sloWindowId": "1788400560-1788400620",
+                    "sloWindowStartUtc": stamp(0),
+                    "sloWindowEndUtc": stamp(60),
+                    "sloWindowComplete": True,
+                    "sloBreached": False,
+                },
+                {
+                    "sloWindowId": "1788400620-1788400680",
+                    "sloWindowStartUtc": stamp(60),
+                    "sloWindowEndUtc": stamp(120),
+                    "sloWindowComplete": True,
+                    "sloBreached": False,
+                },
+            ])
+            verdict = MODULE.evaluate(root, next_rate=64, now=BASE.timestamp() + 120)
+            self.assertEqual(verdict["decision"], "ALLOW")
+            self.assertEqual(verdict["windowCount"], 2)
+
     def test_unmarked_workload_signal_still_requires_low_restore(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "rate-16"

@@ -146,8 +146,25 @@ def _valid_windows(stage: Path) -> list[dict[str, Any]]:
     for row in windows:
         if row.get("sloWindowComplete") is not True or row.get("sloBreached") is True:
             continue
-        key = str(row.get("windowId") or row.get("windowStartUtc") or row.get("startUtc") or "")
-        ts = parse_time(row.get("windowEndUtc") or row.get("endUtc") or row.get("ts"))
+        # The producer's canonical SLO record uses the explicit ``sloWindow*``
+        # names; older rehearsal fixtures used the shorter aliases. Accept
+        # both representations so a completed adaptive stage is not treated
+        # as window-less solely because the continuity reader lagged the
+        # producer schema.
+        key = str(
+            row.get("sloWindowId")
+            or row.get("windowId")
+            or row.get("sloWindowStartUtc")
+            or row.get("windowStartUtc")
+            or row.get("startUtc")
+            or ""
+        )
+        ts = parse_time(
+            row.get("sloWindowEndUtc")
+            or row.get("windowEndUtc")
+            or row.get("endUtc")
+            or row.get("ts")
+        )
         if not key or ts is None or key in seen:
             continue
         seen.add(key)
