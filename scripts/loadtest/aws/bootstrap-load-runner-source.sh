@@ -21,6 +21,7 @@ BOTOCORE_VERSION="1.43.68"
 K6_IMAGE=""
 MOCK_IMAGE="nginxinc/nginx-unprivileged:1.27.1-alpine3.20-perl@sha256:86b08eb3082f1f796f0ce1ef75a1c356a116fafc5f88754924fba2286fbd0221"
 DRY_RUN=0
+REFRESH_READINESS_ONLY=0
 ARCHIVE_OUTPUT=""
 ARCHIVE_INPUT=""
 
@@ -44,6 +45,7 @@ Optional:
   --mock-image IMAGE@sha256:... Digest-pinned private mock image
   --archive-output PATH        Preserve the generated archive at this path
   --archive-input PATH         Reuse a previously prepared archive byte-for-byte
+  --refresh-readiness-only     Verify existing Runner source/images/mock and refresh the remote receipt only
   --dry-run                    Build/hash the archive but skip S3 and SSM
 USAGE
 }
@@ -63,6 +65,7 @@ while [[ "$#" -gt 0 ]]; do
     --mock-image) MOCK_IMAGE="$2"; shift 2 ;;
     --archive-output) ARCHIVE_OUTPUT="$2"; shift 2 ;;
     --archive-input) ARCHIVE_INPUT="$2"; shift 2 ;;
+    --refresh-readiness-only) REFRESH_READINESS_ONLY=1; shift ;;
     --dry-run) DRY_RUN=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "unknown option: $1" >&2; usage >&2; exit 2 ;;
@@ -78,12 +81,16 @@ for required in REPOSITORY_ROOT SOURCE_COMMIT_SHA RUN_ID REGION EVIDENCE_ROOT K6
   fi
 done
 if [[ "$DRY_RUN" != "1" ]]; then
-  for required in RUNNER_ID S3_BUCKET; do
+  for required in RUNNER_ID; do
     if [[ -z "${!required}" ]]; then
       echo "--${required,,} is required unless --dry-run is used" >&2
       exit 2
     fi
   done
+  if [[ "$REFRESH_READINESS_ONLY" != "1" && -z "$S3_BUCKET" ]]; then
+    echo "--s3-bucket is required unless --dry-run or --refresh-readiness-only is used" >&2
+    exit 2
+  fi
 fi
 
 if [[ ! -d "$REPOSITORY_ROOT/.git" && ! -f "$REPOSITORY_ROOT/.git" ]]; then
@@ -116,6 +123,10 @@ if [[ ! "$MOCK_IMAGE" =~ ^nginxinc/nginx-unprivileged:[A-Za-z0-9._-]+@sha256:[0-
 fi
 if [[ -n "$ARCHIVE_INPUT" && -n "$ARCHIVE_OUTPUT" ]]; then
   echo "--archive-input and --archive-output cannot be used together" >&2
+  exit 2
+fi
+if [[ "$REFRESH_READINESS_ONLY" == "1" && ( -n "$ARCHIVE_INPUT" || -n "$ARCHIVE_OUTPUT" ) ]]; then
+  echo "--archive-input/--archive-output cannot be combined with --refresh-readiness-only" >&2
   exit 2
 fi
 if [[ ! "$BOTOCORE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
@@ -172,6 +183,175 @@ PY
   [[ -z "$(git -C "$extracted" remote)" ]] || { echo "prepared archive must be remote-free" >&2; exit 1; }
   [[ -z "$(git -C "$extracted" status --porcelain --untracked-files=all)" ]] || { echo "prepared archive source is not clean" >&2; exit 1; }
 }
+
+refresh_readiness_remote() {
+  local receipt="$EVIDENCE_ROOT/aws/runner-source-bootstrap.json"
+  if [[ "$DRY_RUN" == "1" ]]; then
+    python3 - "$receipt" "$RUN_ID" "$SOURCE_COMMIT_SHA" "$tree_sha" "$K6_IMAGE" "$MOCK_IMAGE" <<'PY'
+import json
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+output, run_id, source_sha, tree_sha, k6_image, mock_image = sys.argv[1:]
+Path(output).write_text(json.dumps({
+    "schemaVersion": "scrum80-runner-source-bootstrap/v1",
+    "status": "dry-run-readiness-refresh",
+    "runId": run_id,
+    "sourceCommitSha": source_sha,
+    "sourceTreeSha": tree_sha,
+    "k6ImageReference": k6_image,
+    "mockImageReference": mock_image,
+    "sourceDeliveryMode": "existing-runner-source",
+    "remoteReadinessGenerated": False,
+    "rawOutputStored": False,
+    "recordedAtUtc": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
+}, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+PY
+    chmod 0600 "$receipt"
+    echo "[runner-bootstrap] dry-run readiness refresh (no S3/SSM mutation)"
+    return 0
+  fi
+  local command command_json command_id invocation_json status invocation_file
+  command="$(python3 - "$RUN_ID" "$SOURCE_COMMIT_SHA" "$tree_sha" "$K6_IMAGE" "$MOCK_IMAGE" <<'PY'
+import shlex
+import sys
+
+run_id, source_sha, tree_sha, k6_image, mock_image = sys.argv[1:]
+q = shlex.quote
+base = "/var/lib/travel-planner/load-test-evidence"
+source = "/opt/travel-planner"
+lines = [
+    "set -euo pipefail",
+    f"RUN_ID={q(run_id)}",
+    f"EXPECTED_SOURCE_SHA={q(source_sha)}",
+    f"EXPECTED_TREE_SHA={q(tree_sha)}",
+    f"K6_IMAGE={q(k6_image)}",
+    f"MOCK_IMAGE={q(mock_image)}",
+    f"BASE_ROOT={q(base)}",
+    f"SOURCE_ROOT={q(source)}",
+    'test -s "$BASE_ROOT/base-ready.json"',
+    'test -s "$SOURCE_ROOT/.git/HEAD"',
+    'jq -e ".status == \\"base-ready\\" and .dockerActive == true" "$BASE_ROOT/base-ready.json" >/dev/null',
+    'test "$(git -C "$SOURCE_ROOT" rev-parse HEAD)" = "$EXPECTED_SOURCE_SHA"',
+    'test "$(git -C "$SOURCE_ROOT" rev-parse HEAD^{tree})" = "$EXPECTED_TREE_SHA"',
+    'test "$(git -C "$SOURCE_ROOT" rev-parse --is-shallow-repository)" = true',
+    'test -z "$(git -C "$SOURCE_ROOT" remote)"',
+    'test -z "$(git -C "$SOURCE_ROOT" status --porcelain --untracked-files=all)"',
+    'command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1',
+    'K6_IMAGE_ID="$(docker image inspect --format "{{.Id}}" "$K6_IMAGE")"',
+    'MOCK_IMAGE_ID="$(docker image inspect --format "{{.Id}}" "$MOCK_IMAGE")"',
+    'test "$(docker inspect --format "{{.State.Running}}" travel-planner-google-api-mock 2>/dev/null)" = true',
+    'curl --fail --silent --show-error --max-time 3 http://127.0.0.1:8080/healthz >/dev/null',
+    'for route in /v1/places:searchText /v1/places:searchNearby /v1/places:placeDetails /directions/v2:computeRoutes; do curl --fail --silent --show-error --max-time 3 -X POST -H "Content-Type: application/json" --data "{}" "http://127.0.0.1:8080$route" >/dev/null; done',
+    'RECEIPT_TMP="$BASE_ROOT/.runner-readiness-refresh-$RUN_ID.json.tmp"',
+    "FILTER='{schemaVersion:\"scrum80-runner-readiness/v1\",status:\"ready\",runId:$runId,sourceCommitSha:$sourceSha,sourceTreeSha:$treeSha,sourceDeliveryMode:\"existing-runner-source\",k6ImageReference:$k6,k6ImageId:$k6Id,mockImageReference:$mock,mockImageId:$mockId,mock:{containerName:\"travel-planner-google-api-mock\",healthStatus:\"ok\",contractRoutesVerified:4},recordedAtUtc:$recordedAt}'; jq -cn --arg runId \"$RUN_ID\" --arg sourceSha \"$EXPECTED_SOURCE_SHA\" --arg treeSha \"$EXPECTED_TREE_SHA\" --arg k6 \"$K6_IMAGE\" --arg k6Id \"$K6_IMAGE_ID\" --arg mock \"$MOCK_IMAGE\" --arg mockId \"$MOCK_IMAGE_ID\" --arg recordedAt \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\" \"$FILTER\" > \"$RECEIPT_TMP\"",
+    'chmod 0600 "$RECEIPT_TMP"',
+    'mv -f "$RECEIPT_TMP" "$BASE_ROOT/runner-readiness.json"',
+    'printf "%s\\n" __SCRUM80_RUNNER_READINESS_REFRESH_BEGIN__',
+    'cat "$BASE_ROOT/runner-readiness.json"',
+    'printf "%s\\n" __SCRUM80_RUNNER_READINESS_REFRESH_END__',
+]
+print("\\n".join(lines))
+PY
+  )"
+  local ssm_parameters
+  ssm_parameters="$(jq -cn --arg command "$command" '{commands:[$command]}')"
+  command_json="$(aws ssm send-command --instance-ids "$RUNNER_ID" --document-name AWS-RunShellScript \
+    --comment "SCRUM-80 Runner readiness refresh $RUN_ID" --parameters "$ssm_parameters" \
+    --region "$REGION" --output json)"
+  command_id="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["Command"]["CommandId"])' <<<"$command_json")"
+  [[ "$command_id" =~ ^[A-Za-z0-9-]{36}$ ]] || { echo "SSM readiness refresh command id is invalid" >&2; return 1; }
+  invocation_file="$(mktemp "${TMPDIR:-/tmp}/scrum80-runner-readiness-refresh.XXXXXX")"
+  invocation_json=""
+  status=""
+  for _ in $(seq 1 90); do
+    invocation_json="$(aws ssm get-command-invocation --command-id "$command_id" --instance-id "$RUNNER_ID" --region "$REGION" --output json)"
+    status="$(python3 -c 'import json,sys; print(json.load(sys.stdin).get("Status", ""))' <<<"$invocation_json")"
+    case "$status" in
+      Success|Failed|Cancelled|TimedOut|Cancelling) break ;;
+    esac
+    sleep 2
+  done
+  printf '%s\n' "$invocation_json" >"$invocation_file"
+  if [[ "$status" != "Success" ]]; then
+    python3 - "$receipt" "$RUN_ID" "$SOURCE_COMMIT_SHA" "$tree_sha" "$command_id" "$status" "$invocation_json" <<'PY'
+import hashlib
+import json
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+output, run_id, source_sha, tree_sha, command_id, status, raw = sys.argv[1:]
+try:
+    invocation = json.loads(raw)
+except json.JSONDecodeError:
+    invocation = {}
+Path(output).write_text(json.dumps({
+    "schemaVersion": "scrum80-runner-source-bootstrap/v1",
+    "status": "readiness-refresh-failed",
+    "runId": run_id,
+    "sourceCommitSha": source_sha,
+    "sourceTreeSha": tree_sha,
+    "ssmCommandId": command_id,
+    "ssmStatus": status,
+    "stdoutSha256": hashlib.sha256(str(invocation.get("StandardOutputContent", "")).encode()).hexdigest(),
+    "stderrSha256": hashlib.sha256(str(invocation.get("StandardErrorContent", "")).encode()).hexdigest(),
+    "rawOutputStored": False,
+    "recordedAtUtc": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
+}, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+PY
+    rm -f -- "$invocation_file"
+    return 1
+  fi
+  python3 - "$invocation_file" "$receipt" "$RUN_ID" "$SOURCE_COMMIT_SHA" "$tree_sha" "$K6_IMAGE" "$MOCK_IMAGE" "$command_id" <<'PY'
+import hashlib
+import json
+import re
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+invocation_path, output, run_id, source_sha, tree_sha, k6_image, mock_image, command_id = sys.argv[1:]
+invocation = json.loads(Path(invocation_path).read_text(encoding="utf-8"))
+stdout = str(invocation.get("StandardOutputContent", ""))
+match = re.search(r"__SCRUM80_RUNNER_READINESS_REFRESH_BEGIN__\s*(.*?)\s*__SCRUM80_RUNNER_READINESS_REFRESH_END__", stdout, re.DOTALL)
+if not match:
+    raise SystemExit("Runner readiness refresh markers are missing")
+remote = json.loads(match.group(1))
+if remote.get("status") != "ready" or remote.get("runId") != run_id or remote.get("sourceCommitSha") != source_sha or remote.get("sourceTreeSha") != tree_sha:
+    raise SystemExit("Runner readiness refresh source contract failed")
+if remote.get("k6ImageReference") != k6_image or remote.get("mockImageReference") != mock_image:
+    raise SystemExit("Runner readiness refresh image contract failed")
+mock = remote.get("mock") if isinstance(remote.get("mock"), dict) else {}
+if mock.get("healthStatus") != "ok" or int(mock.get("contractRoutesVerified", 0)) < 4:
+    raise SystemExit("Runner readiness refresh mock contract failed")
+Path(output).write_text(json.dumps({
+    "schemaVersion": "scrum80-runner-source-bootstrap/v1",
+    "status": "readiness-refresh-ready",
+    "runId": run_id,
+    "sourceCommitSha": source_sha,
+    "sourceTreeSha": tree_sha,
+    "sourceDeliveryMode": "existing-runner-source",
+    "remoteReadinessGenerated": True,
+    "readiness": remote,
+    "ssmCommandId": command_id,
+    "ssmStatus": invocation.get("Status"),
+    "stdoutSha256": hashlib.sha256(stdout.encode()).hexdigest(),
+    "stderrSha256": hashlib.sha256(str(invocation.get("StandardErrorContent", "")).encode()).hexdigest(),
+    "rawOutputStored": False,
+    "recordedAtUtc": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
+}, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+PY
+  chmod 0600 "$receipt"
+  rm -f -- "$invocation_file"
+  echo "[runner-bootstrap] existing source and remote readiness refreshed: $receipt"
+}
+
+if [[ "$REFRESH_READINESS_ONLY" == "1" ]]; then
+  refresh_readiness_remote
+  exit $?
+fi
 
 if [[ -n "$ARCHIVE_INPUT" ]]; then
   archive_path="$ARCHIVE_INPUT"
@@ -395,7 +575,6 @@ PYRECEIPT''')
 lines.extend([
     'chmod 0600 "$RECEIPT_TMP"',
     'mv -f "$RECEIPT_TMP" "$BASE_ROOT/runner-readiness.json"',
-    'aws s3api put-object --bucket "$ARCHIVE_BUCKET" --key "$READINESS_KEY" --body "$BASE_ROOT/runner-readiness.json" --server-side-encryption AES256 --metadata "source-commit-sha=$EXPECTED_SOURCE_SHA,archive-sha256=$EXPECTED_ARCHIVE_SHA,archive-size-bytes=$EXPECTED_ARCHIVE_SIZE" --region "$AWS_DEFAULT_REGION" --output json >/dev/null',
     'printf "%s\\n" __SCRUM80_RUNNER_BOOTSTRAP_BEGIN__',
     'cat "$BASE_ROOT/runner-readiness.json"',
     'printf "%s\\n" __SCRUM80_RUNNER_BOOTSTRAP_END__',
@@ -541,28 +720,4 @@ Path(output).write_text(json.dumps({
 }, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 PY
 chmod 0600 "$archive_metadata"
-readiness_head="$(aws s3api head-object --bucket "$S3_BUCKET" --key "$readiness_key" --region "$REGION" --output json)"
-python3 - "$readiness_head" "$archive_sha256" "$archive_size" "$SOURCE_COMMIT_SHA" <<'PY'
-import json
-import sys
-
-payload = json.loads(sys.argv[1])
-expected_sha, expected_size, expected_source = sys.argv[2:]
-metadata = payload.get("Metadata") or {}
-if int(payload.get("ContentLength", -1)) <= 0:
-    raise SystemExit("Runner readiness object is empty")
-if metadata.get("archive-sha256") != expected_sha or metadata.get("source-commit-sha") != expected_source or metadata.get("archive-size-bytes") != expected_size:
-    raise SystemExit("Runner readiness S3 metadata does not match source archive")
-PY
-python3 - "$archive_metadata" "$readiness_key" <<'PY'
-import json
-import sys
-from pathlib import Path
-
-path = Path(sys.argv[1])
-payload = json.loads(path.read_text(encoding="utf-8"))
-payload["readinessS3HeadReadBack"] = True
-payload["readinessKey"] = sys.argv[2]
-path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-PY
-echo "[runner-bootstrap] Runner source and full readiness verified: $archive_metadata"
+echo "[runner-bootstrap] Runner source and full readiness verified locally: $archive_metadata"

@@ -390,48 +390,58 @@ fi
 # mode private instead of chmod/chowning it for the image user, and remove all
 # Linux capabilities plus privilege escalation from the root container. It
 # receives no Docker socket and can write only the evidence bind mount.
-docker run -i --name "$K6_CONTAINER_NAME" \
-  --user 0:0 \
-  --cap-drop ALL \
-  --security-opt no-new-privileges \
-  "${DOCKER_HOST_ARGS[@]}" \
-  -v "$K6_DIR:/scripts:ro" \
-  -v "$CONTRACT_DIR:/contracts:ro" \
-  -v "$(dirname "$AWS_PROFILE_FILE"):/profiles:ro" \
-  -v "$DATA_FILE:/data/data.json:ro" \
-  -v "$RUN_DIR:/out" \
-  -e BASE_URL="$BASE_URL" \
-  -e TARGET_REGION="$REGION" \
-  -e TARGET_ENVIRONMENT="$ENVIRONMENT" \
-  -e AWS_PROFILE_FILE="/profiles/$(basename "$AWS_PROFILE_FILE")" \
-  -e AWS_SLO_CONTRACT_FILE="/contracts/$(basename "$AWS_SLO_CONTRACT_FILE")" \
-  -e DATA_FILE=/data/data.json \
-  -e REQUIRE_UNIQUE_CREDENTIALS=1 \
-  -e REQUIRED_UNIQUE_CREDENTIAL_COUNT="$EFFECTIVE_MAX_VUS" \
-  -e K6_IMAGE_DIGEST="$K6_IMAGE_DIGEST" \
-  -e RATE="${RATE:-}" \
-  -e CONFIRMED_RATE="${CONFIRMED_RATE:-}" \
-  -e START_RATE="${START_RATE:-}" \
-  -e RUN_ID="$RUN_ID" \
-  -e RUN_STARTED_AT="$started_at" \
-  -e TARGET_PLATFORM="$TARGET_PLATFORM" \
-  -e OUT_DIR=/out \
-  -e DURATION="${DURATION:-}" \
-  -e WARMUP="${WARMUP:-}" \
-  -e PREALLOCATED_VUS="${PREALLOCATED_VUS:-20}" \
-  -e MAX_VUS="${MAX_VUS:-}" \
-  -e CAPACITY_STAGE="${CAPACITY_STAGE:-}" \
-  -e CAPACITY_TARGET_RATE="${CAPACITY_TARGET_RATE:-}" \
-  -e CAPACITY_STAGE_INDEX="${CAPACITY_STAGE_INDEX:-}" \
-  -e CAPACITY_STAGE_DURATION="${CAPACITY_STAGE_DURATION:-}" \
-  -e MSA_HOTSPOT_ID="${MSA_HOTSPOT_ID:-}" \
-  -e MSA_HOTSPOT_SHARE="${MSA_HOTSPOT_SHARE:-}" \
-  -e SPIKE_PEAK_MULTIPLIER="${SPIKE_PEAK_MULTIPLIER:-}" \
-  -e SPIKE_HOLD="${SPIKE_HOLD:-}" \
-  "$K6_IMAGE_DIGEST" run \
-  --out json=/out/raw.json \
-  --summary-export=/out/k6-native-summary.json \
-  "/scripts/aws/scenarios/$SCENARIO_FILE" >"$RUN_DIR/stdout.log" 2>&1 &
+docker_run_command=(
+  docker run -i --name "$K6_CONTAINER_NAME"
+  --user 0:0
+  --cap-drop ALL
+  --security-opt no-new-privileges
+)
+# Bash 3.2 (the macOS operator shell) raises an unbound-variable error when
+# an empty array is expanded under `set -u`. Append optional host mappings
+# only when at least one was validated above.
+if [[ "${#DOCKER_HOST_ARGS[@]}" -gt 0 ]]; then
+  docker_run_command+=( "${DOCKER_HOST_ARGS[@]}" )
+fi
+docker_run_command+=(
+  -v "$K6_DIR:/scripts:ro"
+  -v "$CONTRACT_DIR:/contracts:ro"
+  -v "$(dirname "$AWS_PROFILE_FILE"):/profiles:ro"
+  -v "$DATA_FILE:/data/data.json:ro"
+  -v "$RUN_DIR:/out"
+  -e BASE_URL="$BASE_URL"
+  -e TARGET_REGION="$REGION"
+  -e TARGET_ENVIRONMENT="$ENVIRONMENT"
+  -e AWS_PROFILE_FILE="/profiles/$(basename "$AWS_PROFILE_FILE")"
+  -e AWS_SLO_CONTRACT_FILE="/contracts/$(basename "$AWS_SLO_CONTRACT_FILE")"
+  -e DATA_FILE=/data/data.json
+  -e REQUIRE_UNIQUE_CREDENTIALS=1
+  -e REQUIRED_UNIQUE_CREDENTIAL_COUNT="$EFFECTIVE_MAX_VUS"
+  -e K6_IMAGE_DIGEST="$K6_IMAGE_DIGEST"
+  -e RATE="${RATE:-}"
+  -e CONFIRMED_RATE="${CONFIRMED_RATE:-}"
+  -e START_RATE="${START_RATE:-}"
+  -e RUN_ID="$RUN_ID"
+  -e RUN_STARTED_AT="$started_at"
+  -e TARGET_PLATFORM="$TARGET_PLATFORM"
+  -e OUT_DIR=/out
+  -e DURATION="${DURATION:-}"
+  -e WARMUP="${WARMUP:-}"
+  -e PREALLOCATED_VUS="${PREALLOCATED_VUS:-20}"
+  -e MAX_VUS="${MAX_VUS:-}"
+  -e CAPACITY_STAGE="${CAPACITY_STAGE:-}"
+  -e CAPACITY_TARGET_RATE="${CAPACITY_TARGET_RATE:-}"
+  -e CAPACITY_STAGE_INDEX="${CAPACITY_STAGE_INDEX:-}"
+  -e CAPACITY_STAGE_DURATION="${CAPACITY_STAGE_DURATION:-}"
+  -e MSA_HOTSPOT_ID="${MSA_HOTSPOT_ID:-}"
+  -e MSA_HOTSPOT_SHARE="${MSA_HOTSPOT_SHARE:-}"
+  -e SPIKE_PEAK_MULTIPLIER="${SPIKE_PEAK_MULTIPLIER:-}"
+  -e SPIKE_HOLD="${SPIKE_HOLD:-}"
+  "$K6_IMAGE_DIGEST" run
+  --out json=/out/raw.json
+  --summary-export=/out/k6-native-summary.json
+  "/scripts/aws/scenarios/$SCENARIO_FILE"
+)
+"${docker_run_command[@]}" >"$RUN_DIR/stdout.log" 2>&1 &
 k6_pid=$!
 while kill -0 "$k6_pid" 2>/dev/null; do
   stats="$(docker stats --no-stream --format '{{json .}}' "$K6_CONTAINER_NAME" 2>/dev/null || true)"

@@ -151,6 +151,30 @@ class LoadRunnerBootstrapContractTests(unittest.TestCase):
         for forbidden in ("GITHUB_TOKEN", "ghp_", "BEGIN OPENSSH PRIVATE KEY", "public-read", "0.0.0.0/0"):
             self.assertNotIn(forbidden, source)
 
+    def test_readiness_refresh_is_local_receipt_only_and_does_not_reupload_readiness(self) -> None:
+        source = BOOTSTRAP.read_text(encoding="utf-8")
+        self.assertIn("--refresh-readiness-only", source)
+        self.assertIn('sourceDeliveryMode": "existing-runner-source"', source)
+        self.assertNotIn('s3api put-object --bucket "$ARCHIVE_BUCKET" --key "$READINESS_KEY"', source)
+        self.assertNotIn("readinessS3HeadReadBack", source)
+
+        with tempfile.TemporaryDirectory(prefix="scrum80-bootstrap-refresh-契約-") as evidence_dir:
+            source_sha = run(["git", "rev-parse", "HEAD"], ROOT).stdout.strip()
+            completed = subprocess.run(
+                [
+                    "bash", str(BOOTSTRAP), "--repository-root", str(ROOT), "--source-commit", source_sha,
+                    "--run-id", "bootstrap-refresh-contract", "--region", "ap-northeast-2",
+                    "--runner-id", "i-0123456789abcdef0", "--evidence-root", evidence_dir,
+                    "--k6-image", K6_IMAGE, "--mock-image", MOCK_IMAGE,
+                    "--refresh-readiness-only", "--dry-run",
+                ], cwd=ROOT, text=True, capture_output=True, check=False,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            metadata = json.loads((Path(evidence_dir) / "aws/runner-source-bootstrap.json").read_text(encoding="utf-8"))
+            self.assertEqual(metadata["status"], "dry-run-readiness-refresh")
+            self.assertEqual(metadata["sourceDeliveryMode"], "existing-runner-source")
+            self.assertFalse(metadata["remoteReadinessGenerated"])
+
     def test_invalid_image_is_rejected_before_any_aws_call(self) -> None:
         with tempfile.TemporaryDirectory(prefix="scrum80-bootstrap-evidence-") as evidence_dir:
             source_sha = run(["git", "rev-parse", "HEAD"], ROOT).stdout.strip()
