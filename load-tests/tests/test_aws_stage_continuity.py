@@ -204,6 +204,59 @@ class StageContinuityTests(unittest.TestCase):
             self.assertEqual(verdict["decision"], "RESTORE_LOW")
             self.assertIn("INTERRUPTED_SEGMENT", verdict["reasonCodes"])
 
+    def test_latest_unhealthy_observation_cannot_be_skipped_for_old_healthy_rows(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "rate-128"
+            rows = [snapshot(0), snapshot(60), snapshot(120, backendUnhealthy=True)]
+            write_stage(root, rows, [
+                {"windowId": "w-1", "windowStartUtc": stamp(0), "windowEndUtc": stamp(60), "sloWindowComplete": True, "sloBreached": False},
+                {"windowId": "w-2", "windowStartUtc": stamp(60), "windowEndUtc": stamp(120), "sloWindowComplete": True, "sloBreached": False},
+            ])
+            verdict = MODULE.evaluate(root, next_rate=256, now=BASE.timestamp() + 120)
+            self.assertEqual(verdict["decision"], "BLOCK")
+            self.assertIn("HEALTHY_WINDOW_MISSING", verdict["reasonCodes"])
+
+    def test_scale_out_identity_transition_is_allowed_after_two_stable_windows(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "rate-128"
+            write_stage(root, [
+                snapshot(0, nodes=2, pods=2, uid_suffix="before"),
+                snapshot(60, nodes=3, pods=3, uid_suffix="after"),
+                snapshot(120, nodes=3, pods=3, uid_suffix="after"),
+            ], [
+                {"windowId": "w-1", "windowStartUtc": stamp(0), "windowEndUtc": stamp(60), "sloWindowComplete": True, "sloBreached": False},
+                {"windowId": "w-2", "windowStartUtc": stamp(60), "windowEndUtc": stamp(120), "sloWindowComplete": True, "sloBreached": False},
+            ])
+            verdict = MODULE.evaluate(root, next_rate=256, now=BASE.timestamp() + 120)
+            self.assertEqual(verdict["decision"], "ALLOW")
+            self.assertNotIn("IDENTITY_CHANGED", verdict["reasonCodes"])
+
+    def test_cumulative_restart_count_with_zero_delta_is_not_a_permanent_block(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "rate-128"
+            rows = [snapshot(0), snapshot(60), snapshot(120)]
+            for row in rows:
+                row["backendPods"]["restartCount"] = 2
+                row["backendPods"]["restartDelta"] = 0
+            write_stage(root, rows, [
+                {"windowId": "w-1", "windowStartUtc": stamp(0), "windowEndUtc": stamp(60), "sloWindowComplete": True, "sloBreached": False},
+                {"windowId": "w-2", "windowStartUtc": stamp(60), "windowEndUtc": stamp(120), "sloWindowComplete": True, "sloBreached": False},
+            ])
+            verdict = MODULE.evaluate(root, next_rate=256, now=BASE.timestamp() + 120)
+            self.assertEqual(verdict["decision"], "ALLOW")
+
+    def test_overlapping_windows_are_not_counted_as_distinct_complete_windows(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "rate-128"
+            write_stage(root, [snapshot(0), snapshot(60), snapshot(120), snapshot(180)], [
+                {"windowId": "w-1", "windowStartUtc": stamp(0), "windowEndUtc": stamp(60), "sloWindowComplete": True, "sloBreached": False},
+                {"windowId": "w-overlap", "windowStartUtc": stamp(30), "windowEndUtc": stamp(90), "sloWindowComplete": True, "sloBreached": False},
+                {"windowId": "w-2", "windowStartUtc": stamp(90), "windowEndUtc": stamp(150), "sloWindowComplete": True, "sloBreached": False},
+            ])
+            verdict = MODULE.evaluate(root, next_rate=256, now=BASE.timestamp() + 180)
+            self.assertEqual(verdict["decision"], "BLOCK")
+            self.assertIn("WINDOW_OVERLAP", verdict["reasonCodes"])
+
 
 if __name__ == "__main__":
     unittest.main()

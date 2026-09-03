@@ -358,6 +358,15 @@ class AwsOrchestrationContractTests(unittest.TestCase):
         self.assertIn("IDENTITY_CHANGED", helper_source)
         self.assertNotIn("CONTINUITY_CHECK", source)
 
+    def test_adaptive_stage_reuses_verified_fixture_and_one_observer_pointer(self) -> None:
+        source = SCRIPT.read_text(encoding="utf-8")
+        self.assertIn("ensure_adaptive_stage_credentials", source)
+        self.assertIn("--refresh-tokens-only", source)
+        self.assertIn("--stage-pointer-file", source)
+        self.assertIn("write_capacity_observer_pointer", source)
+        self.assertNotIn("fixture_fields", source)
+        self.assertNotIn('seed_credentials "capacity-$target_rate" 1', source)
+
     def test_shared_k6_profile_gets_action_time_platform_environment(self) -> None:
         runner_source = AWS_PHASE_RUNNER.parent.joinpath("run-k6-aws-scenario.sh").read_text(encoding="utf-8")
         orchestrator_source = SCRIPT.read_text(encoding="utf-8")

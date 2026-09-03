@@ -80,7 +80,11 @@ def _identity_rows(snapshot: Mapping[str, Any]) -> Iterable[Mapping[str, Any]]:
         yield from (row for row in nodes if isinstance(row, Mapping))
 
 
-def _stable_snapshot(snapshot: Mapping[str, Any], target_rate: float | None = None) -> bool:
+def _stable_snapshot(
+    snapshot: Mapping[str, Any],
+    target_rate: float | None = None,
+    previous: Mapping[str, Any] | None = None,
+) -> bool:
     """Return true only for a complete healthy observation."""
     if snapshot.get("requiredObservationsValid") is not True:
         return False
@@ -98,8 +102,22 @@ def _stable_snapshot(snapshot: Mapping[str, Any], target_rate: float | None = No
     deployment = snapshot.get("deployment") if isinstance(snapshot.get("deployment"), Mapping) else {}
     hpa = snapshot.get("hpa") if isinstance(snapshot.get("hpa"), Mapping) else {}
     capacity = snapshot.get("capacity") if isinstance(snapshot.get("capacity"), Mapping) else {}
-    if pods.get("pendingCount") != 0 or pods.get("restartCount") != 0:
+    # restartCount is cumulative over the lifetime of a Pod and may therefore
+    # be non-zero in an otherwise healthy stage.  Only a newly observed
+    # increase (or an explicit delta/transition marker) invalidates the
+    # current window.  This keeps historical restarts visible without turning
+    # them into a permanent handoff block.
+    restart_delta = pods.get("restartDelta", snapshot.get("backendRestartDelta"))
+    if pods.get("pendingCount") != 0 or (
+        isinstance(restart_delta, (int, float)) and not isinstance(restart_delta, bool) and restart_delta > 0
+    ) or snapshot.get("backendRestartIncreased") is True:
         return False
+    if previous is not None:
+        previous_pods = previous.get("backendPods") if isinstance(previous.get("backendPods"), Mapping) else {}
+        current_restart = _number(pods.get("restartCount"))
+        previous_restart = _number(previous_pods.get("restartCount"))
+        if current_restart is not None and previous_restart is not None and current_restart > previous_restart:
+            return False
     ready = _number(deployment.get("readyReplicas"))
     available = _number(deployment.get("availableReplicas"))
     desired = _number(deployment.get("desiredReplicas"))
@@ -172,9 +190,51 @@ def _valid_windows(stage: Path) -> list[dict[str, Any]]:
         )
         if not key or ts is None or key in seen:
             continue
+        if start_ts is not None and ts < start_ts:
+            continue
         seen.add(key)
         result.append({"id": key, "ts": ts, "startTs": start_ts})
     return sorted(result, key=lambda row: row["ts"])
+
+
+def _non_overlapping_windows(
+    windows: Iterable[Mapping[str, Any]],
+    stable_window_seconds: int,
+) -> tuple[list[dict[str, Any]], int]:
+    """Keep complete, chronological windows whose intervals do not overlap."""
+    accepted: list[dict[str, Any]] = []
+    rejected_overlap = 0
+    last_end: float | None = None
+    for row in windows:
+        end = _number(row.get("ts"))
+        if end is None:
+            continue
+        start = _number(row.get("startTs"))
+        if start is None:
+            start = end - stable_window_seconds
+        if start >= end:
+            continue
+        if last_end is not None and start < last_end:
+            rejected_overlap += 1
+            continue
+        accepted.append({"id": str(row["id"]), "ts": end, "startTs": start})
+        last_end = end
+    return accepted, rejected_overlap
+
+
+def _identity_signature(snapshot: Mapping[str, Any]) -> tuple[str, ...]:
+    return tuple(sorted(
+        str(item.get("uid") or item.get("podUid") or item.get("nodeUid"))
+        for item in _identity_rows(snapshot)
+    ))
+
+
+def _ready_capacity(snapshot: Mapping[str, Any]) -> tuple[float, float]:
+    pods = snapshot.get("backendPods") if isinstance(snapshot.get("backendPods"), Mapping) else {}
+    return (
+        _number(snapshot.get("nodeReadyCount")) or 0,
+        _number(pods.get("readyCount")) or 0,
+    )
 
 
 def evaluate(
@@ -219,17 +279,38 @@ def evaluate(
     inputs = metadata.get("effectiveInputs") if isinstance(metadata.get("effectiveInputs"), Mapping) else {}
     metadata_rate = _number(metadata.get("rate") or inputs.get("baseRate"))
     windows = _valid_windows(stage)
-    stable = [row for row in snapshots if _stable_snapshot(row, metadata_rate)]
+    windows, overlapping_windows = _non_overlapping_windows(windows, stable_window_seconds)
+    if overlapping_windows:
+        result["reasonCodes"].append("WINDOW_OVERLAP")
+
+    # Continuity is proved by the newest contiguous healthy tail.  Never pick
+    # older healthy rows around a newer unhealthy observation: doing so turns
+    # an interrupted handoff into a false warm start.
+    stable_tail: list[dict[str, Any]] = []
+    for index in range(len(snapshots) - 1, -1, -1):
+        previous = snapshots[index - 1] if index > 0 else None
+        row = snapshots[index]
+        if not _stable_snapshot(row, metadata_rate, previous):
+            break
+        stable_tail.append(row)
+    stable_tail.reverse()
+    stable = stable_tail
     if stable:
         stable_times = [parse_time(row.get("ts") or row.get("timestamp")) for row in stable]
         stable_times = [value for value in stable_times if value is not None]
         stable_span = stable_times[-1] - stable_times[0] if stable_times else 0
         if len(windows) >= required_windows:
-            first_window = windows[-required_windows]
-            first_start = first_window.get("startTs")
-            if first_start is None:
-                first_start = first_window["ts"] - stable_window_seconds
-            window_span = windows[-1]["ts"] - first_start
+            selected_windows = windows[-required_windows:]
+            first_window = selected_windows[0]
+            first_start = first_window["startTs"]
+            window_span = selected_windows[-1]["ts"] - first_start
+            tail_start = stable_times[0] if stable_times else 0
+            tail_end = stable_times[-1] if stable_times else 0
+            # SLO producers can close a window just after the observer's last
+            # poll (notably with the 27-second EKS/SSM cadence).  Permit that
+            # bounded read lag, but do not let an old window hide a long gap.
+            if first_start < tail_start - max_observation_gap_seconds or selected_windows[-1]["ts"] > tail_end + max_observation_gap_seconds:
+                result["reasonCodes"].append("WINDOW_COVERAGE_MISSING")
         else:
             window_span = 0
         # Observer polls can land just inside a complete SLO window boundary
@@ -241,18 +322,34 @@ def evaluate(
             result["reasonCodes"].append("STABLE_DURATION_SHORT")
     else:
         result["reasonCodes"].append("HEALTHY_WINDOW_MISSING")
-    fingerprints = {
-        tuple(sorted(
-            str(item.get("uid") or item.get("podUid") or item.get("nodeUid"))
-            for item in _identity_rows(row)
-        ))
-        for row in stable
-    }
-    if len(fingerprints) > 1:
-        result["reasonCodes"].append("IDENTITY_CHANGED")
+    # Identity changes inside a stable tail are only expected when capacity
+    # grew (normal HPA/CA scale-out).  Same-count replacement is a restart or
+    # interruption and must not be treated as warm continuity.
+    if stable:
+        for previous, current in zip(stable, stable[1:]):
+            if _identity_signature(previous) == _identity_signature(current):
+                continue
+            previous_capacity = _ready_capacity(previous)
+            current_capacity = _ready_capacity(current)
+            if current_capacity[0] <= previous_capacity[0] and current_capacity[1] <= previous_capacity[1]:
+                result["reasonCodes"].append("IDENTITY_CHANGED")
+                break
+        if len(stable_tail) and len(stable_tail) < len(snapshots):
+            boundary_index = len(snapshots) - len(stable_tail)
+            if boundary_index > 0:
+                prior = snapshots[boundary_index - 1]
+                current = stable_tail[0]
+                if _identity_signature(prior) != _identity_signature(current):
+                    prior_capacity = _ready_capacity(prior)
+                    current_capacity = _ready_capacity(current)
+                    if current_capacity[0] <= prior_capacity[0] and current_capacity[1] <= prior_capacity[1]:
+                        result["reasonCodes"].append("IDENTITY_CHANGED")
     result["windowCount"] = len(windows)
     result["windowIds"] = [row["id"] for row in windows]
-    if len(windows) < required_windows or (len(windows) >= required_windows and windows[-1]["ts"] - windows[-required_windows]["ts"] < stable_window_seconds):
+    if len(windows) < required_windows or (
+        len(windows) >= required_windows
+        and windows[-1]["ts"] - windows[-required_windows]["startTs"] < stable_window_seconds * required_windows
+    ):
         result["reasonCodes"].append("COMPLETE_WINDOWS_MISSING")
     # A prior segment may have reached a larger capacity and then been
     # replaced/terminated.  Equal counts are not enough; a decrease or a
@@ -273,10 +370,24 @@ def evaluate(
     expected_boundary = controller.get("intentionalStageBoundary") is True and controller.get("terminalReason") == "STAGE_COMPLETE"
     if (status.get("workloadSignalReceived") is True and not expected_boundary) or controller.get("terminalReason") not in {"STAGE_COMPLETE", None}:
         result["reasonCodes"].append("INTERRUPTED_SEGMENT")
+    explicit_handoff_gap = next(
+        (
+            _number(source.get(key))
+            for source in (metadata, status)
+            for key in ("actualHandoffGapSeconds", "handoffGapSeconds")
+            if _number(source.get(key)) is not None
+        ),
+        None,
+    )
+    if explicit_handoff_gap is not None and explicit_handoff_gap > fast_handoff_gap_seconds:
+        result["reasonCodes"].append("HANDOFF_GAP_EXCEEDED")
     if not metadata.get("actualOperationStartAtUtc") and not status.get("actualOperationStartAtUtc"):
         result["reasonCodes"].append("ACTUAL_OPERATION_START_MISSING")
     if result["reasonCodes"]:
-        restore_reasons = {"CAPACITY_DROPPED", "INTERRUPTED_SEGMENT", "ACTUAL_OPERATION_START_MISSING"}
+        restore_reasons = {
+            "CAPACITY_DROPPED", "INTERRUPTED_SEGMENT", "ACTUAL_OPERATION_START_MISSING",
+            "HANDOFF_GAP_EXCEEDED",
+        }
         result["decision"] = "RESTORE_LOW" if restore_reasons.intersection(result["reasonCodes"]) else "BLOCK"
         if result["decision"] == "RESTORE_LOW":
             result["restoreRate"] = int(metadata.get("rate") or metadata.get("effectiveInputs", {}).get("baseRate") or 0) or None

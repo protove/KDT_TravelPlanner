@@ -241,6 +241,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--refresh-ttl-ms", type=int, default=DEFAULT_REFRESH_TTL_MS)
     parser.add_argument("--index-width", type=int, default=3, help="Zero-padded provider ID width (3-6; default 3)")
     parser.add_argument("--incremental", action="store_true", help="Top up an existing verified run fixture without reset/revocation")
+    parser.add_argument(
+        "--refresh-tokens-only",
+        action="store_true",
+        help="Rotate only the existing verified credential ledger; do not inspect or create user/travel fixtures",
+    )
     return parser.parse_args()
 
 
@@ -1067,12 +1072,31 @@ def main() -> int:
     # Opt in only the real AWS seed entrypoint.  Keeping this explicit lets
     # the legacy unit-test fakes and historical seed contract stay unchanged.
     runtime._enable_current_feature_fixture = True
-    existing_credentials = load_incremental_credentials(args) if args.incremental else None
+    if args.incremental and args.refresh_tokens_only:
+        raise SeedError("--incremental and --refresh-tokens-only cannot be combined")
+    existing_credentials = load_incremental_credentials(args) if (args.incremental or args.refresh_tokens_only) else None
     # Revoke the prior ledger before replacing its tokens.  This is exact
     # run-scoped cleanup (the same contract used by the normal seed path) and
     # prevents the superseded Redis families from lingering until TTL expiry.
     if args.incremental and args.reset_fixture:
         raise SeedError("--incremental cannot be combined with --reset-fixture")
+    if args.refresh_tokens_only and args.reset_fixture:
+        raise SeedError("--refresh-tokens-only cannot be combined with --reset-fixture")
+    if args.refresh_tokens_only:
+        # k6 rotates refresh tokens in memory during each stage.  A later
+        # stage therefore needs a fresh token per VU, but it must not repeat
+        # the expensive user/travel/community fixture work.  Reuse the
+        # verified ledger and run seed_all's credential-refresh path only;
+        # the final cardinality query is retained as a cheap ownership
+        # check, and no fixture rows are reset or recreated.
+        revoke_previous_credentials(runtime, args)
+        seed_all(
+            runtime,
+            args,
+            verify_fixture=True,
+            existing_credentials=existing_credentials,
+        )
+        return 0
     revoke_previous_credentials(runtime, args)
     reset_deleted_planners = None
     if args.reset_fixture:

@@ -1843,11 +1843,16 @@ PY
 seed_credentials() {
   local fixture_id="${1:-seed}"
   local incremental="${2:-0}"
+  local strategy="${3:-}"
   if [[ "$DRY_RUN" == "1" ]]; then
     local dry_index_width=3
     [[ "$ADAPTIVE_BREAKPOINT_PROFILE" == "1" ]] && dry_index_width=6
     local dry_mode="--reset-fixture"
-    [[ "$incremental" == "1" ]] && dry_mode="--incremental"
+    if [[ "$strategy" == "refresh-only" ]]; then
+      dry_mode="--refresh-tokens-only"
+    elif [[ "$incremental" == "1" ]]; then
+      dry_mode="--incremental"
+    fi
     echo "[dry-run] seed-aws-load-data.py --run-id $RUN_ID --users $USERS --index-width $dry_index_width $dry_mode --fixture-id $fixture_id" >&2
     return 0
   fi
@@ -1870,8 +1875,12 @@ seed_credentials() {
     --fixture-result-file "$FIXTURES_DIR/$fixture_id.json"
   )
   # The non-adaptive call remains equivalent to --reset-fixture --fixture-id "$fixture_id";
-  # arrays keep the adaptive --incremental switch free of quoting ambiguity.
-  if [[ "$incremental" == "1" ]]; then
+  # arrays keep the adaptive --incremental/refresh-only switches free of
+  # quoting ambiguity.  refresh-only rotates only the credential ledger and
+  # never walks or recreates the user/travel/community fixture.
+  if [[ "$strategy" == "refresh-only" ]]; then
+    seed_args+=(--refresh-tokens-only)
+  elif [[ "$incremental" == "1" ]]; then
     seed_args+=(--incremental)
   else
     seed_args+=(--reset-fixture)
@@ -1883,6 +1892,107 @@ seed_credentials() {
 seed_stage() {
   echo "[b01] seed: run-id=$RUN_ID users=$USERS"
   seed_credentials "seed"
+}
+
+ensure_adaptive_stage_credentials() {
+  local target_rate="$1" required_vus="$2"
+  local fixture_id="capacity-$target_rate" receipt="$EVIDENCE_ROOT/fixtures/adaptive-$target_rate.json"
+  local action="" observed_count=0 fixture_version=""
+  if [[ "$DRY_RUN" == "1" ]]; then
+    echo "[dry-run] verify fixture and rotate only the credential ledger for target=$target_rate requiredVUs=$required_vus" >&2
+    return 0
+  fi
+  if [[ ! -f "$DATA_FILE" ]]; then
+    # A missing ledger is a fresh-run condition.  The normal all-flow has
+    # already created it; if an operator resumes directly, perform the single
+    # run-scoped reset here rather than fabricating a readiness marker.
+    USERS="$required_vus"
+    seed_credentials "$fixture_id" 0
+    action="initial-seed"
+  else
+    local fixture_state observed_count fixture_version fixture_digest fixture_probe
+    fixture_probe="$(python3 - "$DATA_FILE" "$RUN_ID" <<'PY'
+import hashlib
+import json
+import sys
+from pathlib import Path
+
+path, expected_run = sys.argv[1:]
+try:
+    payload = json.loads(Path(path).read_text(encoding="utf-8"))
+except (OSError, json.JSONDecodeError):
+    print("INVALID|0||")
+    raise SystemExit(0)
+credentials = payload.get("credentials")
+feature = payload.get("currentFeatureFixture") if isinstance(payload.get("currentFeatureFixture"), dict) else {}
+if (
+    payload.get("runId") != expected_run
+    or payload.get("seedState") != "complete"
+    or payload.get("fixtureState") != "verified"
+    or feature.get("version") != "aws-current-feature-fixture-v1"
+    or not isinstance(credentials, list)
+):
+    print("INVALID|0||")
+    raise SystemExit(0)
+print("VALID|{}|{}|{}".format(
+    len(credentials), feature.get("version", ""),
+    hashlib.sha256(Path(path).read_bytes()).hexdigest(),
+))
+PY
+    )"
+    IFS='|' read -r fixture_state observed_count fixture_version fixture_digest <<<"$fixture_probe"
+    fixture_state="${fixture_state:-INVALID}"
+    if [[ "$fixture_state" != "VALID" ]]; then
+      echo "adaptive fixture ledger is missing, unverified or not current-feature compatible" >&2
+      return 2
+    fi
+    observed_count="${observed_count:-0}"
+    fixture_version="${fixture_version:-}"
+    if [[ "$observed_count" -lt "$required_vus" ]]; then
+      USERS="$required_vus"
+      # This is the only path that creates additional fixture rows.  It is
+      # incremental and retains the verified rows already owned by RUN_ID.
+      seed_credentials "$fixture_id" 1
+      action="incremental-top-up"
+    else
+      # Keep the existing ledger cardinality as the seed target.  A
+      # requalification stage can require fewer VUs than a preceding high
+      # stage; shrinking --users would make the seed script reject a healthy
+      # reusable ledger as "more users than requested".
+      USERS="$observed_count"
+      # k6 rotates refresh tokens in memory.  Refresh only the existing
+      # ledger before reusing it; no user/travel/community rows are touched.
+      seed_credentials "$fixture_id" 0 refresh-only
+      action="credential-refresh-only"
+    fi
+  fi
+  python3 - "$receipt" "$RUN_ID" "$target_rate" "$required_vus" "$action" "$DATA_FILE" "$fixture_version" <<'PY'
+import hashlib
+import json
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+output, run_id, target_rate, required_vus, action, data_file, fixture_version = sys.argv[1:]
+payload = json.loads(Path(data_file).read_text(encoding="utf-8"))
+credentials = payload.get("credentials") if isinstance(payload.get("credentials"), list) else []
+feature = payload.get("currentFeatureFixture") if isinstance(payload.get("currentFeatureFixture"), dict) else {}
+Path(output).write_text(json.dumps({
+    "schemaVersion": "scrum80-adaptive-credential-preparation/v1",
+    "runId": run_id,
+    "targetRate": int(target_rate),
+    "requiredVUs": int(required_vus),
+    "credentialCount": len(credentials),
+    "action": action,
+    "seedState": payload.get("seedState"),
+    "fixtureState": payload.get("fixtureState"),
+    "fixtureVersion": feature.get("version") or fixture_version,
+    "dataFileSha256": hashlib.sha256(Path(data_file).read_bytes()).hexdigest(),
+    "recordedAtUtc": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
+    "tokensStored": False,
+}, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+PY
+  echo "[b01] adaptive fixture ready: target=$target_rate requiredVUs=$required_vus action=$action count=$(python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1])).get("credentials", [])))' "$DATA_FILE")"
 }
 
 phase_max_vus_override() {
@@ -2047,6 +2157,38 @@ path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="
 PY
 }
 
+write_capacity_observer_pointer() {
+  local pointer_file="$1" output_file="$2" metadata_file="$3" runner_stats_file="$4" slo_window_file="$5" phase="$6" stage_dir="$7"
+  python3 - "$pointer_file" "$output_file" "$metadata_file" "$runner_stats_file" "$slo_window_file" "$phase" "$stage_dir" <<'PY'
+import json
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+output, snapshot, metadata, runner, slo, phase, stage_dir = sys.argv[1:]
+Path(output).parent.mkdir(parents=True, exist_ok=True)
+Path(output).write_text(json.dumps({
+    "schemaVersion": "scrum80-capacity-observer-pointer/v1",
+    "phase": phase,
+    "stageDir": stage_dir,
+    "snapshotFile": snapshot,
+    "metadataFile": metadata,
+    "runnerStatsFile": runner,
+    "sloWindowFile": slo,
+    "updatedAtUtc": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
+}, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+PY
+}
+
+stop_capacity_observer() {
+  local observer_pid="${1:-}"
+  [[ -n "$observer_pid" ]] || return 0
+  if kill -0 "$observer_pid" 2>/dev/null; then
+    kill "$observer_pid" 2>/dev/null || true
+  fi
+  wait "$observer_pid" 2>/dev/null || true
+}
+
 adaptive_capacity_stress_stage() {
   local nominal_hold extension_seconds max_stage_seconds stability_seconds
   nominal_hold="$(python3 - "$PROFILE" <<'PY'
@@ -2160,17 +2302,59 @@ path = Path(sys.argv[1])
 print(json.loads(path.read_text(encoding="utf-8")).get("targetGroupDimension", "") if path.is_file() else "")
 PY
 )"
+  local campaign_observer_pid=""
+  local campaign_observer_pointer="$EVIDENCE_ROOT/continuity/current-stage.json"
+  local campaign_observer_log="$EVIDENCE_ROOT/continuity/observer.log"
+  mkdir -p "$EVIDENCE_ROOT/continuity"
   while :; do
-    local stage_max_vus stage_preallocated_vus stage_dir snapshot_file observer_pid coordinator_status observer_status evaluator_status controller_reason stage_dir_prefix
+    local stage_max_vus stage_preallocated_vus stage_dir snapshot_file coordinator_status observer_status evaluator_status controller_reason stage_dir_prefix
     if [[ "$requalifying" == "1" ]]; then
       stage_dir_prefix="requalification-${stage_index}"
     else
       stage_dir_prefix="$stage_prefix"
     fi
+    stage_max_vus="$(python3 - "$target_rate" "$operator_max_vus" "$PROFILE" <<'PY'
+import json, math, sys
+target, operator, profile_path = sys.argv[1:]
+target = int(target); operator = int(operator)
+max_vus = max(512, target * 2)
+profile_max = int(json.load(open(profile_path))["limits"]["maxVUs"])
+if max_vus > profile_max or max_vus > operator:
+    raise SystemExit(3)
+print(max_vus)
+PY
+    )" || {
+      final_reason="INCOMPLETE_CREDENTIAL_CAPACITY"
+      python3 - "$EVIDENCE_ROOT/incomplete-stop.json" "$RUN_ID" "$target_rate" "$operator_max_vus" <<'PY'
+import json, sys
+from datetime import datetime, timezone
+from pathlib import Path
+output, run_id, target, operator = sys.argv[1:]
+Path(output).write_text(json.dumps({
+  "runId": run_id, "reason": "INCOMPLETE_CREDENTIAL_CAPACITY", "targetRate": int(target),
+  "operatorMaxVUs": int(operator), "recordedAtUtc": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+}, indent=2) + "\n", encoding="utf-8")
+PY
+      stop_capacity_observer "$campaign_observer_pid"
+      return 2
+    }
+    stage_preallocated_vus="$(python3 - "$target_rate" <<'PY'
+import sys
+print(max(256, int(sys.argv[1])))
+PY
+)"
+    # Prepare the next stage's credential/argv contract before continuity is
+    # evaluated.  No seed operation is allowed between a successful
+    # continuity verdict and the first high-rate request.
+    USERS="$stage_max_vus"
+    if ! ensure_adaptive_stage_credentials "$target_rate" "$stage_max_vus"; then
+      final_reason="INCOMPLETE_CREDENTIAL_CAPACITY"
+      stop_capacity_observer "$campaign_observer_pid"
+      return 2
+    fi
     if [[ "$campaign_stage" == "capacity-stress" && "$requalifying" == "0" && -n "$previous_stage_dir" ]]; then
       local continuity_dir continuity_verdict continuity_status
       continuity_dir="$EVIDENCE_ROOT/continuity"
-      mkdir -p "$continuity_dir"
       continuity_verdict="$continuity_dir/resume-verdict-${stage_index}-${target_rate}.json"
       set +e
       python3 "$REPOSITORY_ROOT/scripts/loadtest/aws/check-stage-continuity.py" \
@@ -2200,38 +2384,10 @@ PY
         continue
       elif [[ "$continuity_status" -ne 0 ]]; then
         final_reason="INCOMPLETE_CONTINUITY"
+        stop_capacity_observer "$campaign_observer_pid"
         return 2
       fi
     fi
-    stage_max_vus="$(python3 - "$target_rate" "$operator_max_vus" "$PROFILE" <<'PY'
-import json, math, sys
-target, operator, profile_path = sys.argv[1:]
-target = int(target); operator = int(operator)
-max_vus = max(512, target * 2)
-profile_max = int(json.load(open(profile_path))["limits"]["maxVUs"])
-if max_vus > profile_max or max_vus > operator:
-    raise SystemExit(3)
-print(max_vus)
-PY
-)" || {
-      final_reason="INCOMPLETE_CREDENTIAL_CAPACITY"
-      python3 - "$EVIDENCE_ROOT/incomplete-stop.json" "$RUN_ID" "$target_rate" "$operator_max_vus" <<'PY'
-import json, sys
-from datetime import datetime, timezone
-from pathlib import Path
-output, run_id, target, operator = sys.argv[1:]
-Path(output).write_text(json.dumps({
-  "runId": run_id, "reason": "INCOMPLETE_CREDENTIAL_CAPACITY", "targetRate": int(target),
-  "operatorMaxVUs": int(operator), "recordedAtUtc": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
-}, indent=2) + "\n", encoding="utf-8")
-PY
-      return 2
-    }
-    stage_preallocated_vus="$(python3 - "$target_rate" <<'PY'
-import sys
-print(max(256, int(sys.argv[1])))
-PY
-)"
     stage_dir="$EVIDENCE_ROOT/k6/${stage_dir_prefix}-$target_rate"
     # A resumed campaign must never truncate a prior segment.  Preserve the
     # old directory and give this attempt a deterministic, collision-free
@@ -2260,25 +2416,32 @@ PY
     else
       export CAPACITY_STAGE="$campaign_stage"
     fi
-    seed_credentials "capacity-$target_rate" 1
     export CAPACITY_STAGE_DIR="$stage_dir"
+    write_capacity_observer_pointer \
+      "$campaign_observer_pointer" "$snapshot_file" "$stage_dir/metadata.json" \
+      "$stage_dir/runner-stats.jsonl" "$stage_dir/slo-windows.jsonl" \
+      "$(if [[ "$requalifying" == "1" ]]; then echo requalification; else echo measured; fi)" "$stage_dir"
     python3 "$REPOSITORY_ROOT/scripts/loadtest/record-rehearsal-event.py" "$stage_dir" STAGE_START "adaptive target ${target_rate} RPS" --actor automation
-    observer_pid=""
     observer_status=0
     coordinator_status=0
     evaluator_status=2
-    python3 "$REPOSITORY_ROOT/scripts/loadtest/aws/observe-aws-capacity-stress.py" \
-      --run-dir "$stage_dir" --metadata-file "$stage_dir/metadata.json" \
-      --platform eks --region "$REGION" --cluster-name "$EKS_CLUSTER_NAME" \
-      --node-group-name "$EKS_NODE_GROUP_NAME" --eks-bastion-id "$EKS_BASTION_ID" \
-      --target-group-arn "$TARGET_GROUP_ARN" --namespace "$BACKEND_NAMESPACE" \
-      --deployment "$BACKEND_DEPLOYMENT" --rds-instance-id "$DB_INSTANCE_IDENTIFIER" \
-      --redis-cluster-id "$CACHE_CLUSTER_ID" --alb-dimension "$alb_dimension" \
-      --target-group-dimension "$target_group_dimension" --eks-evidence-file "$EVIDENCE_ROOT/aws/eks-evidence.json" \
-      --runner-stats-file "$stage_dir/runner-stats.jsonl" --slo-window-file "$stage_dir/slo-windows.jsonl" \
-      --snapshot-file "$snapshot_file" --poll-seconds "${CAPACITY_OBSERVER_POLL_SECONDS:-10}" \
-      > "$stage_dir/observer.log" 2>&1 &
-    observer_pid=$!
+    if [[ -z "$campaign_observer_pid" ]]; then
+      # One read-only observer spans measured stages and transition gaps.  Its
+      # stage pointer changes the output file atomically, so each observation
+      # belongs to exactly one segment without duplicating samples.
+      python3 "$REPOSITORY_ROOT/scripts/loadtest/aws/observe-aws-capacity-stress.py" \
+        --run-dir "$EVIDENCE_ROOT" --stage-pointer-file "$campaign_observer_pointer" \
+        --platform eks --region "$REGION" --cluster-name "$EKS_CLUSTER_NAME" \
+        --node-group-name "$EKS_NODE_GROUP_NAME" --eks-bastion-id "$EKS_BASTION_ID" \
+        --target-group-arn "$TARGET_GROUP_ARN" --namespace "$BACKEND_NAMESPACE" \
+        --deployment "$BACKEND_DEPLOYMENT" --rds-instance-id "$DB_INSTANCE_IDENTIFIER" \
+        --redis-cluster-id "$CACHE_CLUSTER_ID" --alb-dimension "$alb_dimension" \
+        --target-group-dimension "$target_group_dimension" --eks-evidence-file "$EVIDENCE_ROOT/aws/eks-evidence.json" \
+        --snapshot-file "$EVIDENCE_ROOT/continuity/campaign-snapshots.jsonl" \
+        --poll-seconds "${CAPACITY_OBSERVER_POLL_SECONDS:-10}" \
+        > "$campaign_observer_log" 2>&1 &
+      campaign_observer_pid=$!
+    fi
     set +e
     python3 "$REPOSITORY_ROOT/scripts/loadtest/aws/coordinate-aws-capacity-stress.py" \
       --run-dir "$stage_dir" --snapshot-file "$snapshot_file" --campaign-stage "$campaign_stage" \
@@ -2287,9 +2450,9 @@ PY
       --capacity-stability-seconds "$stability_seconds" --poll-seconds "${CAPACITY_COORDINATOR_POLL_SECONDS:-10}" -- \
       "$REPOSITORY_ROOT/scripts/loadtest/aws/run-aws-b01.sh" capacity-stress
     coordinator_status=$?
-    if kill -0 "$observer_pid" 2>/dev/null; then kill "$observer_pid" 2>/dev/null || true; fi
-    wait "$observer_pid" 2>/dev/null
-    observer_status=$?
+    if ! kill -0 "$campaign_observer_pid" 2>/dev/null; then
+      observer_status=1
+    fi
     if [[ -f "$stage_dir/summary.json" ]]; then
       python3 "$REPOSITORY_ROOT/scripts/loadtest/aws/evaluate-aws-capacity-stress.py" \
         --run-dir "$stage_dir" --slo-contract "$SLO_CONTRACT" \
@@ -2323,18 +2486,32 @@ PY
     append_adaptive_stage_manifest "$target_rate" "$controller_reason" "k6/${stage_dir_prefix}-$target_rate" "$evaluator_status"
     if ! seal_adaptive_stage "$stage_dir"; then
       final_reason="INCOMPLETE_EVIDENCE_CAPACITY"
+      stop_capacity_observer "$campaign_observer_pid"
+      return 2
+    fi
+    if [[ "$observer_status" -ne 0 ]]; then
+      final_reason="INCOMPLETE_OBSERVABILITY"
+      stop_capacity_observer "$campaign_observer_pid"
       return 2
     fi
     case "$controller_reason" in
       NODE_MAX_PENDING|NODE_SCALE_NOT_TRIGGERED|NODE_SCALE_FAILED|NODE_COMPUTE_SATURATION|SLO_COLLAPSE|THROUGHPUT_PLATEAU|HPA_CAPACITY_EXHAUSTED|BACKEND_OOM|BACKEND_UNHEALTHY|ALB_SATURATION|DATA_TIER_SATURATION)
         if [[ "$evaluator_status" -ne 0 ]]; then
           final_reason="INCOMPLETE_OBSERVABILITY"
+          stop_capacity_observer "$campaign_observer_pid"
           return 2
         fi
         final_reason="$controller_reason"
+        stop_capacity_observer "$campaign_observer_pid"
         return 0
         ;;
       STAGE_COMPLETE)
+        local transition_file
+        transition_file="$EVIDENCE_ROOT/continuity/transition-${stage_index}-${target_rate}.jsonl"
+        write_capacity_observer_pointer \
+          "$campaign_observer_pointer" "$transition_file" "$stage_dir/metadata.json" \
+          "$stage_dir/runner-stats.jsonl" "$stage_dir/slo-windows.jsonl" \
+          "transition" "$stage_dir"
         previous_stage_dir="$stage_dir"
         if [[ "$requalifying" == "1" ]]; then
           requalifying=0
@@ -2364,6 +2541,7 @@ PY
         ;;
       *)
         final_reason="INCOMPLETE_OBSERVABILITY"
+        stop_capacity_observer "$campaign_observer_pid"
         return 2
         ;;
     esac
