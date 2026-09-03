@@ -696,6 +696,13 @@ def collect_snapshot(args: argparse.Namespace, aws: AwsReadOnly) -> dict[str, An
         "hpa": hpa_evidence if args.platform == "eks" else None,
         "deployment": deployment_evidence if args.platform == "eks" else None,
         "pendingReasons": backend_pods.get("pendingReasons") if args.platform == "eks" else None,
+        # Keep both total and Ready node counts in every live snapshot.  The
+        # continuity checker must distinguish a fully ready node pool from a
+        # pool that has the same Ready count while another node is still
+        # provisioning; emitting only readyNodeCount made a valid stage look
+        # like missing capacity evidence at the next handoff.
+        "nodeCount": evidence_node_count if args.platform == "eks" else None,
+        "nodeReadyCount": evidence_ready_nodes if args.platform == "eks" else None,
         "readyNodeCount": evidence_ready_nodes if args.platform == "eks" else None,
         "nodeSchedulingPressure": platform_evidence.get("nodeSchedulingPressure") if args.platform == "eks" else None,
         "requiredObservationStatus": required_observations,

@@ -230,7 +230,12 @@ def evaluate(
     controller = read_json(stage / "controller-result.json")
     if (latest_nodes is not None and latest_nodes < max_nodes) or (latest_pods is not None and latest_pods < max_pods):
         result["reasonCodes"].append("CAPACITY_DROPPED")
-    if status.get("workloadSignalReceived") is True or controller.get("terminalReason") not in {"STAGE_COMPLETE", None}:
+    # The adaptive coordinator deliberately signals the workload at a clean
+    # stage boundary so it can flush and seal the segment.  That expected
+    # signal is safe only when the controller explicitly records the boundary;
+    # an unmarked signal remains an interrupted segment and forces restore-low.
+    expected_boundary = controller.get("intentionalStageBoundary") is True and controller.get("terminalReason") == "STAGE_COMPLETE"
+    if (status.get("workloadSignalReceived") is True and not expected_boundary) or controller.get("terminalReason") not in {"STAGE_COMPLETE", None}:
         result["reasonCodes"].append("INTERRUPTED_SEGMENT")
     if not metadata.get("actualOperationStartAtUtc") and not status.get("actualOperationStartAtUtc"):
         result["reasonCodes"].append("ACTUAL_OPERATION_START_MISSING")

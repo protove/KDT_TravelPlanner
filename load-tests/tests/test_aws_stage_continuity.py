@@ -133,6 +133,31 @@ class StageContinuityTests(unittest.TestCase):
             self.assertEqual(verdict["decision"], "RESTORE_LOW")
             self.assertIn("ACTUAL_OPERATION_START_MISSING", verdict["reasonCodes"])
 
+    def test_intentional_adaptive_boundary_signal_allows_handoff(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "rate-16"
+            write_stage(root, [snapshot(0), snapshot(60), snapshot(120)], [
+                {"windowId": "w-1", "windowEndUtc": stamp(60), "sloWindowComplete": True, "sloBreached": False},
+                {"windowId": "w-2", "windowEndUtc": stamp(120), "sloWindowComplete": True, "sloBreached": False},
+            ], status={"workloadSignalReceived": True, "k6ExitCode": 2}, controller={
+                "terminalReason": "STAGE_COMPLETE",
+                "intentionalStageBoundary": True,
+            })
+            verdict = MODULE.evaluate(root, next_rate=64, now=BASE.timestamp() + 120)
+            self.assertEqual(verdict["decision"], "ALLOW")
+            self.assertNotIn("INTERRUPTED_SEGMENT", verdict["reasonCodes"])
+
+    def test_unmarked_workload_signal_still_requires_low_restore(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "rate-16"
+            write_stage(root, [snapshot(0), snapshot(60), snapshot(120)], [
+                {"windowId": "w-1", "windowEndUtc": stamp(60), "sloWindowComplete": True, "sloBreached": False},
+                {"windowId": "w-2", "windowEndUtc": stamp(120), "sloWindowComplete": True, "sloBreached": False},
+            ], status={"workloadSignalReceived": True})
+            verdict = MODULE.evaluate(root, next_rate=64, now=BASE.timestamp() + 120)
+            self.assertEqual(verdict["decision"], "RESTORE_LOW")
+            self.assertIn("INTERRUPTED_SEGMENT", verdict["reasonCodes"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -410,6 +410,11 @@ def main() -> int:
         "workloadCommandRecorded": True,
         "operatorRecoveryAutomated": False,
         "autoscalingDesiredStateWritten": False,
+        # A SIGINT at an adaptive clean boundary is an orchestration event,
+        # not an interrupted/unknown workload.  Persist the distinction so
+        # continuity can reject an operator interruption while allowing a
+        # stage that has its required complete healthy windows.
+        "intentionalStageBoundary": bool(args.adaptive and reason == "STAGE_COMPLETE"),
     })
     if args.adaptive and reason == "STAGE_COMPLETE":
         return 0
