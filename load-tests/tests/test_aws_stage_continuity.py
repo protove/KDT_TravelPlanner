@@ -122,6 +122,21 @@ class StageContinuityTests(unittest.TestCase):
             self.assertIn("OBSERVATION_STALE", verdict["reasonCodes"])
             self.assertIn("COMPLETE_WINDOWS_MISSING", verdict["reasonCodes"])
 
+    def test_stale_observation_after_intentional_boundary_requires_low_requalification(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "rate-16"
+            write_stage(root, [snapshot(0), snapshot(60), snapshot(120)], [
+                {"windowId": "w-1", "windowEndUtc": stamp(60), "sloWindowComplete": True, "sloBreached": False},
+                {"windowId": "w-2", "windowEndUtc": stamp(120), "sloWindowComplete": True, "sloBreached": False},
+            ], status={"workloadSignalReceived": True}, controller={
+                "terminalReason": "STAGE_COMPLETE",
+                "intentionalStageBoundary": True,
+            })
+            verdict = MODULE.evaluate(root, next_rate=64, now=BASE.timestamp() + 300)
+            self.assertEqual(verdict["decision"], "RESTORE_LOW")
+            self.assertIn("OBSERVATION_STALE", verdict["reasonCodes"])
+            self.assertEqual(verdict["restoreRate"], 128)
+
     def test_missing_actual_operation_start_is_restore_not_high_rate_allow(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "rate-128"

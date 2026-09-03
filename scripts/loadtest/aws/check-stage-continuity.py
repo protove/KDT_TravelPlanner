@@ -388,6 +388,21 @@ def evaluate(
             "CAPACITY_DROPPED", "INTERRUPTED_SEGMENT", "ACTUAL_OPERATION_START_MISSING",
             "HANDOFF_GAP_EXCEEDED",
         }
+        # A clean adaptive boundary can spend longer than the normal
+        # observation-age budget while the next stage rotates the existing
+        # credential ledger. That is a requalification condition, not an
+        # unknown/unsafe workload result: the predecessor explicitly sealed a
+        # stage boundary and the next high-rate dispatch has not happened yet.
+        # Return RESTORE_LOW so the caller runs a fresh low-rate segment and
+        # then rechecks continuity, instead of terminating the campaign on a
+        # predictable hand-off gap. A stage without the explicit boundary
+        # marker keeps the fail-closed BLOCK behavior (covered by the stale
+        # observation regression test).
+        if expected_boundary:
+            restore_reasons.update({
+                "OBSERVATION_STALE", "OBSERVATION_GAP", "WINDOW_COVERAGE_MISSING",
+                "COMPLETE_WINDOWS_MISSING", "STABLE_DURATION_SHORT",
+            })
         result["decision"] = "RESTORE_LOW" if restore_reasons.intersection(result["reasonCodes"]) else "BLOCK"
         if result["decision"] == "RESTORE_LOW":
             result["restoreRate"] = int(metadata.get("rate") or metadata.get("effectiveInputs", {}).get("baseRate") or 0) or None
